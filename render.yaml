@@ -2,6 +2,7 @@ services:
   # Backend API Service
   - type: web
     name: apex-ai-backend
+    rootDir: .
     env: python
     region: oregon
     plan: free
@@ -30,11 +31,12 @@ services:
   # Frontend Static Site
   - type: web
     name: apex-ai-frontend
+    rootDir: frontend-web
     env: static
     region: oregon
     plan: free
-    buildCommand: cd frontend-web && npm install && npm run build
-    staticPublishPath: ./frontend-web/dist
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
     envVars:
       - key: VITE_API_URL
         sync: false
