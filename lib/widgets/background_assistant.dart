@@ -165,7 +165,7 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
                         ? Icon(Icons.mic_rounded,
                             color: cs.onPrimary, size: 18)
                         : Image.asset(
-                            'assets/Apex_Ai_svj_logo.png',
+                            'assets/Acronous_Ai_svj_logo.png',
                             width: _buttonSize * 0.65,
                             height: _buttonSize * 0.65,
                             fit: BoxFit.contain,

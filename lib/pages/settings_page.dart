@@ -159,7 +159,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       borderRadius: BorderRadius.circular(
                           (AppDimens.inputIconInnerSize + 2) / 2),
                       child: Image.asset(
-                        'assets/Apex_Ai_svj_logo.png',
+                        'assets/Acronous_Ai_svj_logo.png',
                         width: AppDimens.inputIconInnerSize,
                         height: AppDimens.inputIconInnerSize,
                         fit: BoxFit.contain,
