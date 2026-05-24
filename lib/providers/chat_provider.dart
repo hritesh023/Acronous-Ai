@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../api/client.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
@@ -9,8 +8,6 @@ import '../services/file_service.dart';
 import '../services/preferences_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
-import '../services/intent_processor.dart';
-import '../services/continuous_voice_service.dart';
 import '../services/overlay_service.dart';
 import '../widgets/camera_screen.dart';
 
@@ -20,8 +17,6 @@ class ChatProvider extends ChangeNotifier {
   final FileService _fileService;
   final SpeechService _speech;
   final TtsService _tts;
-  final ContinuousVoiceService _continuousVoice;
-  final OverlayService _overlayService;
 
   final List<Conversation> _conversations = [];
   Conversation? _currentConversation;
@@ -43,8 +38,6 @@ class ChatProvider extends ChangeNotifier {
   bool _autoSendVoice = false;
   bool _continuousVoiceEnabled = false;
   bool _backgroundAssistantEnabled = false;
-  bool _continuousVoiceSearchEnabled = false;
-  bool _systemOverlayEnabled = false;
 
   ChatProvider({
     ApiClient? api,
@@ -52,24 +45,17 @@ class ChatProvider extends ChangeNotifier {
     FileService? fileService,
     SpeechService? speech,
     TtsService? tts,
-    ContinuousVoiceService? continuousVoice,
-    OverlayService? overlayService,
   })  : _api = api ?? ApiClient(),
         _prefs = prefs ?? PreferencesService(),
         _fileService = fileService ?? FileService(),
         _speech = speech ?? SpeechService(),
-        _tts = tts ?? TtsService(),
-        _continuousVoice = continuousVoice ?? ContinuousVoiceService(),
-        _overlayService = overlayService ?? OverlayService() {
+        _tts = tts ?? TtsService() {
     _init();
   }
 
   Future<void> _init() async {
     await _loadPrefs();
     await _initTts();
-    await _overlayService.initialize();
-    _continuousVoice.addListener(_onContinuousVoiceChanged);
-    _continuousVoice.onIntentDetected = _onContinuousIntent;
     _newConversation();
   }
 
@@ -88,10 +74,6 @@ class ChatProvider extends ChangeNotifier {
   bool get autoSendVoice => _autoSendVoice;
   bool get continuousVoiceEnabled => _continuousVoiceEnabled;
   bool get backgroundAssistantEnabled => _backgroundAssistantEnabled;
-  bool get continuousVoiceSearchEnabled => _continuousVoiceSearchEnabled;
-  bool get systemOverlayEnabled => _systemOverlayEnabled;
-  OverlayService get overlayService => _overlayService;
-  ContinuousVoiceService get continuousVoiceService => _continuousVoice;
 
   List<Conversation> get filteredConversations {
     if (_searchQuery.isEmpty) return _conversations;
@@ -170,106 +152,6 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setContinuousVoiceSearchEnabled(bool v) {
-    _continuousVoiceSearchEnabled = v;
-    _prefs.saveContinuousVoiceSearch(v);
-    if (v) {
-      _continuousVoice.start();
-    } else {
-      _continuousVoice.stop();
-    }
-    notifyListeners();
-  }
-
-  void setSystemOverlayEnabled(bool v) {
-    _systemOverlayEnabled = v;
-    _prefs.saveSystemOverlay(v);
-    if (v && _overlayService.supportsSystemOverlay) {
-      if (!_overlayService.systemOverlayPermissionGranted) {
-        _overlayService.requestOverlayPermission();
-      }
-      _overlayService.showSystemOverlay();
-    } else {
-      _overlayService.hideSystemOverlay();
-    }
-    notifyListeners();
-  }
-
-  void _onContinuousVoiceChanged() {
-    notifyListeners();
-  }
-
-  void _onContinuousIntent(IntentAction action) {
-    executeIntent(action);
-  }
-
-  Future<void> executeIntent(IntentAction action) async {
-    switch (action.type) {
-      case IntentType.call:
-        final contact = action.params['contact']!;
-        final uri = Uri.parse('tel:${Uri.encodeComponent(contact)}');
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri);
-        } else {
-          sendMessage('Call $contact');
-        }
-      case IntentType.openLink:
-        final url = action.params['url']!;
-        final uri = Uri.parse(url);
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } else {
-          sendMessage(url);
-        }
-      case IntentType.openApp:
-        final target = action.params['target']!;
-        final appUri = Uri.parse('$target://');
-        if (await canLaunchUrl(appUri)) {
-          await launchUrl(appUri, mode: LaunchMode.externalApplication);
-        } else {
-          sendMessage('Open $target');
-        }
-      case IntentType.sendMessage:
-        final contact = action.params['contact']!;
-        final message = action.params['message'] ?? '';
-        if (RegExp(r'^\+?[\d\s\-\(\)]{7,}$').hasMatch(contact)) {
-          final uri = Uri.parse(
-            'sms:$contact${message.isNotEmpty ? '?body=${Uri.encodeComponent(message)}' : ''}',
-          );
-          if (await canLaunchUrl(uri)) {
-            await launchUrl(uri);
-          } else {
-            sendMessage('Send message to $contact: $message');
-          }
-        } else {
-          sendMessage('Send message to $contact${message.isNotEmpty ? ': $message' : ''}');
-        }
-      case IntentType.sendWhatsApp:
-        final contact = action.params['contact']!;
-        final message = action.params['message'] ?? '';
-        final uri = Uri.parse(
-          'https://wa.me/${Uri.encodeComponent(contact)}?text=${Uri.encodeComponent(message)}',
-        );
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } else {
-          sendMessage('Send WhatsApp to $contact: $message');
-        }
-      case IntentType.search:
-        final query = action.params['query']!;
-        final uri = Uri.parse(
-          'https://www.google.com/search?q=${Uri.encodeComponent(query)}',
-        );
-        if (await canLaunchUrl(uri)) {
-          await launchUrl(uri, mode: LaunchMode.externalApplication);
-        } else {
-          sendMessage(query);
-        }
-      case IntentType.aiQuery:
-        sendMessage(action.params['query']!);
-    }
-  }
-
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty && _pendingAttachments.isEmpty) return;
 
@@ -340,26 +222,29 @@ class ChatProvider extends ChangeNotifier {
       final imgAttach =
           userMsg.attachments.firstWhere((a) => a.type == AttachmentType.image);
       final bytes = await FileService.readAttachmentBytes(imgAttach);
-      return _api.chatWithImage(
+      final resp = await _api.chatWithImage(
         message: text,
         imageBytes: bytes,
         fileName: imgAttach.name,
         sessionId: sessionId,
       );
+      return {'response': resp.content, 'image_data': '', 'type': resp.type};
     } else if (userMsg.attachments.isNotEmpty) {
       final attach = userMsg.attachments.first;
       final bytes = await FileService.readAttachmentBytes(attach);
-      return _api.uploadFile(
+      final resp = await _api.uploadFile(
         fileBytes: bytes,
         fileName: attach.name,
         message: text,
         sessionId: sessionId,
       );
+      return {'response': resp.content, 'image_data': '', 'type': resp.type};
     }
     if (_isImageGenRequest(text)) {
       return _api.generateImage(prompt: text, sessionId: sessionId);
     }
-    return _api.chat(message: text, sessionId: sessionId);
+    final resp = await _api.chat(message: text, sessionId: sessionId);
+    return {'response': resp.content, 'image_data': '', 'type': resp.type};
   }
 
   bool _shouldShowConnectionError(Object e) {
@@ -679,6 +564,64 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  ApiClient get apiClient => _api;
+  List<ChatMessage> get currentMessages => _currentConversation?.messages ?? [];
+  String? get currentConversationId => _currentConversation?.id;
+
+  void setError(String? error) {
+    _error = error;
+    notifyListeners();
+  }
+
+  String? _error;
+  String? get error => _error;
+
+  void handleSendMessage(String query) => sendMessage(query);
+
+  void loadTheme() {
+    notifyListeners();
+  }
+
+  void loadServerConversations() {}
+
+  OverlayService? _overlayService;
+  OverlayService? get overlayService => _overlayService;
+  void attachOverlayService(OverlayService service) {
+    _overlayService = service;
+  }
+
+  bool _continuousVoiceSearchEnabled = false;
+  bool get continuousVoiceSearchEnabled => _continuousVoiceSearchEnabled;
+
+  void setContinuousVoiceSearchEnabled(bool v) {
+    _continuousVoiceSearchEnabled = v;
+    _prefs.saveContinuousVoiceSearch(v);
+    notifyListeners();
+  }
+
+  bool _systemOverlayEnabled = false;
+  bool get systemOverlayEnabled => _systemOverlayEnabled;
+
+  void setSystemOverlayEnabled(bool v) {
+    _systemOverlayEnabled = v;
+    _prefs.saveSystemOverlay(v);
+    notifyListeners();
+  }
+
+  void executeIntent(dynamic action) {
+    if (action == null) return;
+    if (action is String && action.isNotEmpty) {
+      sendMessage(action);
+    } else {
+      try {
+        final query = action.params['query'] as String?;
+        if (query != null && query.isNotEmpty) {
+          sendMessage(query);
+        }
+      } catch (_) {}
+    }
+  }
+
   Future<void> _loadPrefs() async {
     try {
       _themeMode = await _prefs.loadThemeMode();
@@ -687,8 +630,6 @@ class ChatProvider extends ChangeNotifier {
       _continuousVoiceEnabled = await _prefs.loadContinuousVoice();
       _autoSendVoice = await _prefs.loadAutoSendVoice();
       _backgroundAssistantEnabled = await _prefs.loadBackgroundAssistant();
-      _continuousVoiceSearchEnabled = await _prefs.loadContinuousVoiceSearch();
-      _systemOverlayEnabled = await _prefs.loadSystemOverlay();
       final loaded = await _prefs.loadConversations();
       _conversations.addAll(loaded);
       if (_conversations.isNotEmpty) {

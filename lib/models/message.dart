@@ -1,5 +1,3 @@
-
-
 import 'dart:typed_data';
 
 enum AttachmentType { image, audio, video, text, pdf, other }

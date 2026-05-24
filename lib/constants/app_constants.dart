@@ -111,7 +111,7 @@ class AppStrings {
   static const String poweredBySub = 'Flutter + Python AI Engine';
   static const String version = 'Version';
 
-  static const String connectionError = 'I\'m having trouble connecting. Please make sure the server is running.';
+  static const String connectionError = 'I can\'t reach the server right now. Is Acronous AI running?';
 
   static const String cameraBtn = 'Camera';
   static const String galleryBtn = 'Gallery';

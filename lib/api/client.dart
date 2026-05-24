@@ -1,169 +1,408 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import '../config/app_config.dart';
+import '../models/suggestion.dart';
+
+class ChatRequest {
+  final String query;
+  final String? sessionId;
+  final Map<String, dynamic>? context;
+  final List<Map<String, String>>? messages;
+  final bool? webSearchEnabled;
+  final String? model;
+
+  ChatRequest({
+    required this.query,
+    this.sessionId,
+    this.context,
+    this.messages,
+    this.webSearchEnabled,
+    this.model,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'query': query,
+    if (sessionId != null) 'session_id': sessionId,
+    if (context != null) 'context': context,
+    if (messages != null) 'messages': messages,
+    if (webSearchEnabled != null) 'web_search_enabled': webSearchEnabled,
+    if (model != null) 'model': model,
+  };
+}
+
+class Source {
+  final String title;
+  final String? url;
+
+  Source({required this.title, this.url});
+}
+
+class ServerConfig {
+  final List<Suggestion> suggestions;
+
+  ServerConfig({this.suggestions = const []});
+
+  factory ServerConfig.fromJson(Map<String, dynamic> json) {
+    final suggestions = (json['suggestions'] as List<dynamic>?)
+            ?.map((s) => Suggestion.fromJson(s as Map<String, dynamic>))
+            .toList() ??
+        [];
+    return ServerConfig(suggestions: suggestions);
+  }
+}
+
+class ChatResponse {
+  final String content;
+  final String type;
+  final List<Source> sources;
+  final Map<String, dynamic>? analysis;
+  final String sessionId;
+  final String? imageUrl;
+  final String? imageBase64;
+  final String? videoUrl;
+  final String? audioUrl;
+
+  ChatResponse({
+    required this.content,
+    this.type = 'chat',
+    this.sources = const [],
+    this.analysis,
+    required this.sessionId,
+    this.imageUrl,
+    this.imageBase64,
+    this.videoUrl,
+    this.audioUrl,
+  });
+
+  factory ChatResponse.fromJson(Map<String, dynamic> json) => ChatResponse(
+    content: json['content'] as String? ?? '',
+    type: json['type'] as String? ?? 'chat',
+    sources: json['sources'] != null
+        ? (json['sources'] as List).map((s) => Source(
+            title: s['title'] as String? ?? '',
+            url: s['url'] as String?,
+          )).toList()
+        : [],
+    analysis: json['analysis'] as Map<String, dynamic>?,
+    sessionId: json['session_id'] as String? ?? '',
+    imageUrl: json['image_url'] as String?,
+    imageBase64: json['image_base64'] as String?,
+    videoUrl: json['video_url'] as String?,
+    audioUrl: json['audio_url'] as String?,
+  );
+}
 
 class ApiClient {
-  final String baseUrl;
+  String _baseUrl;
+  String? _authToken;
+  final http.Client _client = http.Client();
 
-  ApiClient({String? baseUrl})
-      : baseUrl = baseUrl ?? AppConfig.instance.apiBaseUrl;
+  ApiClient({String baseUrl = ''}) : _baseUrl = baseUrl;
 
-  String get _chatPath => AppConfig.instance.apiChatPath;
-  String get _imagePath => AppConfig.instance.apiImageChatPath;
-  String get _filePath => AppConfig.instance.apiFilePath;
-  String get _imageGenPath => AppConfig.instance.apiImageGeneratePath;
-  String get _imageEditPath => AppConfig.instance.apiImageEditPath;
-  String get _sessionId => AppConfig.instance.defaultSessionId;
+  String get baseUrl => _baseUrl;
+  void updateBaseUrl(String url) => _baseUrl = url;
 
-  Duration get _chatTimeout => AppConfig.instance.apiChatTimeout;
-  Duration get _imageTimeout => AppConfig.instance.apiImageTimeout;
-  Duration get _fileTimeout => AppConfig.instance.apiFileTimeout;
-  Duration get _imageGenTimeout => AppConfig.instance.apiImageGenTimeout;
-  Duration get _imageEditTimeout => AppConfig.instance.apiImageGenTimeout;
+  void setAuthToken(String? token) => _authToken = token;
 
-  Map<String, String> get _jsonHeaders => {
-        'Content-Type': 'application/json',
-      };
+  Map<String, String> get _headers => {
+    'Content-Type': 'application/json',
+    if (_authToken != null) 'Authorization': 'Bearer $_authToken',
+  };
 
-  Future<http.Response> _withTimeout(Future<http.Response> call, Duration timeout) {
-    if (timeout.inSeconds > 0) {
-      return call.timeout(timeout);
-    }
-    return call;
+  Future<Map<String, dynamic>> _get(String path) async {
+    final response = await _client.get(
+      Uri.parse('$_baseUrl$path'),
+      headers: _headers,
+    );
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  Future<http.StreamedResponse> _withStreamTimeout(Future<http.StreamedResponse> call, Duration timeout) {
-    if (timeout.inSeconds > 0) {
-      return call.timeout(timeout);
-    }
-    return call;
+  Future<Map<String, dynamic>> _post(
+      String path, Map<String, dynamic> body) async {
+    final response = await _client.post(
+      Uri.parse('$_baseUrl$path'),
+      headers: _headers,
+      body: jsonEncode(body),
+    );
+    return jsonDecode(response.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> chat({
+  Future<Map<String, dynamic>> _delete(String path) async {
+    final response = await _client.delete(
+      Uri.parse('$_baseUrl$path'),
+      headers: _headers,
+    );
+    if (response.body.isEmpty) return {};
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> _put(
+      String path, Map<String, dynamic> body) async {
+    final response = await _client.put(
+      Uri.parse('$_baseUrl$path'),
+      headers: _headers,
+      body: jsonEncode(body),
+    );
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> _uploadFile(
+      String path, File file, Map<String, String> fields) async {
+    final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl$path'));
+    if (_authToken != null) {
+      request.headers['Authorization'] = 'Bearer $_authToken';
+    }
+    request.fields.addAll(fields);
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<ChatResponse> chatRequest(ChatRequest request) async {
+    final resp = await _post('/api/chat', request.toJson());
+    return ChatResponse.fromJson(resp);
+  }
+
+  Future<ChatResponse> chat({
     required String message,
     String? sessionId,
   }) async {
-    final uri = Uri.parse('$baseUrl$_chatPath');
-    final resp = await _withTimeout(
-      http.post(
-        uri,
-        headers: _jsonHeaders,
-        body: jsonEncode({
-          'message': message,
-          'session_id': sessionId ?? _sessionId,
-        }),
-      ),
-      _chatTimeout,
+    final resp = await _post('/v1/chat', {
+      'message': message,
+      if (sessionId != null) 'session_id': sessionId,
+    });
+    return ChatResponse(
+      content: resp['response'] as String? ?? '',
+      sessionId: resp['session_id'] as String? ?? sessionId ?? '',
+      type: resp['type'] as String? ?? 'chat',
     );
-    if (resp.statusCode != 200) {
-      throw Exception('Chat API error: ${resp.statusCode} ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> chatWithImage({
+  Future<ChatResponse> chatWithImage({
     required String message,
     required Uint8List imageBytes,
     required String fileName,
     String? sessionId,
   }) async {
-    final uri = Uri.parse('$baseUrl$_imagePath');
+    final uri = Uri.parse('$_baseUrl/v1/chat/image');
     final request = http.MultipartRequest('POST', uri);
     request.fields['message'] = message;
-    request.fields['session_id'] = sessionId ?? _sessionId;
-    request.files.add(
-      http.MultipartFile.fromBytes('file', imageBytes, filename: fileName),
+    if (sessionId != null) request.fields['session_id'] = sessionId;
+    request.files.add(http.MultipartFile.fromBytes(
+      'file',
+      imageBytes,
+      filename: fileName,
+    ));
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    final resp = jsonDecode(response.body) as Map<String, dynamic>;
+    return ChatResponse(
+      content: resp['response'] as String? ?? '',
+      sessionId: resp['session_id'] as String? ?? sessionId ?? '',
+      type: resp['type'] as String? ?? 'chat',
     );
-    final resp = await _withStreamTimeout(request.send(), _imageTimeout);
-    final body = await resp.stream.bytesToString();
-    if (resp.statusCode != 200) {
-      throw Exception('Image API error: ${resp.statusCode} $body');
-    }
-    return jsonDecode(body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> uploadFile({
+  Future<ChatResponse> uploadFile({
     required Uint8List fileBytes,
     required String fileName,
-    required String message,
+    String message = '',
     String? sessionId,
   }) async {
-    final uri = Uri.parse('$baseUrl$_filePath');
+    final uri = Uri.parse('$_baseUrl/v1/chat/file');
     final request = http.MultipartRequest('POST', uri);
     request.fields['message'] = message;
-    request.fields['session_id'] = sessionId ?? _sessionId;
-    request.files.add(
-      http.MultipartFile.fromBytes('file', fileBytes, filename: fileName),
+    if (sessionId != null) request.fields['session_id'] = sessionId;
+    request.files.add(http.MultipartFile.fromBytes(
+      'file',
+      fileBytes,
+      filename: fileName,
+    ));
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    final resp = jsonDecode(response.body) as Map<String, dynamic>;
+    return ChatResponse(
+      content: resp['response'] as String? ?? '',
+      sessionId: resp['session_id'] as String? ?? sessionId ?? '',
+      type: resp['type'] as String? ?? 'chat',
     );
-    final resp = await _withStreamTimeout(request.send(), _fileTimeout);
-    final body = await resp.stream.bytesToString();
-    if (resp.statusCode != 200) {
-      throw Exception('File upload error: ${resp.statusCode} $body');
-    }
-    return jsonDecode(body) as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> generateImage({
     required String prompt,
     String? sessionId,
+    String? style,
   }) async {
-    final params = {
-      'prompt': prompt,
-      'session_id': sessionId ?? _sessionId,
+    final body = <String, dynamic>{'prompt': prompt};
+    if (style != null) body['style'] = style;
+    if (sessionId != null) body['session_id'] = sessionId;
+    return _post('/v1/image/generate', body);
+  }
+
+  Future<Map<String, dynamic>> generateQRCode(
+      {required String data, int? size}) async {
+    final body = <String, dynamic>{'data': data};
+    if (size != null) body['size'] = size;
+    return _post('/api/image/qr-code', body);
+  }
+
+  Future<Map<String, dynamic>> redesignImage(
+      File file, String prompt) async {
+    return _uploadFile('/api/image/redesign', file, {'prompt': prompt});
+  }
+
+  Future<ChatResponse> analyzeImage(
+    File file, {
+    String? sessionId,
+    List<Map<String, String>>? messages,
+    String? analysisType,
+  }) async {
+    final request =
+        http.MultipartRequest('POST', Uri.parse('$_baseUrl/api/image/analyze'));
+    if (_authToken != null) {
+      request.headers['Authorization'] = 'Bearer $_authToken';
+    }
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+    if (sessionId != null) request.fields['session_id'] = sessionId;
+    if (messages != null) {
+      request.fields['messages'] = jsonEncode(messages);
+    }
+    if (analysisType != null) request.fields['analysis_type'] = analysisType;
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+    return ChatResponse.fromJson(
+        jsonDecode(response.body) as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> webSearch(
+      String query, {int maxResults = 5}) async {
+    return _post('/api/tools/search', {
+      'query': query,
+      'max_results': maxResults,
+    });
+  }
+
+  Future<Map<String, dynamic>> transcribeAudio(File file) async {
+    final request = http.MultipartRequest(
+        'POST', Uri.parse('$_baseUrl/api/voice/transcribe'));
+    if (_authToken != null) {
+      request.headers['Authorization'] = 'Bearer $_authToken';
+    }
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> processDocument(File file) async {
+    final request = http.MultipartRequest(
+        'POST', Uri.parse('$_baseUrl/api/tools/process-document'));
+    if (_authToken != null) {
+      request.headers['Authorization'] = 'Bearer $_authToken';
+    }
+    request.files.add(await http.MultipartFile.fromPath('file', file.path));
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  Future<List<Map<String, dynamic>>> listModels() async {
+    final resp = await _get('/api/models/list');
+    return (resp['models'] as List? ?? resp as List?)
+            ?.cast<Map<String, dynamic>>() ?? [];
+  }
+
+  Future<Map<String, dynamic>> getStatus() => _get('/api/status');
+
+  Future<Map<String, dynamic>> healthCheck() => _get('/health');
+
+  Future<ServerConfig> getConfig() async {
+    final resp = await _get('/api/config');
+    return ServerConfig.fromJson(resp);
+  }
+
+  Future<Map<String, dynamic>> getMe() => _get('/api/auth/me');
+
+  Future<List<Map<String, dynamic>>> listConversations() async {
+    final resp = await _get('/api/conversations');
+    return (resp['conversations'] as List? ?? resp as List?)
+            ?.cast<Map<String, dynamic>>() ?? [];
+  }
+
+  Future<Map<String, dynamic>> createConversation(
+      {String title = 'New Conversation'}) async {
+    return _post('/api/conversations', {'title': title});
+  }
+
+  Future<void> deleteConversation(String convId) async {
+    await _delete('/api/conversations/$convId');
+  }
+
+  Future<Map<String, dynamic>> exportConversation(String convId,
+      {String format = 'markdown'}) async {
+    final response = await _client.get(
+      Uri.parse('$_baseUrl/api/conversations/$convId/export?fmt=$format'),
+      headers: _headers,
+    );
+    return {'content': response.body};
+  }
+
+  Future<Map<String, dynamic>> updateConversation(
+      String convId, String title) async {
+    return _put('/api/conversations/$convId', {'title': title});
+  }
+
+  Future<List<Map<String, dynamic>>> listMessages(String convId) async {
+    final resp = await _get('/api/conversations/$convId/messages');
+    return (resp['messages'] as List? ?? resp as List?)
+            ?.cast<Map<String, dynamic>>() ?? [];
+  }
+
+  Future<Map<String, dynamic>> addMessage(
+    String convId, {
+    required String role,
+    required String content,
+    String msgType = 'text',
+    String? sources,
+    String? label,
+    String? image,
+    String? mediaUrl,
+    String? videoUrl,
+    String? audioUrl,
+  }) async {
+    final body = <String, dynamic>{
+      'role': role,
+      'content': content,
+      'msg_type': msgType,
     };
-    final uri = Uri.parse('$baseUrl$_imageGenPath').replace(queryParameters: params);
-    final resp = await _withTimeout(http.get(uri), _imageGenTimeout);
-    if (resp.statusCode != 200) {
-      String detail = '';
-      try {
-        final body = jsonDecode(resp.body) as Map<String, dynamic>;
-        detail = body['response'] as String? ?? body['detail'] as String? ?? '';
-      } catch (_) {}
-      throw Exception(detail.isNotEmpty ? detail : 'Image generation failed (${resp.statusCode})');
-    }
-    final b64 = base64Encode(resp.bodyBytes);
-    return {'response': prompt, 'image_data': b64, 'type': 'image_gen'};
+    if (sources != null) body['sources'] = sources;
+    if (label != null) body['label'] = label;
+    if (image != null) body['image'] = image;
+    if (mediaUrl != null) body['media_url'] = mediaUrl;
+    if (videoUrl != null) body['video_url'] = videoUrl;
+    if (audioUrl != null) body['audio_url'] = audioUrl;
+    return _post('/api/conversations/$convId/messages', body);
   }
 
-  Future<Map<String, dynamic>> editImage({
-    required String message,
-    required Uint8List imageBytes,
-    required String fileName,
-    String? sessionId,
-  }) async {
-    final uri = Uri.parse('$baseUrl$_imageEditPath');
-    final request = http.MultipartRequest('POST', uri);
-    request.fields['message'] = message;
-    request.fields['session_id'] = sessionId ?? _sessionId;
-    request.files.add(
-      http.MultipartFile.fromBytes('file', imageBytes, filename: fileName),
-    );
-    final resp = await _withStreamTimeout(request.send(), _imageEditTimeout);
-    final body = await resp.stream.bytesToString();
-    if (resp.statusCode != 200) {
-      throw Exception('Image edit error: ${resp.statusCode} $body');
-    }
-    return jsonDecode(body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> syncConversations(
+      List<Map<String, dynamic>> conversations) async {
+    return _post('/api/conversations/sync', {'conversations': conversations});
   }
 
-  Future<Map<String, dynamic>> analyzeImage({
-    required Uint8List imageBytes,
-    required String fileName,
-    String? sessionId,
-  }) async {
-    final uri = Uri.parse('$baseUrl$_imagePath');
-    final request = http.MultipartRequest('POST', uri);
-    request.fields['message'] = AppConfig.instance.cameraAnalysisPrompt;
-    request.fields['session_id'] = sessionId ?? _sessionId;
-    request.files.add(
-      http.MultipartFile.fromBytes('file', imageBytes, filename: fileName),
-    );
-    final resp = await _withStreamTimeout(request.send(), _imageTimeout);
-    final body = await resp.stream.bytesToString();
-    if (resp.statusCode != 200) {
-      throw Exception('Image analysis error: ${resp.statusCode} $body');
-    }
-    return jsonDecode(body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> updateLLMConfig(
+      {String? provider,
+      String? apiKey,
+      String? model,
+      String? apiUrl}) async {
+    final body = <String, dynamic>{};
+    if (provider != null) body['provider'] = provider;
+    if (apiKey != null) body['api_key'] = apiKey;
+    if (model != null) body['model'] = model;
+    if (apiUrl != null) body['api_url'] = apiUrl;
+    return _post('/api/config/llm', body);
   }
+
+  Future<Map<String, dynamic>> getLLMConfig() => _get('/api/config/llm');
 }

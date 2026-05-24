@@ -141,9 +141,7 @@ class LocalLLM:
             return self._generate_ollama(prompt, system_prompt, stream)
         if self._ensure_transformers():
             return self._generate_transformers(prompt, system_prompt)
-        raise RuntimeError(
-            "I'm having trouble connecting. Please check that the required services are running and try again."
-        )
+        raise RuntimeError("No language model backend available")
 
     def generate_stream(self, prompt, system_prompt=None):
         if system_prompt is None:

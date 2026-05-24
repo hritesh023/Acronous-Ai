@@ -131,24 +131,24 @@ class ImageGenerator:
 
         if provider == "diffusers":
             if not self._is_available:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._generate_diffusers(prompt, negative_prompt, steps, guidance_scale, height, width, image_type)
 
         if provider == "huggingface":
             if not self._hf_api_token:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             if not self._hf_model_id:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._generate_hf_api(prompt, negative_prompt, steps, guidance_scale, height, width, image_type)
 
         if provider == "openai":
             if not self._openai_api_key:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._generate_openai_image(prompt)
 
         if provider == "replicate":
             if not self._replicate_api_token:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._generate_replicate(prompt, negative_prompt, steps, guidance_scale, image_type)
 
         return self._generate_pil_fallback(prompt, width, height)
@@ -160,19 +160,19 @@ class ImageGenerator:
 
         if provider == "diffusers":
             if not self._is_available:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._redesign_diffusers(image, prompt, strength, steps, guidance_scale)
 
         if provider == "huggingface":
             if not self._hf_api_token:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             if not self._hf_model_id:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._redesign_hf_api(image, prompt)
 
         if provider == "openai":
             if not self._openai_api_key:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._redesign_openai_image(image, prompt)
 
         return self._generate_pil_fallback(prompt, image.width if hasattr(image, 'width') else 768, image.height if hasattr(image, 'height') else 768)
@@ -187,7 +187,7 @@ class ImageGenerator:
 
         if provider == "diffusers":
             if not self._is_available:
-                return None, "Image generation is currently unavailable."
+                return None, " "
             return self._inpaint_diffusers(image, mask, prompt, negative_prompt, strength, steps, guidance_scale)
 
         if provider in ("huggingface", "openai", "replicate"):
@@ -237,7 +237,7 @@ class ImageGenerator:
             img.save(buf, format="PNG")
             return buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _inpaint_fallback(self, image, mask, prompt, strength=0.85, steps=None, guidance_scale=None):
         try:
@@ -254,7 +254,7 @@ class ImageGenerator:
             result.save(buf, format="PNG")
             return buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _generate_mask_from_description(self, image, description):
         w, h = image.size
@@ -432,7 +432,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             img.save(buf, format="PNG")
             return buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     @torch.inference_mode()
     def _redesign_diffusers(self, image, prompt, strength=0.7, steps=None, guidance_scale=None):
@@ -460,7 +460,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             img.save(buf, format="PNG")
             return buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _generate_hf_api(self, prompt, negative_prompt=None, steps=None, guidance_scale=None, height=None, width=None, image_type="realistic"):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
@@ -498,9 +498,9 @@ Return ONLY valid JSON, no markdown, no code fences:"""
                     buf = io.BytesIO()
                     img.save(buf, format="PNG")
                     return buf.getvalue(), None
-            return None, "Image generation is currently unavailable."
+            return None, " "
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _redesign_hf_api(self, image, prompt):
         try:
@@ -525,14 +525,14 @@ Return ONLY valid JSON, no markdown, no code fences:"""
                 out_buf = io.BytesIO()
                 img.save(out_buf, format="PNG")
                 return out_buf.getvalue(), None
-            return None, "Image generation is currently unavailable."
+            return None, " "
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _generate_openai_image(self, prompt):
         model = os.getenv("ACRONOUS_OPENAI_IMAGE_MODEL")
         if not model:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
         try:
             from openai import OpenAI
@@ -554,12 +554,12 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             img.save(out_buf, format="PNG")
             return out_buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _redesign_openai_image(self, image, prompt):
         model = os.getenv("ACRONOUS_OPENAI_IMAGE_MODEL")
         if not model:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
         try:
             from openai import OpenAI
@@ -597,7 +597,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             img.save(out_buf, format="PNG")
             return out_buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _generate_replicate(self, prompt, negative_prompt=None, steps=None, guidance_scale=None, image_type="realistic"):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
@@ -629,9 +629,9 @@ Return ONLY valid JSON, no markdown, no code fences:"""
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 return buf.getvalue(), None
-            return None, "Image generation is currently unavailable."
+            return None, " "
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _generate_pil_fallback(self, prompt, width, height):
         try:
@@ -672,7 +672,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             img.save(buf, format="PNG")
             return buf.getvalue(), None
         except Exception:
-            return None, "Image generation is currently unavailable."
+            return None, " "
 
     def _add_watermark(self, img):
         try:

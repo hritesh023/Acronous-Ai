@@ -1,66 +1,319 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../constants/app_constants.dart';
+import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
-import '../widgets/chat_message.dart';
+import '../models/message.dart';
+import '../models/suggestion.dart';
+
 import '../widgets/chat_input.dart';
-import '../widgets/typing_indicator.dart';
-import 'settings_page.dart';
+import '../widgets/chat_message.dart';
+import '../widgets/sidebar.dart';
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key});
+  final ChatProvider chatProvider;
+  final AuthProvider authProvider;
+
+  const ChatPage({
+    super.key,
+    required this.chatProvider,
+    required this.authProvider,
+  });
 
   @override
   State<ChatPage> createState() => _ChatPageState();
 }
 
 class _ChatPageState extends State<ChatPage> {
-  final ScrollController _scrollController = ScrollController();
-  final TextEditingController _searchController = TextEditingController();
-  int _lastMsgCount = 0;
+  bool _sidebarOpen = false;
+  final _scrollController = ScrollController();
+  List<Suggestion> _suggestions = [];
 
   @override
-  void dispose() {
-    _scrollController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _scrollIfNeeded();
-  }
-
-  void _scrollIfNeeded() {
-    final chat = context.read<ChatProvider>();
-    final msgs = chat.currentConversation?.messages ?? [];
-    if (msgs.length > _lastMsgCount) {
-      _lastMsgCount = msgs.length;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+  void initState() {
+    super.initState();
+    _loadConfig();
+    widget.chatProvider.addListener(_scrollToBottom);
+    widget.chatProvider.loadTheme();
+    if (widget.authProvider.status == AuthStatus.authenticated) {
+      widget.chatProvider.loadServerConversations();
     }
   }
 
   @override
+  void dispose() {
+    widget.chatProvider.removeListener(_scrollToBottom);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _loadConfig() async {
+    try {
+      final config = await widget.chatProvider.apiClient.getConfig();
+      if (config.suggestions.isNotEmpty) {
+        setState(() => _suggestions = config.suggestions);
+      }
+    } catch (_) {}
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _buildAppBar(context),
-      drawer: _buildSidebar(context),
-      body: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 900),
-          child: Column(
+    final messages = widget.chatProvider.currentMessages;
+    final isDark = widget.chatProvider.themeMode == ThemeMode.dark ||
+        (widget.chatProvider.themeMode == ThemeMode.system &&
+            MediaQuery.of(context).platformBrightness == Brightness.dark);
+
+    return MaterialApp(
+      theme: isDark ? _buildDarkTheme() : _buildLightTheme(),
+      debugShowCheckedModeBanner: false,
+      home: Builder(
+        builder: (context) {
+          return Stack(
             children: [
-              Expanded(child: _buildMessages()),
-              const ChatInput(),
+              Scaffold(
+                body: Column(
+                  children: [
+                    _buildTopBar(context),
+                    Expanded(
+                      child: messages.isEmpty
+                          ? _buildWelcomeScreen(context)
+                          : _buildMessagesList(context, messages),
+                    ),
+                    _buildInputArea(context),
+                    if (widget.chatProvider.error != null)
+                      _buildErrorToast(widget.chatProvider.error!),
+
+                  ],
+                ),
+              ),
+              if (_sidebarOpen)
+                GestureDetector(
+                  onTap: () => setState(() => _sidebarOpen = false),
+                  child: Container(color: Colors.black54),
+                ),
+              if (_sidebarOpen)
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: SidebarWidget(
+                    chatProvider: widget.chatProvider,
+                    authProvider: widget.authProvider,
+                    topics: _suggestions,
+                    onClose: () => setState(() => _sidebarOpen = false),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildTopBar(BuildContext context) {
+    return Container(
+      padding: EdgeInsets.only(
+        top: MediaQuery.of(context).padding.top + 8,
+        left: 12,
+        right: 12,
+        bottom: 8,
+      ),
+      child: Row(
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => setState(() => _sidebarOpen = !_sidebarOpen),
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 34,
+                height: 34,
+                child: const Icon(Icons.menu,
+                    size: 18, color: Color(0xFFB0B0C8)),
+              ),
+            ),
+          ),
+          const Spacer(),
+          Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () => widget.chatProvider.toggleTheme(),
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 34,
+                height: 34,
+                child: Icon(
+                  widget.chatProvider.themeMode == ThemeMode.dark
+                      ? Icons.light_mode
+                      : Icons.dark_mode,
+                  size: 18,
+                  color: const Color(0xFFB0B0C8),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWelcomeScreen(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 180),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Image.asset(
+                'assets/logo.png',
+                width: 52,
+                height: 52,
+                errorBuilder: (_, __, ___) => Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF7C3AED),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'How can I help you today?',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFFE8E8F0),
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Ask me anything, I\'m here to assist',
+              style: TextStyle(
+                fontSize: 15,
+                color: Color(0xFF707090),
+              ),
+            ),
+            const SizedBox(height: 28),
+            if (_suggestions.isNotEmpty)
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: _suggestions.map((s) {
+                  return Material(
+                    color: const Color(0xFF181830),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      onTap: () => widget.chatProvider.handleSendMessage(
+                          s.query),
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        width: 200,
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(
+                              _iconFor(s.icon),
+                              size: 20,
+                              color: const Color(0xFF7C3AED),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(s.title,
+                                style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFFE8E8F0))),
+                            const SizedBox(height: 2),
+                            Text(s.desc,
+                                style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF707090))),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessagesList(
+      BuildContext context, List<ChatMessage> messages) {
+    return ListView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.fromLTRB(16, 24, 16, 200),
+      itemCount: messages.length + (widget.chatProvider.isLoading ? 1 : 0),
+      itemBuilder: (context, index) {
+        if (index == messages.length) {
+          return const Padding(
+            padding: EdgeInsets.all(12),
+            child: Row(
+              children: [
+                _TypingIndicator(),
+              ],
+            ),
+          );
+        }
+        return ChatMessageWidget(
+          message: messages[index],
+        );
+      },
+    );
+  }
+
+  Widget _buildInputArea(BuildContext context) {
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        width: double.infinity,
+        constraints: const BoxConstraints(maxWidth: 720),
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: const ChatInput(),
+      ),
+    );
+  }
+
+  Widget _buildErrorToast(String error) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+      child: Material(
+        color: const Color(0xFFEF4444),
+        borderRadius: BorderRadius.circular(12),
+        elevation: 8,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  error,
+                  style: const TextStyle(color: Colors.white, fontSize: 14),
+                ),
+              ),
+              GestureDetector(
+                onTap: () => widget.chatProvider.setError(null),
+                child: const Icon(Icons.close,
+                    size: 18, color: Colors.white),
+              ),
             ],
           ),
         ),
@@ -68,458 +321,134 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Widget _buildMessages() {
-    return Consumer<ChatProvider>(
-      builder: (context, chat, _) {
-        final msgs = chat.currentConversation?.messages ?? [];
-        _scrollIfNeeded();
-        if (msgs.isEmpty && !chat.isLoading) {
-          return _buildWelcome(context);
-        }
-        return ListView.builder(
-          controller: _scrollController,
-          padding: const EdgeInsets.only(top: 6, bottom: 4),
-          itemCount: msgs.length + (chat.isLoading ? 1 : 0),
-          itemBuilder: (_, i) {
-            if (chat.isLoading && i == msgs.length) {
-              return const TypingIndicator();
-            }
-            return ChatMessageWidget(message: msgs[i]);
-          },
-        );
-      },
-    );
-  }
-
-  PreferredSizeWidget _buildAppBar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return AppBar(
-      leading: Builder(
-        builder: (ctx) => IconButton(
-          icon: const Icon(Icons.menu_rounded),
-          onPressed: () => Scaffold.of(ctx).openDrawer(),
-        ),
+  ThemeData _buildDarkTheme() {
+    return ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: const Color(0xFF0F0F1A),
+      primaryColor: const Color(0xFF7C3AED),
+      colorScheme: const ColorScheme.dark(
+        primary: Color(0xFF7C3AED),
+        secondary: Color(0xFF8B5CF6),
+        surface: Color(0xFF16162A),
+        error: Color(0xFFEF4444),
       ),
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: AppDimens.avatarSize,
-            height: AppDimens.avatarSize,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(AppDimens.avatarRadius),
-              color: cs.primaryContainer,
-            ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppDimens.avatarRadius),
-              child: Image.asset(
-                'assets/logo.png',
-                width: AppDimens.avatarSize,
-                height: AppDimens.avatarSize,
-                fit: BoxFit.contain,
-                errorBuilder: (_, _, _) => Icon(
-                  Icons.auto_awesome,
-                  size: AppDimens.iconMed - 3,
-                  color: cs.primary,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(width: AppDimens.gapSM + 1),
-          Text(
-            AppStrings.appName,
-            style: TextStyle(
-              fontWeight: FontWeight.w600,
-              fontSize: AppDimens.fontSizeHeading - 1,
-            ),
-          ),
-        ],
+      cardColor: const Color(0xFF181830),
+      dividerColor: const Color(0x14FFFFFF),
+      textTheme: const TextTheme(
+        bodyLarge: TextStyle(color: Color(0xFFE8E8F0)),
+        bodyMedium: TextStyle(color: Color(0xFFB0B0C8)),
+        bodySmall: TextStyle(color: Color(0xFF707090)),
       ),
-      actions: [
-        Consumer<ChatProvider>(
-          builder: (context, chat, _) => IconButton(
-            icon: Icon(
-              chat.themeMode == ThemeMode.dark
-                  ? Icons.light_mode_outlined
-                  : Icons.dark_mode_outlined,
-              size: AppDimens.inputIconInnerSize,
-            ),
-            onPressed: chat.toggleTheme,
-          ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: const Color(0xFF1C1C35),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0x1FFFFFFF)),
         ),
-        IconButton(
-          icon: const Icon(Icons.settings_outlined,
-              size: AppDimens.inputIconInnerSize),
-          onPressed: () => Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => const SettingsPage()),
-          ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0x1FFFFFFF)),
         ),
-      ],
-    );
-  }
-
-  Widget _buildWelcome(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: AppDimens.paddingXL * 2),
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 650),
-          child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: AppDimens.avatarSizeLarge,
-              height: AppDimens.avatarSizeLarge,
-              decoration: BoxDecoration(
-                borderRadius:
-                    BorderRadius.circular(AppDimens.avatarRadiusLarge),
-                gradient: LinearGradient(
-                  colors: [
-                    cs.primary,
-                    cs.primary.withValues(alpha: 0.7),
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-              child: ClipRRect(
-                borderRadius:
-                    BorderRadius.circular(AppDimens.avatarRadiusLarge),
-                child: Image.asset(
-                  'assets/logo.png',
-                  width: 40,
-                  height: 40,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => const Icon(
-                    Icons.auto_awesome,
-                    size: 36,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: AppDimens.paddingXL + 4),
-            Text(
-              AppStrings.welcomeTitle,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: cs.onSurface,
-                  ),
-            ),
-            const SizedBox(height: AppDimens.paddingSM),
-            Text(
-              AppStrings.welcomeSubtitle,
-              style: TextStyle(
-                color: cs.onSurfaceVariant,
-                fontSize: AppDimens.fontSizeLG,
-              ),
-            ),
-            const SizedBox(height: AppDimens.paddingXL + 12),
-            Wrap(
-              spacing: AppDimens.gapLG,
-              runSpacing: AppDimens.gapLG,
-              alignment: WrapAlignment.center,
-              children: AppStrings.welcomeSuggestions
-                  .map((s) => ActionChip(
-                        label: Text(s,
-                            style: TextStyle(
-                                fontSize: AppDimens.fontSizeMD + 0.5,
-                                color: cs.onSurface)),
-                        onPressed: () =>
-                            context.read<ChatProvider>().sendMessage(s),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(18),
-                        ),
-                        visualDensity: VisualDensity.compact,
-                      ))
-                  .toList(),
-            ),
-          ],
-          ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFF7C3AED), width: 2),
         ),
+        hintStyle: const TextStyle(color: Color(0xFF505070)),
       ),
     );
   }
 
-  Widget _buildSidebar(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final paddingTop = MediaQuery.of(context).padding.top;
-    return Drawer(
-      child: Column(
-        children: [
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.only(
-              top: paddingTop + 14,
-              bottom: AppDimens.paddingLG,
-              left: AppDimens.paddingXL,
-              right: AppDimens.paddingLG,
-            ),
-            decoration: BoxDecoration(
-              border: Border(
-                bottom: BorderSide(
-                  color: cs.outlineVariant.withValues(alpha: 0.1),
-                ),
-              ),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: AppDimens.avatarSizeSidebar,
-                  height: AppDimens.avatarSizeSidebar,
-                  decoration: BoxDecoration(
-                    borderRadius:
-                        BorderRadius.circular(AppDimens.avatarRadiusSidebar),
-                    color: cs.primaryContainer,
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(
-                        AppDimens.avatarRadiusSidebar),
-                    child: Image.asset(
-                      'assets/logo.png',
-                      width: AppDimens.iconMed + 2,
-                      height: AppDimens.iconMed + 2,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, _, _) => const Icon(
-                        Icons.auto_awesome,
-                        size: AppDimens.iconMed,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: AppDimens.gapLG),
-                Text(
-                  AppStrings.appName,
-                  style: TextStyle(
-                    fontSize: AppDimens.fontSizeHeading,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded,
-                      size: AppDimens.inputIconInnerSize),
-                  onPressed: () => Navigator.pop(context),
-                ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(AppDimens.gapXL),
-            child: Consumer<ChatProvider>(
-              builder: (context, chat, _) => FilledButton.icon(
-                onPressed: () {
-                  chat.newChat();
-                  Navigator.pop(context);
-                },
-                icon: const Icon(Icons.add_rounded,
-                    size: AppDimens.iconMed),
-                label: Text(AppStrings.newChat),
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size(200, 40),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(
-                horizontal: AppDimens.gapXL, vertical: AppDimens.gapXS),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (v) =>
-                  context.read<ChatProvider>().setSearchQuery(v),
-              decoration: InputDecoration(
-                hintText: AppStrings.searchHistory,
-                prefixIcon: const Icon(Icons.search_rounded,
-                    size: AppDimens.iconMed),
-                filled: true,
-                fillColor: cs.surfaceContainerHighest
-                    .withValues(alpha: 0.15),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: AppDimens.gapXL,
-                  vertical: AppDimens.gapLG - 4,
-                ),
-                isDense: true,
-              ),
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: Consumer<ChatProvider>(
-              builder: (context, chat, _) {
-                final convos = chat.filteredConversations;
-                if (convos.isEmpty) {
-                  return Center(
-                    child: Text(
-                      chat.searchQuery.isNotEmpty
-                          ? AppStrings.noMatching
-                          : AppStrings.noConversations,
-                      style: TextStyle(
-                          color: cs.onSurfaceVariant,
-                          fontSize: AppDimens.fontSizeLG),
-                    ),
-                  );
-                }
-                return ListView(
-                  padding: const EdgeInsets.symmetric(
-                      vertical: AppDimens.gapSM),
-                  children: _groupByDate(convos, cs, chat, context),
-                );
-              },
-            ),
-          ),
-        ],
+  ThemeData _buildLightTheme() {
+    return ThemeData(
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: const Color(0xFFF5F5FA),
+      primaryColor: const Color(0xFF7C3AED),
+      colorScheme: const ColorScheme.light(
+        primary: Color(0xFF7C3AED),
+        secondary: Color(0xFF6D28D9),
+        surface: Colors.white,
+        error: Color(0xFFEF4444),
+      ),
+      cardColor: Colors.white,
+      dividerColor: const Color(0x14000000),
+      textTheme: const TextTheme(
+        bodyLarge: TextStyle(color: Color(0xFF1A1A2A)),
+        bodyMedium: TextStyle(color: Color(0xFF4A4A60)),
+        bodySmall: TextStyle(color: Color(0xFF7A7A90)),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0x14000000)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0x14000000)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: const BorderSide(color: Color(0xFF7C3AED), width: 2),
+        ),
+        hintStyle: const TextStyle(color: Color(0xFFA0A0B0)),
       ),
     );
   }
 
-  List<Widget> _groupByDate(
-    List<dynamic> convos,
-    ColorScheme cs,
-    ChatProvider chat,
-    BuildContext context,
-  ) {
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final yesterday = today.subtract(const Duration(days: 1));
-    final thisWeek =
-        today.subtract(Duration(days: today.weekday - 1));
-    final thisMonth = DateTime(today.year, today.month, 1);
-
-    final dateLabels = {
-      'today': AppStrings.today,
-      'yesterday': AppStrings.yesterday,
-      'week': AppStrings.thisWeek,
-      'month': AppStrings.thisMonth,
-      'earlier': AppStrings.earlier,
-    };
-
-    List<Widget> items = [];
-    String? lastLabel;
-
-    for (final c in convos) {
-      final date = c.updatedAt;
-      String label;
-      if (date.isAfter(today)) {
-        label = dateLabels['today']!;
-      } else if (date.isAfter(yesterday)) {
-        label = dateLabels['yesterday']!;
-      } else if (date.isAfter(thisWeek)) {
-        label = dateLabels['week']!;
-      } else if (date.isAfter(thisMonth)) {
-        label = dateLabels['month']!;
-      } else {
-        label = dateLabels['earlier']!;
-      }
-
-      if (label != lastLabel) {
-        items.add(
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                AppDimens.paddingXL, AppDimens.gapXL, AppDimens.paddingXL, AppDimens.gapSM),
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: AppDimens.fontSizeSM,
-                fontWeight: FontWeight.w600,
-                color: cs.onSurfaceVariant.withValues(alpha: 0.6),
-                letterSpacing: 0.3,
-              ),
-            ),
-          ),
-        );
-        lastLabel = label;
-      }
-
-      final active = c.id == chat.currentConversation?.id;
-      items.add(
-        Container(
-          margin: const EdgeInsets.symmetric(
-              horizontal: AppDimens.paddingSM, vertical: 1),
-          decoration: BoxDecoration(
-            borderRadius:
-                BorderRadius.circular(AppDimens.sidebarItemRadius),
-            color: active
-                ? cs.primaryContainer.withValues(alpha: 0.2)
-                : Colors.transparent,
-          ),
-          child: ListTile(
-            dense: true,
-            leading: Icon(
-              Icons.chat_outlined,
-              size: AppDimens.iconMed,
-              color: active
-                  ? cs.primary
-                  : cs.onSurfaceVariant.withValues(alpha: 0.5),
-            ),
-            title: Text(
-              c.displayTitle,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: AppDimens.fontSizeLG,
-                fontWeight:
-                    active ? FontWeight.w600 : FontWeight.normal,
-                color: active
-                    ? cs.onSurface
-                    : cs.onSurfaceVariant,
-              ),
-            ),
-            trailing: IconButton(
-              icon: Icon(
-                Icons.delete_outline,
-                size: AppDimens.iconSmall + 2,
-                color: cs.onSurfaceVariant.withValues(alpha: 0.4),
-              ),
-              onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: Text(AppStrings.deleteTitle),
-                    content: Text(AppStrings.deleteBody),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: Text(AppStrings.cancel),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          chat.deleteConversation(c.id);
-                          Navigator.pop(ctx);
-                        },
-                        child: Text(AppStrings.delete,
-                            style:
-                                TextStyle(color: cs.error)),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-            onTap: () {
-              chat.switchConversation(c.id);
-              Navigator.pop(context);
-            },
-            shape: RoundedRectangleBorder(
-              borderRadius:
-                  BorderRadius.circular(AppDimens.sidebarItemRadius),
-            ),
-            contentPadding: const EdgeInsets.symmetric(
-                horizontal: AppDimens.gapXL),
-            visualDensity: VisualDensity.compact,
-          ),
-        ),
-      );
+  IconData _iconFor(String icon) {
+    switch (icon) {
+      case 'book':
+        return Icons.book;
+      case 'code':
+        return Icons.code;
+      case 'image':
+        return Icons.image;
+      default:
+        return Icons.search;
     }
-    return items;
+  }
+}
+
+class _TypingIndicator extends StatelessWidget {
+  const _TypingIndicator();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).brightness == Brightness.dark
+            ? const Color(0xFF1A1A30)
+            : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0x14FFFFFF)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: List.generate(3, (index) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: _dot(index),
+          );
+        }),
+      ),
+    );
+  }
+
+  Widget _dot(int index) {
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 400),
+      opacity: 1.0,
+      child: Container(
+        width: 7,
+        height: 7,
+        decoration: const BoxDecoration(
+          color: Color(0xFF707090),
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
   }
 }

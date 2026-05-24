@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../providers/auth_provider.dart' as auth;
+import '../providers/chat_provider.dart';
 import 'chat_page.dart';
 
 class AuthPage extends StatefulWidget {
@@ -67,7 +68,12 @@ class _AuthPageState extends State<AuthPage>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
           Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(builder: (_) => const ChatPage()),
+            MaterialPageRoute(
+              builder: (_) => ChatPage(
+                chatProvider: context.read<ChatProvider>(),
+                authProvider: context.read<auth.AuthProvider>(),
+              ),
+            ),
             (_) => false,
           );
         }

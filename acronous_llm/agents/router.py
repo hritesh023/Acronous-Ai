@@ -94,7 +94,7 @@ Corrected:"""
 
     def _determine_type(self, query):
         try:
-            prompt = f"""Classify the user's request into exactly ONE category. Reply with ONLY the category name.
+            prompt = f"""Classify the user's request into exactly one category.
 
 Categories:
 - image_generation: user wants to CREATE or GENERATE an image, picture, drawing, visual, painting, sketch, illustration
@@ -124,7 +124,7 @@ Examples:
 - "how are you" -> general_chat
 
 User request: {query}"""
-            resp = self.core.llm.generate(prompt, system_prompt="You classify user intents. Reply with one word or two-word category only.")
+            resp = self.core.llm.generate(prompt, system_prompt="You classify user intents concisely.")
             resp = resp.strip().lower()
             valid = {"image_generation", "image_analysis", "code_generation", "translation", "web_search", "factual", "general_chat"}
             for v in valid:
@@ -136,7 +136,7 @@ User request: {query}"""
 
     def _needs_planning(self, query):
         try:
-            prompt = f"""Does this request require multi-step research or comparison? Reply ONLY "yes" or "no".
+            prompt = f"""Does this request require multi-step research or comparison? Answer with "yes" or "no".
 
 Examples:
 - "compare Python and JavaScript" -> yes
@@ -147,7 +147,7 @@ Examples:
 - "draw a cat" -> no
 
 Request: {query}"""
-            resp = self.core.llm.generate(prompt, system_prompt="Reply with one word only.")
+            resp = self.core.llm.generate(prompt, system_prompt="You answer concisely with yes or no.")
             return resp.strip().lower().startswith("yes")
         except Exception:
             return False
@@ -175,32 +175,25 @@ Request: {query}"""
 
         route_type = route.get("type", "general_chat")
 
-        try:
-            if image is not None:
-                if self._is_modification_request(query, image):
-                    result = self._handle_image_modification(query, image)
-                else:
-                    result = self._handle_image(query, image)
-            elif file_path is not None:
-                result = self._handle_file(query, file_path, context)
-            elif route_type == "image_generation":
-                result = self._handle_image_generation(query, context)
-            elif route_type == "web_search":
-                result = self._handle_search(query, context)
-            elif route_type == "factual":
-                result = self._handle_factual(query, context)
-            elif route_type == "code_generation":
-                result = self._handle_code(query, context)
-            elif route_type == "translation":
-                result = self._handle_translation(query)
+        if image is not None:
+            if self._is_modification_request(query, image):
+                result = self._handle_image_modification(query, image)
             else:
-                result = self._handle_chat(query, context)
-        except Exception:
-            result = {
-                "type": "error",
-                "content": "Something went wrong. Please try again.",
-                "sources": []
-            }
+                result = self._handle_image(query, image)
+        elif file_path is not None:
+            result = self._handle_file(query, file_path, context)
+        elif route_type == "image_generation":
+            result = self._handle_image_generation(query, context)
+        elif route_type == "web_search":
+            result = self._handle_search(query, context)
+        elif route_type == "factual":
+            result = self._handle_factual(query, context)
+        elif route_type == "code_generation":
+            result = self._handle_code(query, context)
+        elif route_type == "translation":
+            result = self._handle_translation(query)
+        else:
+            result = self._handle_chat(query, context)
 
         if result and result.get("content"):
             try:
@@ -229,19 +222,16 @@ Request: {query}"""
             context = stored_context
 
         route_type = route.get("type", "general_chat")
-        try:
-            if route_type in ("web_search", "factual"):
-                result = self._handle_search(query, context) if route_type == "web_search" else self._handle_factual(query, context)
-                content = result.get("content", "")
-                chunk_size = 30
-                for i in range(0, len(content), chunk_size):
-                    yield content[i:i + chunk_size]
-            else:
-                prompt = f"{context}\nUser: {query}" if context else f"User: {query}"
-                system_prompt = "You are Acronous AI, a helpful local AI assistant."
-                yield from self.core.llm.generate_stream(prompt, system_prompt)
-        except Exception:
-            yield "Something went wrong. Please try again."
+        if route_type in ("web_search", "factual"):
+            result = self._handle_search(query, context) if route_type == "web_search" else self._handle_factual(query, context)
+            content = result.get("content", "")
+            chunk_size = 30
+            for i in range(0, len(content), chunk_size):
+                yield content[i:i + chunk_size]
+        else:
+            prompt = f"{context}\nUser: {query}" if context else f"User: {query}"
+            system_prompt = "You are Acronous AI, a helpful local AI assistant."
+            yield from self.core.llm.generate_stream(prompt, system_prompt)
 
     def _handle_chat(self, query, context):
         prompt = f"{context}\nUser: {query}" if context else f"User: {query}"
@@ -361,8 +351,8 @@ Examples of ANALYSIS/DESCRIPTION requests (NOT modification):
 
 User request: {query}{image_context}
 
-Reply with ONLY "yes" or "no":"""
-            resp = self.core.llm.generate(prompt, system_prompt="You classify requests. Reply with one word only.")
+Answer with "yes" or "no":"""
+            resp = self.core.llm.generate(prompt, system_prompt="You classify requests concisely.")
             return resp.strip().lower().startswith("yes")
         except Exception:
             return False
@@ -584,7 +574,16 @@ For 'generate', provide a 'prompt' for the new image."""
                 buf = io.BytesIO()
                 edited.save(buf, format="PNG", optimize=True)
                 img_bytes = buf.getvalue()
-                content_msg = f"Applied {len(decision.get('operations', []))} edit(s) to your image: '{query}'"
+                ops_summary = "; ".join([
+                    f"{o.get('op', '')}" + (f"({', '.join(f'{k}={v}' for k,v in o.items() if k != 'op')})" if any(k != 'op' for k in o) else "")
+                    for o in decision.get("operations", [])
+                ])
+                desc = self.core.llm.generate(
+                    f"I just applied these edits to the user's image: {ops_summary}. "
+                    f"Their request was: '{query}'. Describe what was done briefly.",
+                    system_prompt="You describe image edits conversationally."
+                )
+                content_msg = desc.strip() if desc else ""
 
             elif approach == "inpaint":
                 img_prompt = decision.get("prompt", query)
@@ -597,12 +596,13 @@ For 'generate', provide a 'prompt' for the new image."""
                 else:
                     img_bytes, error = None, "no_generator"
                 if error or img_bytes is None:
-                    return {
-                        "type": "chat",
-                        "content": f"I understand you want to {query.lower()}. Image editing requires an image generation model. Configure diffusers, HuggingFace API, or OpenAI DALL-E to enable this.",
-                        "sources": []
-                    }
-                content_msg = f"Edited your image: '{query}'"
+                    return {"type": "error", "content": "", "sources": []}
+                desc = self.core.llm.generate(
+                    f"The user requested image editing: '{query}'. I applied inpainting with prompt '{img_prompt}' "
+                    f"on the region: '{mask_description}'. Describe the result briefly.",
+                    system_prompt="You describe image edits conversationally."
+                )
+                content_msg = desc.strip() if desc else ""
 
             elif approach == "img2img":
                 img_prompt = decision.get("prompt", query)
@@ -614,12 +614,13 @@ For 'generate', provide a 'prompt' for the new image."""
                 if error or img_bytes is None:
                     img_bytes, error = self.core.image_gen.generate(img_prompt)
                 if error or img_bytes is None:
-                    return {
-                        "type": "chat",
-                        "content": f"I understand you want to {query.lower()}. Image modification requires an image generation model. Configure diffusers, HuggingFace API, or OpenAI DALL-E to enable this.",
-                        "sources": []
-                    }
-                content_msg = f"Redesigned your image: '{query}'"
+                    return {"type": "error", "content": "", "sources": []}
+                desc = self.core.llm.generate(
+                    f"The user requested: '{query}'. I redesigned their image using prompt '{img_prompt}'. "
+                    f"Describe what was done briefly.",
+                    system_prompt="You describe image edits conversationally."
+                )
+                content_msg = desc.strip() if desc else ""
 
             else:
                 img_prompt = decision.get("prompt", query)
@@ -628,12 +629,13 @@ For 'generate', provide a 'prompt' for the new image."""
                 else:
                     img_bytes, error = None, "no_generator"
                 if error or img_bytes is None:
-                    return {
-                        "type": "chat",
-                        "content": f"I understand you want to {query.lower()}. Generating a new image requires an image generation model. Configure diffusers, HuggingFace API, or OpenAI DALL-E to enable this.",
-                        "sources": []
-                    }
-                content_msg = f"Generated a new image based on: '{query}'"
+                    return {"type": "error", "content": "", "sources": []}
+                desc = self.core.llm.generate(
+                    f"The user requested: '{query}'. I generated a completely new image with prompt '{img_prompt}'. "
+                    f"Describe the result briefly.",
+                    system_prompt="You describe image edits conversationally."
+                )
+                content_msg = desc.strip() if desc else ""
 
             b64 = base64.b64encode(img_bytes).decode("utf-8")
             return {
@@ -644,6 +646,7 @@ For 'generate', provide a 'prompt' for the new image."""
                 "sources": []
             }
         except json.JSONDecodeError:
+            content_msg = ""
             try:
                 from PIL import Image as PilImg
                 import io
@@ -656,7 +659,7 @@ For 'generate', provide a 'prompt' for the new image."""
                     retry_img.save(buf, format="PNG")
                     return {
                         "type": "chat",
-                        "content": f"You asked to {query}. I couldn't determine the exact modification. Could you be more specific about what you'd like to change?",
+                        "content": content_msg,
                         "image_data": base64.b64encode(buf.getvalue()).decode("utf-8"),
                         "image_type": "original",
                         "sources": []
@@ -665,65 +668,58 @@ For 'generate', provide a 'prompt' for the new image."""
                 pass
             return {
                 "type": "chat",
-                "content": f"You asked to {query}. I couldn't determine the exact modification. Could you be more specific?",
-                "sources": []
-            }
-        except Exception:
-            return {
-                "type": "error",
-                "content": "I encountered an error while modifying the image. Please try again with a more specific request.",
+                "content": content_msg,
                 "sources": []
             }
 
     def _handle_file(self, query, file_path, context):
-        try:
-            file_path = str(file_path)
-            ext = Path(file_path).suffix.lower()
-            file_name = Path(file_path).name
+        file_path = str(file_path)
+        ext = Path(file_path).suffix.lower()
+        file_name = Path(file_path).name
 
-            content_text = ""
-            content_type = "unknown"
+        content_text = ""
+        content_type = "unknown"
 
-            text_exts = {'.txt', '.md', '.csv', '.json', '.xml', '.log', '.py', '.js', '.ts', '.html', '.css', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.sh', '.bat', '.ps1', '.sql', '.r', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.hpp', '.rb', '.php', '.swift', '.kt', '.scala', '.pl', '.lua', '.dart'}
-            doc_exts = {'.pdf', '.docx', '.doc', '.odt', '.rtf'}
+        text_exts = {'.txt', '.md', '.csv', '.json', '.xml', '.log', '.py', '.js', '.ts', '.html', '.css', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.sh', '.bat', '.ps1', '.sql', '.r', '.go', '.rs', '.java', '.cpp', '.c', '.h', '.hpp', '.rb', '.php', '.swift', '.kt', '.scala', '.pl', '.lua', '.dart'}
+        doc_exts = {'.pdf', '.docx', '.doc', '.odt', '.rtf'}
 
-            if ext in text_exts:
-                content_text = Path(file_path).read_text(encoding='utf-8', errors='replace')
-                content_type = "text"
-            elif ext == '.pdf':
-                content_type = "pdf"
+        if ext in text_exts:
+            content_text = Path(file_path).read_text(encoding='utf-8', errors='replace')
+            content_type = "text"
+        elif ext == '.pdf':
+            content_type = "pdf"
+            try:
+                import PyPDF2
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    content_text = "\n".join([page.extract_text() or "" for page in reader.pages])
+            except ImportError:
                 try:
-                    import PyPDF2
-                    with open(file_path, 'rb') as f:
-                        reader = PyPDF2.PdfReader(f)
-                        content_text = "\n".join([page.extract_text() or "" for page in reader.pages])
+                    import pdfplumber
+                    with pdfplumber.open(file_path) as pdf:
+                        content_text = "\n".join([page.extract_text() or "" for page in pdf.pages])
                 except ImportError:
-                    try:
-                        import pdfplumber
-                        with pdfplumber.open(file_path) as pdf:
-                            content_text = "\n".join([page.extract_text() or "" for page in pdf.pages])
-                    except ImportError:
-                        content_text = f"[PDF file: {file_name}, {Path(file_path).stat().st_size} bytes]"
-            elif ext in {'.docx', '.doc'}:
-                content_type = "document"
-                try:
-                    import docx
-                    doc = docx.Document(file_path)
-                    content_text = "\n".join([p.text for p in doc.paragraphs])
-                except ImportError:
-                    content_text = f"[Word document: {file_name}, {Path(file_path).stat().st_size} bytes]"
-            else:
-                content_text = f"[File: {file_name}, Type: {ext or 'unknown'}, Size: {Path(file_path).stat().st_size} bytes]"
-                content_type = "binary"
+                    content_text = f"[PDF file: {file_name}, {Path(file_path).stat().st_size} bytes]"
+        elif ext in {'.docx', '.doc'}:
+            content_type = "document"
+            try:
+                import docx
+                doc = docx.Document(file_path)
+                content_text = "\n".join([p.text for p in doc.paragraphs])
+            except ImportError:
+                content_text = f"[Word document: {file_name}, {Path(file_path).stat().st_size} bytes]"
+        else:
+            content_text = f"[File: {file_name}, Type: {ext or 'unknown'}, Size: {Path(file_path).stat().st_size} bytes]"
+            content_type = "binary"
 
-            max_chars = 15000
-            if len(content_text) > max_chars:
-                content_text = content_text[:max_chars] + f"\n\n[...truncated, total {len(content_text)} characters]"
+        max_chars = 15000
+        if len(content_text) > max_chars:
+            content_text = content_text[:max_chars] + f"\n\n[...truncated, total {len(content_text)} characters]"
 
-            if not query or not query.strip():
-                query = f"Analyze this {content_type} file: {file_name}"
+        if not query or not query.strip():
+            query = f"Analyze this {content_type} file: {file_name}"
 
-            file_prompt = f"""User uploaded a file and asks: "{query}"
+        file_prompt = f"""User uploaded a file and asks: "{query}"
 
 File: {file_name}
 Type: {content_type}
@@ -738,22 +734,16 @@ Process the user's request based on the file content above.
 - If they ask for translation, translate the content.
 Provide your response with the processed result."""
 
-            response = self.core.llm.generate(
-                file_prompt,
-                system_prompt="You are Acronous AI, a file processing assistant. Process the file according to the user's request."
-            )
+        response = self.core.llm.generate(
+            file_prompt,
+            system_prompt="You are Acronous AI, a file processing assistant. Process the file according to the user's request."
+        )
 
-            return {
-                "type": "file_processing",
-                "content": response,
-                "sources": []
-            }
-        except Exception:
-            return {
-                "type": "error",
-                "content": "I encountered an error while processing your file. Please make sure the file is accessible and try again.",
-                "sources": []
-            }
+        return {
+            "type": "file_processing",
+            "content": response,
+            "sources": []
+        }
 
     def _handle_image_generation(self, query, context):
         try:

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../providers/chat_provider.dart';
+import '../services/overlay_service.dart';
 import '../widgets/voice_popup.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -36,8 +37,8 @@ class _SettingsPageState extends State<SettingsPage> {
         title: Text(AppStrings.settings),
         centerTitle: true,
       ),
-      body: Consumer<ChatProvider>(
-        builder: (context, chat, _) => Center(
+      body: Consumer2<ChatProvider, OverlayService>(
+        builder: (context, chat, overlay, _) => Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 800),
             child: ListView(
@@ -172,7 +173,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                 ),
-                if (chat.overlayService.supportsSystemOverlay) ...[
+                if (overlay.supportsSystemOverlay) ...[
                   _divider(cs),
                   _SwitchTile(
                     icon: Icons.picture_in_picture_alt_rounded,
@@ -195,7 +196,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   subtitle: AppStrings.microphoneSub,
                   cs: cs,
                 ),
-                if (chat.overlayService.supportsSystemOverlay) ...[
+                if (overlay.supportsSystemOverlay) ...[
                   _divider(cs),
                   _PermissionTile(
                     icon: Icons.picture_in_picture_alt_rounded,
@@ -203,13 +204,13 @@ class _SettingsPageState extends State<SettingsPage> {
                     subtitle: 'Show icon over other apps',
                     cs: cs,
                     trailing: TextButton(
-                      onPressed: () => chat.overlayService.requestOverlayPermission(),
+                      onPressed: () => overlay.requestOverlayPermission(),
                       child: Text(
-                        chat.overlayService.systemOverlayPermissionGranted
+                        overlay.systemOverlayPermissionGranted
                             ? 'Granted'
                             : 'Request',
                         style: TextStyle(
-                          color: chat.overlayService.systemOverlayPermissionGranted
+                          color: overlay.systemOverlayPermissionGranted
                               ? Colors.green
                               : cs.primary,
                         ),

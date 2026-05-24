@@ -71,7 +71,10 @@ class _SplashScreenState extends State<SplashScreen> {
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => status == AuthStatus.authenticated
-            ? const ChatPage()
+            ? ChatPage(
+                chatProvider: context.read<ChatProvider>(),
+                authProvider: context.read<AuthProvider>(),
+              )
             : const AuthPage(),
       ),
     );

@@ -82,7 +82,7 @@ async def chat(req: ChatRequest):
         )
     except Exception as e:
         return ChatResponse(
-            response=f"I encountered an error: {e!s}",
+            response=f"{e!s}",
             session_id=req.session_id,
         )
 
@@ -121,7 +121,7 @@ async def chat_with_image(
         )
     except Exception as e:
         return ChatResponse(
-            response=f"Image processing error: {e!s}",
+            response=f"{e!s}",
             session_id=session_id,
         )
     finally:
@@ -156,7 +156,7 @@ async def chat_with_file(
         )
     except Exception as e:
         return ChatResponse(
-            response=f"File processing error: {e!s}",
+            response=f"{e!s}",
             session_id=session_id,
         )
     finally:
@@ -248,7 +248,7 @@ async def edit_image(
         )
     except Exception as e:
         return ChatResponse(
-            response=f"Image editing error: {e!s}",
+            response=f"{e!s}",
             session_id=session_id,
         )
     finally:
@@ -257,13 +257,28 @@ async def edit_image(
 
 if __name__ == "__main__":
     import argparse
+    import socket
 
     import uvicorn
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    base_url = f"http://{args.host}:{args.port}"
+
+    port = args.port
+    while port < args.port + 100:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((args.host, port))
+                break
+            except OSError:
+                port += 1
+    else:
+        print("Could not find an available port.")
+        exit(1)
+
+    base_url = f"http://{args.host}:{port}"
     print("=" * 50)
     print("  Acronous AI Server")
     print(f"  URL: {base_url}")
@@ -271,4 +286,4 @@ if __name__ == "__main__":
     print(f"  Chat:   {base_url}/v1/chat")
     print(f"  Image:  {base_url}/v1/image/generate")
     print("=" * 50)
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    uvicorn.run(app, host=args.host, port=port, log_level="info")

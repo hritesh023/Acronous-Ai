@@ -77,7 +77,13 @@ Synthesize these results into a comprehensive final answer."""
                 snippets or f"Search results for: {step['target']}",
                 {"step": step["description"], "query": original_query}
             )
-            return {"step": step["description"], "result": snippets or "No results found"}
+            if not snippets:
+                snippets = self.core.llm.generate(
+                    f"The search for '{step['target']}' returned no results. Briefly say so.",
+                    system_prompt="You respond concisely."
+                )
+                snippets = snippets.strip() if snippets else ""
+            return {"step": step["description"], "result": snippets}
         elif step["action"] == "synthesize":
             rag_context, _ = self.core.rag.retrieve_with_context(original_query, k=5)
             prompt = f"""Based on the gathered information, provide a comprehensive response.

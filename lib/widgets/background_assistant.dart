@@ -54,21 +54,19 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
     super.dispose();
   }
 
-  void _openVoice() {
-    final navContext = widget.navigatorKey.currentContext;
-    if (navContext == null) return;
-    final chat = navContext.read<ChatProvider>();
+  void _openVoice(BuildContext buildContext) {
+    final chat = buildContext.read<ChatProvider>();
 
     if (_isDesktop) {
-      _openVoiceFullScreen(chat, navContext);
+      _openVoiceFullScreen(chat, buildContext);
     } else {
-      _openVoiceSheet(chat, navContext);
+      _openVoiceSheet(chat, buildContext);
     }
   }
 
-  void _openVoiceSheet(ChatProvider chat, BuildContext navContext) {
+  void _openVoiceSheet(ChatProvider chat, BuildContext context) {
     showModalBottomSheet(
-      context: navContext,
+      context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => VoicePopup(
@@ -82,16 +80,16 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
     );
   }
 
-  void _openVoiceFullScreen(ChatProvider chat, BuildContext navContext) {
-    Navigator.of(navContext).push(
+  void _openVoiceFullScreen(ChatProvider chat, BuildContext context) {
+    Navigator.of(context).push(
       PageRouteBuilder(
-        pageBuilder: (context, animation, secondaryAnimation) =>
+        pageBuilder: (ctx, animation, secondaryAnimation) =>
             VoiceCommandWidget(
           onResult: (text) {},
           onIntent: (action) => chat.executeIntent(action),
-          onDismiss: () => Navigator.of(context).pop(),
+          onDismiss: () => Navigator.of(ctx).pop(),
         ),
-        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        transitionsBuilder: (ctx, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
         },
         opaque: false,
@@ -198,7 +196,7 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
                   .clamp(0, size.width - _hiddenStrip);
             });
           },
-          onTap: () => _openVoice(),
+          onTap: () => _openVoice(context),
           child: iconWidget,
         );
 

@@ -1,11 +1,11 @@
 {
-    "name": "Apex AI",
-    "short_name": "Apex AI",
+    "name": "Acronous AI",
+    "short_name": "Acronous AI",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#111118",
     "theme_color": "#111118",
-    "description": "Apex AI - AI Chat Assistant",
+    "description": "Acronous AI - AI Chat Assistant",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
