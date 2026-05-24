@@ -92,14 +92,12 @@ class LocalLLM:
         if self._model_loaded:
             return self._model is not None
         self._model_loaded = True
-        if not self._model_is_cached():
-            return False
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer
             model_name = self._get_transformers_model()
-            self._tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+            self._tokenizer = AutoTokenizer.from_pretrained(model_name)
             self._model = AutoModelForCausalLM.from_pretrained(
-                model_name, torch_dtype=torch.float32, device_map=self.config.DEVICE, local_files_only=True
+                model_name, torch_dtype=torch.float32, device_map=self.config.DEVICE
             )
             return True
         except Exception:
