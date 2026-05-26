@@ -1,6 +1,8 @@
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
+enum CameraResult { success, error, noCamera, cancelled }
+
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
 
@@ -8,32 +10,56 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-class _CameraScreenState extends State<CameraScreen> {
+class _CameraScreenState extends State<CameraScreen>
+    with WidgetsBindingObserver {
   CameraController? _controller;
   bool _isInitialized = false;
   bool _isCapturing = false;
   List<CameraDescription> _cameras = [];
   int _currentCameraIndex = 0;
-
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initCamera();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive && mounted) {
+      _controller?.dispose();
+      _controller = null;
+      _isInitialized = false;
+    }
   }
 
   Future<void> _initCamera() async {
     try {
-      _cameras = await availableCameras();
-      if (_cameras.isEmpty) {
-        if (mounted) Navigator.pop(context);
+      final cameras = await availableCameras();
+      if (!mounted) return;
+      if (cameras.isEmpty) {
+        Navigator.pop(context, (null, CameraResult.noCamera));
         return;
       }
-      final controller = CameraController(_cameras[0], ResolutionPreset.medium);
+      _cameras = cameras;
+      final controller = CameraController(cameras[0], ResolutionPreset.medium);
       _controller = controller;
       await controller.initialize();
-      if (mounted) setState(() => _isInitialized = true);
-    } catch (_) {
-      if (mounted) Navigator.pop(context);
+      if (!mounted) {
+        controller.dispose();
+        return;
+      }
+      setState(() => _isInitialized = true);
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context, (null, CameraResult.error));
     }
   }
 
@@ -56,20 +82,16 @@ class _CameraScreenState extends State<CameraScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
   Future<void> _capture() async {
     if (_controller == null || !_isInitialized || _isCapturing) return;
     _isCapturing = true;
     try {
       final image = await _controller!.takePicture();
-      if (mounted) Navigator.pop(context, image.path);
+      if (!mounted) return;
+      Navigator.pop(context, (image.path, CameraResult.success));
     } catch (_) {
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      Navigator.pop(context, (null, CameraResult.error));
     } finally {
       _isCapturing = false;
     }
@@ -114,7 +136,10 @@ class _CameraScreenState extends State<CameraScreen> {
               children: [
                 IconButton(
                   icon: const Icon(Icons.close, color: Colors.white, size: 28),
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: () {
+                    if (!mounted) return;
+                    Navigator.pop(context, (null, CameraResult.cancelled));
+                  },
                 ),
                 const SizedBox(width: 50),
                 GestureDetector(

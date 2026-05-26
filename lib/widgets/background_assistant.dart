@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
-import '../services/intent_processor.dart';
 import 'voice_popup.dart';
 import 'voice_command_widget.dart';
 
@@ -54,42 +53,50 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
     super.dispose();
   }
 
-  void _openVoice(BuildContext buildContext) {
-    final chat = buildContext.read<ChatProvider>();
+  void _openVoice() {
+    final navContext = widget.navigatorKey.currentContext;
+    if (navContext == null) return;
+    final chat = navContext.read<ChatProvider>();
 
     if (_isDesktop) {
-      _openVoiceFullScreen(chat, buildContext);
+      _openVoiceFullScreen(chat, navContext);
     } else {
-      _openVoiceSheet(chat, buildContext);
+      _openVoiceSheet(chat, navContext);
     }
   }
 
-  void _openVoiceSheet(ChatProvider chat, BuildContext context) {
+  void _openVoiceSheet(ChatProvider chat, BuildContext navContext) {
     showModalBottomSheet(
-      context: context,
+      context: navContext,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) => VoicePopup(
         searchMode: true,
         continuous: chat.continuousVoiceEnabled,
         onResult: (text) {
-          final action = const IntentProcessor().process(text);
-          chat.executeIntent(action);
+          if (text.isNotEmpty) {
+            chat.sendMessage(text);
+          }
         },
       ),
     );
   }
 
-  void _openVoiceFullScreen(ChatProvider chat, BuildContext context) {
-    Navigator.of(context).push(
+  void _openVoiceFullScreen(ChatProvider chat, BuildContext navContext) {
+    Navigator.of(navContext).push(
       PageRouteBuilder(
-        pageBuilder: (ctx, animation, secondaryAnimation) =>
+        pageBuilder: (context, animation, secondaryAnimation) =>
             VoiceCommandWidget(
-          onResult: (text) {},
-          onIntent: (action) => chat.executeIntent(action),
-          onDismiss: () => Navigator.of(ctx).pop(),
-        ),
-        transitionsBuilder: (ctx, animation, secondaryAnimation, child) {
+              onResult: (text) {},
+              onIntent: (action) {
+                final query = action.params['query'];
+                if (query != null && query.isNotEmpty) {
+                  chat.sendMessage(query);
+                }
+              },
+              onDismiss: () => Navigator.of(context).pop(),
+            ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(opacity: animation, child: child);
         },
         opaque: false,
@@ -135,10 +142,7 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: LinearGradient(
-                      colors: [
-                        cs.primary,
-                        cs.primary.withValues(alpha: 0.8),
-                      ],
+                      colors: [cs.primary, cs.primary.withValues(alpha: 0.8)],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
@@ -160,8 +164,7 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(_buttonSize / 2),
                     child: isSnapped
-                        ? Icon(Icons.mic_rounded,
-                            color: cs.onPrimary, size: 18)
+                        ? Icon(Icons.mic_rounded, color: cs.onPrimary, size: 18)
                         : Image.asset(
                             'assets/Acronous_Ai_svj_logo.png',
                             width: _buttonSize * 0.65,
@@ -190,13 +193,14 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
           },
           onPanUpdate: (details) {
             setState(() {
-              _posY = (posY + details.delta.dy / size.height)
-                  .clamp(0.05, 0.85);
-              _posX = (_posX + details.delta.dx)
-                  .clamp(0, size.width - _hiddenStrip);
+              _posY = (posY + details.delta.dy / size.height).clamp(0.05, 0.85);
+              _posX = (_posX + details.delta.dx).clamp(
+                0,
+                size.width - _hiddenStrip,
+              );
             });
           },
-          onTap: () => _openVoice(context),
+          onTap: () => _openVoice(),
           child: iconWidget,
         );
 

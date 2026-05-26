@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/supabase_service.dart';
@@ -9,6 +11,7 @@ class AuthProvider extends ChangeNotifier {
   User? _user;
   AuthStatus _status = AuthStatus.uninitialized;
   String? _error;
+  StreamSubscription<AuthState>? _authSubscription;
 
   AuthProvider({SupabaseService? supabase})
       : _supabase = supabase ?? SupabaseService.instance {
@@ -19,15 +22,19 @@ class AuthProvider extends ChangeNotifier {
   AuthStatus get status => _status;
   String? get error => _error;
 
+  @override
+  void dispose() {
+    _authSubscription?.cancel();
+    super.dispose();
+  }
+
   void _init() {
-    _user = _supabase.currentUser;
-    if (_user != null) {
-      _status = AuthStatus.authenticated;
-    }
-    // If user is null, keep uninitialized until onAuthStateChange fires
+    final session = _supabase.currentSession;
+    _user = session?.user;
+    _status = _user != null ? AuthStatus.authenticated : AuthStatus.unauthenticated;
     notifyListeners();
 
-    _supabase.auth.onAuthStateChange.listen(_onAuthChange);
+    _authSubscription = _supabase.auth.onAuthStateChange.listen(_onAuthChange);
   }
 
   void _onAuthChange(AuthState state) {
@@ -74,8 +81,12 @@ class AuthProvider extends ChangeNotifier {
         password: password,
       );
 
-      _user = response.user;
-      _status = AuthStatus.authenticated;
+      if (response.session != null) {
+        _user = response.user;
+        _status = AuthStatus.authenticated;
+      } else {
+        _status = AuthStatus.unauthenticated;
+      }
       notifyListeners();
 
       if (response.user != null) {

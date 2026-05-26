@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import '../models/suggestion.dart';
+
 
 class ChatRequest {
   final String query;
@@ -38,20 +38,6 @@ class Source {
   Source({required this.title, this.url});
 }
 
-class ServerConfig {
-  final List<Suggestion> suggestions;
-
-  ServerConfig({this.suggestions = const []});
-
-  factory ServerConfig.fromJson(Map<String, dynamic> json) {
-    final suggestions = (json['suggestions'] as List<dynamic>?)
-            ?.map((s) => Suggestion.fromJson(s as Map<String, dynamic>))
-            .toList() ??
-        [];
-    return ServerConfig(suggestions: suggestions);
-  }
-}
-
 class ChatResponse {
   final String content;
   final String type;
@@ -79,10 +65,14 @@ class ChatResponse {
     content: json['content'] as String? ?? '',
     type: json['type'] as String? ?? 'chat',
     sources: json['sources'] != null
-        ? (json['sources'] as List).map((s) => Source(
-            title: s['title'] as String? ?? '',
-            url: s['url'] as String?,
-          )).toList()
+        ? (json['sources'] as List)
+              .map(
+                (s) => Source(
+                  title: s['title'] as String? ?? '',
+                  url: s['url'] as String?,
+                ),
+              )
+              .toList()
         : [],
     analysis: json['analysis'] as Map<String, dynamic>?,
     sessionId: json['session_id'] as String? ?? '',
@@ -119,7 +109,9 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> _post(
-      String path, Map<String, dynamic> body) async {
+    String path,
+    Map<String, dynamic> body,
+  ) async {
     final response = await _client.post(
       Uri.parse('$_baseUrl$path'),
       headers: _headers,
@@ -138,7 +130,9 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> _put(
-      String path, Map<String, dynamic> body) async {
+    String path,
+    Map<String, dynamic> body,
+  ) async {
     final response = await _client.put(
       Uri.parse('$_baseUrl$path'),
       headers: _headers,
@@ -148,7 +142,10 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> _uploadFile(
-      String path, File file, Map<String, String> fields) async {
+    String path,
+    File file,
+    Map<String, String> fields,
+  ) async {
     final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl$path'));
     if (_authToken != null) {
       request.headers['Authorization'] = 'Bearer $_authToken';
@@ -171,7 +168,7 @@ class ApiClient {
   }) async {
     final resp = await _post('/v1/chat', {
       'message': message,
-      if (sessionId != null) 'session_id': sessionId,
+      'session_id': ?sessionId,
     });
     return ChatResponse(
       content: resp['response'] as String? ?? '',
@@ -190,11 +187,9 @@ class ApiClient {
     final request = http.MultipartRequest('POST', uri);
     request.fields['message'] = message;
     if (sessionId != null) request.fields['session_id'] = sessionId;
-    request.files.add(http.MultipartFile.fromBytes(
-      'file',
-      imageBytes,
-      filename: fileName,
-    ));
+    request.files.add(
+      http.MultipartFile.fromBytes('file', imageBytes, filename: fileName),
+    );
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
     final resp = jsonDecode(response.body) as Map<String, dynamic>;
@@ -215,11 +210,9 @@ class ApiClient {
     final request = http.MultipartRequest('POST', uri);
     request.fields['message'] = message;
     if (sessionId != null) request.fields['session_id'] = sessionId;
-    request.files.add(http.MultipartFile.fromBytes(
-      'file',
-      fileBytes,
-      filename: fileName,
-    ));
+    request.files.add(
+      http.MultipartFile.fromBytes('file', fileBytes, filename: fileName),
+    );
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
     final resp = jsonDecode(response.body) as Map<String, dynamic>;
@@ -241,15 +234,16 @@ class ApiClient {
     return _post('/v1/image/generate', body);
   }
 
-  Future<Map<String, dynamic>> generateQRCode(
-      {required String data, int? size}) async {
+  Future<Map<String, dynamic>> generateQRCode({
+    required String data,
+    int? size,
+  }) async {
     final body = <String, dynamic>{'data': data};
     if (size != null) body['size'] = size;
     return _post('/api/image/qr-code', body);
   }
 
-  Future<Map<String, dynamic>> redesignImage(
-      File file, String prompt) async {
+  Future<Map<String, dynamic>> redesignImage(File file, String prompt) async {
     return _uploadFile('/api/image/redesign', file, {'prompt': prompt});
   }
 
@@ -259,8 +253,10 @@ class ApiClient {
     List<Map<String, String>>? messages,
     String? analysisType,
   }) async {
-    final request =
-        http.MultipartRequest('POST', Uri.parse('$_baseUrl/api/image/analyze'));
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('$_baseUrl/api/image/analyze'),
+    );
     if (_authToken != null) {
       request.headers['Authorization'] = 'Bearer $_authToken';
     }
@@ -273,11 +269,14 @@ class ApiClient {
     final streamedResponse = await request.send();
     final response = await http.Response.fromStream(streamedResponse);
     return ChatResponse.fromJson(
-        jsonDecode(response.body) as Map<String, dynamic>);
+      jsonDecode(response.body) as Map<String, dynamic>,
+    );
   }
 
   Future<Map<String, dynamic>> webSearch(
-      String query, {int maxResults = 5}) async {
+    String query, {
+    int maxResults = 5,
+  }) async {
     return _post('/api/tools/search', {
       'query': query,
       'max_results': maxResults,
@@ -286,7 +285,9 @@ class ApiClient {
 
   Future<Map<String, dynamic>> transcribeAudio(File file) async {
     final request = http.MultipartRequest(
-        'POST', Uri.parse('$_baseUrl/api/voice/transcribe'));
+      'POST',
+      Uri.parse('$_baseUrl/api/voice/transcribe'),
+    );
     if (_authToken != null) {
       request.headers['Authorization'] = 'Bearer $_authToken';
     }
@@ -298,7 +299,9 @@ class ApiClient {
 
   Future<Map<String, dynamic>> processDocument(File file) async {
     final request = http.MultipartRequest(
-        'POST', Uri.parse('$_baseUrl/api/tools/process-document'));
+      'POST',
+      Uri.parse('$_baseUrl/api/tools/process-document'),
+    );
     if (_authToken != null) {
       request.headers['Authorization'] = 'Bearer $_authToken';
     }
@@ -311,16 +314,16 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> listModels() async {
     final resp = await _get('/api/models/list');
     return (resp['models'] as List? ?? resp as List?)
-            ?.cast<Map<String, dynamic>>() ?? [];
+            ?.cast<Map<String, dynamic>>() ??
+        [];
   }
 
   Future<Map<String, dynamic>> getStatus() => _get('/api/status');
 
   Future<Map<String, dynamic>> healthCheck() => _get('/health');
 
-  Future<ServerConfig> getConfig() async {
-    final resp = await _get('/api/config');
-    return ServerConfig.fromJson(resp);
+  Future<Map<String, dynamic>> getConfig() async {
+    return _get('/api/config');
   }
 
   Future<Map<String, dynamic>> getMe() => _get('/api/auth/me');
@@ -328,11 +331,13 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> listConversations() async {
     final resp = await _get('/api/conversations');
     return (resp['conversations'] as List? ?? resp as List?)
-            ?.cast<Map<String, dynamic>>() ?? [];
+            ?.cast<Map<String, dynamic>>() ??
+        [];
   }
 
-  Future<Map<String, dynamic>> createConversation(
-      {String title = 'New Conversation'}) async {
+  Future<Map<String, dynamic>> createConversation({
+    String title = 'New Conversation',
+  }) async {
     return _post('/api/conversations', {'title': title});
   }
 
@@ -340,8 +345,10 @@ class ApiClient {
     await _delete('/api/conversations/$convId');
   }
 
-  Future<Map<String, dynamic>> exportConversation(String convId,
-      {String format = 'markdown'}) async {
+  Future<Map<String, dynamic>> exportConversation(
+    String convId, {
+    String format = 'markdown',
+  }) async {
     final response = await _client.get(
       Uri.parse('$_baseUrl/api/conversations/$convId/export?fmt=$format'),
       headers: _headers,
@@ -350,14 +357,17 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> updateConversation(
-      String convId, String title) async {
+    String convId,
+    String title,
+  ) async {
     return _put('/api/conversations/$convId', {'title': title});
   }
 
   Future<List<Map<String, dynamic>>> listMessages(String convId) async {
     final resp = await _get('/api/conversations/$convId/messages');
     return (resp['messages'] as List? ?? resp as List?)
-            ?.cast<Map<String, dynamic>>() ?? [];
+            ?.cast<Map<String, dynamic>>() ??
+        [];
   }
 
   Future<Map<String, dynamic>> addMessage(
@@ -387,15 +397,17 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> syncConversations(
-      List<Map<String, dynamic>> conversations) async {
+    List<Map<String, dynamic>> conversations,
+  ) async {
     return _post('/api/conversations/sync', {'conversations': conversations});
   }
 
-  Future<Map<String, dynamic>> updateLLMConfig(
-      {String? provider,
-      String? apiKey,
-      String? model,
-      String? apiUrl}) async {
+  Future<Map<String, dynamic>> updateLLMConfig({
+    String? provider,
+    String? apiKey,
+    String? model,
+    String? apiUrl,
+  }) async {
     final body = <String, dynamic>{};
     if (provider != null) body['provider'] = provider;
     if (apiKey != null) body['api_key'] = apiKey;

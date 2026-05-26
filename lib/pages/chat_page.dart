@@ -32,10 +32,12 @@ class _ChatPageState extends State<ChatPage> {
     super.initState();
     _loadConfig();
     widget.chatProvider.addListener(_scrollToBottom);
-    widget.chatProvider.loadTheme();
-    if (widget.authProvider.status == AuthStatus.authenticated) {
-      widget.chatProvider.loadServerConversations();
-    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.chatProvider.loadTheme();
+      if (widget.authProvider.status == AuthStatus.authenticated) {
+        widget.chatProvider.loadServerConversations();
+      }
+    });
   }
 
   @override
@@ -60,8 +62,9 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadConfig() async {
     try {
       final config = await widget.chatProvider.apiClient.getConfig();
-      if (config.suggestions.isNotEmpty) {
-        setState(() => _suggestions = config.suggestions);
+      final list = config['suggestions'] as List? ?? [];
+      if (list.isNotEmpty) {
+        setState(() => _suggestions = list.map((e) => Suggestion.fromJson(e as Map<String, dynamic>)).toList());
       }
     } catch (_) {}
   }
@@ -73,49 +76,44 @@ class _ChatPageState extends State<ChatPage> {
         (widget.chatProvider.themeMode == ThemeMode.system &&
             MediaQuery.of(context).platformBrightness == Brightness.dark);
 
-    return MaterialApp(
-      theme: isDark ? _buildDarkTheme() : _buildLightTheme(),
-      debugShowCheckedModeBanner: false,
-      home: Builder(
-        builder: (context) {
-          return Stack(
-            children: [
-              Scaffold(
-                body: Column(
-                  children: [
-                    _buildTopBar(context),
-                    Expanded(
-                      child: messages.isEmpty
-                          ? _buildWelcomeScreen(context)
-                          : _buildMessagesList(context, messages),
-                    ),
-                    _buildInputArea(context),
-                    if (widget.chatProvider.error != null)
-                      _buildErrorToast(widget.chatProvider.error!),
-
-                  ],
+    return Theme(
+      data: isDark ? _buildDarkTheme() : _buildLightTheme(),
+      child: Scaffold(
+        body: Stack(
+          clipBehavior: Clip.hardEdge,
+          children: [
+            Column(
+              children: [
+                _buildTopBar(context),
+                Expanded(
+                  child: messages.isEmpty
+                      ? _buildWelcomeScreen(context)
+                      : _buildMessagesList(context, messages),
+                ),
+                _buildInputArea(context),
+                if (widget.chatProvider.error != null)
+                  _buildErrorToast(widget.chatProvider.error!),
+              ],
+            ),
+            if (_sidebarOpen)
+              GestureDetector(
+                onTap: () => setState(() => _sidebarOpen = false),
+                child: Container(color: Colors.black54),
+              ),
+            if (_sidebarOpen)
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                child: SidebarWidget(
+                  chatProvider: widget.chatProvider,
+                  authProvider: widget.authProvider,
+                  topics: _suggestions,
+                  onClose: () => setState(() => _sidebarOpen = false),
                 ),
               ),
-              if (_sidebarOpen)
-                GestureDetector(
-                  onTap: () => setState(() => _sidebarOpen = false),
-                  child: Container(color: Colors.black54),
-                ),
-              if (_sidebarOpen)
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: SidebarWidget(
-                    chatProvider: widget.chatProvider,
-                    authProvider: widget.authProvider,
-                    topics: _suggestions,
-                    onClose: () => setState(() => _sidebarOpen = false),
-                  ),
-                ),
-            ],
-          );
-        },
+          ],
+        ),
       ),
     );
   }
@@ -323,6 +321,7 @@ class _ChatPageState extends State<ChatPage> {
 
   ThemeData _buildDarkTheme() {
     return ThemeData(
+      useMaterial3: true,
       brightness: Brightness.dark,
       scaffoldBackgroundColor: const Color(0xFF0F0F1A),
       primaryColor: const Color(0xFF7C3AED),
@@ -361,6 +360,7 @@ class _ChatPageState extends State<ChatPage> {
 
   ThemeData _buildLightTheme() {
     return ThemeData(
+      useMaterial3: true,
       brightness: Brightness.light,
       scaffoldBackgroundColor: const Color(0xFFF5F5FA),
       primaryColor: const Color(0xFF7C3AED),

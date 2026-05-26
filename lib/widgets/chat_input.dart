@@ -27,8 +27,9 @@ class _ChatInputState extends State<ChatInput> {
   }
 
   void _sendText() {
+    final chat = context.read<ChatProvider>();
     final text = _controller.text.trim();
-    if (text.isEmpty && context.read<ChatProvider>().pendingAttachments.isEmpty) {
+    if (text.isEmpty && chat.pendingAttachments.isEmpty) {
       return;
     }
     _controller.clear();
@@ -37,7 +38,11 @@ class _ChatInputState extends State<ChatInput> {
       _showExtras = false;
     });
     _focusNode.requestFocus();
-    context.read<ChatProvider>().sendMessage(text);
+    if (text.isEmpty && chat.pendingAttachments.isNotEmpty) {
+      chat.sendPendingAnalysis();
+    } else {
+      chat.sendMessage(text);
+    }
   }
 
   void _onChanged(String v) {
@@ -48,6 +53,7 @@ class _ChatInputState extends State<ChatInput> {
   Widget build(BuildContext context) {
     final chat = context.watch<ChatProvider>();
     final cs = Theme.of(context).colorScheme;
+    final hasContent = _isComposing || chat.pendingAttachments.isNotEmpty;
 
     if (chat.voiceText.isNotEmpty &&
         !_isSyncingVoice &&
@@ -179,7 +185,7 @@ class _ChatInputState extends State<ChatInput> {
                           Padding(
                             padding: const EdgeInsets.only(bottom: 3, right: 3),
                             child: Material(
-                              color: _isComposing && !chat.isLoading
+                              color: hasContent && !chat.isLoading
                                   ? cs.primary
                                   : Colors.transparent,
                               borderRadius: BorderRadius.circular(10),
@@ -202,7 +208,7 @@ class _ChatInputState extends State<ChatInput> {
                                     : Icon(
                                         Icons.arrow_upward_rounded,
                                         size: AppDimens.inputIconInnerSize - 2,
-                                        color: _isComposing
+                                        color: hasContent
                                             ? cs.onPrimary
                                             : cs.onSurfaceVariant
                                                 .withValues(alpha: 0.6),
@@ -228,33 +234,54 @@ class _ChatInputState extends State<ChatInput> {
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
-          children: List.generate(chat.pendingAttachments.length, (i) {
-            final att = chat.pendingAttachments[i];
-            return Padding(
-              padding: const EdgeInsets.only(right: 5),
-              child: Chip(
-                avatar: Text(att.iconLabel,
-                    style: const TextStyle(fontSize: AppDimens.fontSizeMD)),
-                label: Text(
-                  att.name.length > 16
-                      ? '${att.name.substring(0, 13)}...'
-                      : att.name,
-                  style: const TextStyle(fontSize: AppDimens.fontSizeSM),
+          children: [
+            ...List.generate(chat.pendingAttachments.length, (i) {
+              final att = chat.pendingAttachments[i];
+              return Padding(
+                padding: const EdgeInsets.only(right: 5),
+                child: Chip(
+                  avatar: Text(att.iconLabel,
+                      style: const TextStyle(fontSize: AppDimens.fontSizeMD)),
+                  label: Text(
+                    att.name.length > 16
+                        ? '${att.name.substring(0, 13)}...'
+                        : att.name,
+                    style: const TextStyle(fontSize: AppDimens.fontSizeSM),
+                  ),
+                  deleteIcon: const Icon(Icons.close_rounded,
+                      size: AppDimens.iconSmall),
+                  onDeleted: () => chat.removePendingAttachment(i),
+                  visualDensity: VisualDensity.compact,
+                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  labelPadding: const EdgeInsets.only(left: AppDimens.gapXS),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppDimens.paddingSM),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
-                deleteIcon: const Icon(Icons.close_rounded,
-                    size: AppDimens.iconSmall),
-                onDeleted: () => chat.removePendingAttachment(i),
-                visualDensity: VisualDensity.compact,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                labelPadding: const EdgeInsets.only(left: AppDimens.gapXS),
-                padding: const EdgeInsets.symmetric(
-                    horizontal: AppDimens.paddingSM),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+              );
+            }),
+            ActionChip(
+              avatar: Icon(Icons.auto_awesome, size: 16, color: cs.primary),
+              label: Text(
+                AppStrings.analyzeImage,
+                style: TextStyle(
+                  fontSize: AppDimens.fontSizeSM,
+                  color: cs.primary,
                 ),
               ),
-            );
-          }),
+              onPressed: chat.isLoading ? null : () => chat.sendPendingAnalysis(),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppDimens.paddingSM),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: cs.primary.withValues(alpha: 0.3)),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -296,11 +323,15 @@ class _ChatInputState extends State<ChatInput> {
             final text = chat.voiceText;
             chat.stopVoiceInput();
             if (text.trim().isNotEmpty) {
-              _controller.text = text;
-              _controller.selection = TextSelection.fromPosition(
-                TextPosition(offset: _controller.text.length),
-              );
-              setState(() => _isComposing = true);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _controller.text = text;
+                  _controller.selection = TextSelection.fromPosition(
+                    TextPosition(offset: _controller.text.length),
+                  );
+                  setState(() => _isComposing = true);
+                }
+              });
             }
           },
           child: Container(

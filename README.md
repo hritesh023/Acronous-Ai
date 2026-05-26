@@ -6,6 +6,7 @@ colorTo: purple
 sdk: docker
 app_port: 7860
 app_file: server.py
+sleepTime: 0
 ---
 
 # Acronous AI

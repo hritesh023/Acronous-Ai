@@ -67,11 +67,13 @@ class _AuthPageState extends State<AuthPage>
     if (authProv.status == auth.AuthStatus.authenticated) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
+          final chat = context.read<ChatProvider>();
+          final aProv = context.read<auth.AuthProvider>();
           Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(
               builder: (_) => ChatPage(
-                chatProvider: context.read<ChatProvider>(),
-                authProvider: context.read<auth.AuthProvider>(),
+                chatProvider: chat,
+                authProvider: aProv,
               ),
             ),
             (_) => false,

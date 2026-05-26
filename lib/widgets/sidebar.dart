@@ -127,14 +127,15 @@ class _SidebarWidgetState extends State<SidebarWidget> {
   Widget _buildNewChatButton(BuildContext context) {
     return Stack(
       children: [
-        Material(
-          color: const Color(0xFF7C3AED),
-          borderRadius: BorderRadius.circular(10),
-          child: InkWell(
-            onTap: () {
-              setState(() => _showTopics = !_showTopics);
-            },
+          Material(
+            color: const Color(0xFF7C3AED),
             borderRadius: BorderRadius.circular(10),
+            child: InkWell(
+              onTap: () {
+                widget.chatProvider.newChat();
+                widget.onClose();
+              },
+              borderRadius: BorderRadius.circular(10),
             child: SizedBox(
               width: 34,
               height: 34,
@@ -510,6 +511,23 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                   Text(
                     isDark ? 'Light mode' : 'Dark mode',
                     style: const TextStyle(fontSize: 13, color: Color(0xFFB0B0C8)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          InkWell(
+            onTap: () => Navigator.pushNamed(context, '/settings'),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(Icons.settings, size: 16, color: Color(0xFFB0B0C8)),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Settings',
+                    style: TextStyle(fontSize: 13, color: Color(0xFFB0B0C8)),
                   ),
                 ],
               ),

@@ -68,6 +68,15 @@ capacitor.config.json
 .swiftpm/
 migrate_working_dir/
 
+# Local server management scripts (server runs on HF Spaces, not locally)
+server_manager.py
+.start_server.vbs
+install-service.bat
+run-server.bat
+startup.ps1
+.server_pid
+startup_log.txt
+
 # Android Studio build artifacts
 /android/app/debug
 /android/app/profile

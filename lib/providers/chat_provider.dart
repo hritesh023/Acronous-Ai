@@ -45,11 +45,11 @@ class ChatProvider extends ChangeNotifier {
     FileService? fileService,
     SpeechService? speech,
     TtsService? tts,
-  })  : _api = api ?? ApiClient(),
-        _prefs = prefs ?? PreferencesService(),
-        _fileService = fileService ?? FileService(),
-        _speech = speech ?? SpeechService(),
-        _tts = tts ?? TtsService() {
+  }) : _api = api ?? ApiClient(baseUrl: AppConfig.instance.apiBaseUrl),
+       _prefs = prefs ?? PreferencesService(),
+       _fileService = fileService ?? FileService(),
+       _speech = speech ?? SpeechService(),
+       _tts = tts ?? TtsService() {
     _init();
   }
 
@@ -88,6 +88,7 @@ class ChatProvider extends ChangeNotifier {
       id: DateTime.now().millisecondsSinceEpoch.toString(),
     );
     _conversations.insert(0, _currentConversation!);
+    _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
   }
 
@@ -111,8 +112,9 @@ class ChatProvider extends ChangeNotifier {
           ? ThemeMode.light
           : ThemeMode.dark;
     } else {
-      _themeMode =
-          _themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+      _themeMode = _themeMode == ThemeMode.dark
+          ? ThemeMode.light
+          : ThemeMode.dark;
     }
     _prefs.saveThemeMode(_themeMode);
     notifyListeners();
@@ -137,7 +139,7 @@ class ChatProvider extends ChangeNotifier {
         _newConversation();
       }
     }
-    _prefs.saveConversations(_conversations);
+    _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
   }
 
@@ -152,8 +154,21 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sendMessage(String text) async {
-    if (text.trim().isEmpty && _pendingAttachments.isEmpty) return;
+  static const String autoDetectPrompt = 'Analyze this image and auto-detect its type. '
+      'If it contains a QR code or barcode, decode its contents. '
+      'If it contains text in another language, translate it. '
+      'If it appears to be a medical image, analyze for diseases or anomalies. '
+      'If it contains encoded or hidden data, decode it. '
+      'If it is a document or screenshot, extract and summarize the content. '
+      'Otherwise, provide a detailed analysis of what you see.';
+
+  Future<void> sendMessage(String text, {List<MessageAttachment>? attachments}) async {
+    final attach = attachments ?? _pendingAttachments;
+    if (text.trim().isEmpty && attach.isEmpty) return;
+
+    if (_currentConversation == null) {
+      _newConversation();
+    }
 
     _isLoading = true;
     notifyListeners();
@@ -161,11 +176,11 @@ class ChatProvider extends ChangeNotifier {
     final userMsg = ChatMessage(
       role: 'user',
       content: text,
-      attachments: List.from(_pendingAttachments),
+      attachments: List.from(attach),
     );
-    _currentConversation?.messages.add(userMsg);
-    _currentConversation?.updatedAt = DateTime.now();
-    _pendingAttachments.clear();
+    _currentConversation!.messages.add(userMsg);
+    _currentConversation!.updatedAt = DateTime.now();
+    if (attachments == null) _pendingAttachments.clear();
     notifyListeners();
 
     try {
@@ -176,18 +191,27 @@ class ChatProvider extends ChangeNotifier {
         content: resp['response'] as String? ?? '',
         imageData: imageData,
       );
-      _currentConversation?.messages.add(assistantMsg);
+      _currentConversation!.messages.add(assistantMsg);
     } catch (e) {
       final msg = _shouldShowConnectionError(e)
           ? AppStrings.connectionError
           : e.toString();
-      _currentConversation?.messages
-          .add(ChatMessage(role: 'assistant', content: msg));
+      _currentConversation!.messages.add(
+        ChatMessage(role: 'assistant', content: msg),
+      );
     }
 
     _isLoading = false;
-    _prefs.saveConversations(_conversations);
+    _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
+  }
+
+  Future<void> sendPendingAnalysis() async {
+    if (_pendingAttachments.isEmpty) return;
+    final attachments = List<MessageAttachment>.from(_pendingAttachments);
+    _pendingAttachments.clear();
+    notifyListeners();
+    await sendMessage(autoDetectPrompt, attachments: attachments);
   }
 
   bool _isImageGenRequest(String text) {
@@ -198,13 +222,26 @@ class ChatProvider extends ChangeNotifier {
       if (t.startsWith(p)) return true;
     }
     final patterns = [
-      'generate an image', 'generate a picture', 'generate a photo',
-      'create an image', 'create a picture', 'create a photo',
-      'make an image', 'make a picture', 'make a photo',
-      'generate image of', 'generate picture of',
-      'create image of', 'create picture of',
-      'image of a', 'image of an', 'picture of a', 'picture of an',
-      'draw me a', 'draw me an', 'paint me a',
+      'generate an image',
+      'generate a picture',
+      'generate a photo',
+      'create an image',
+      'create a picture',
+      'create a photo',
+      'make an image',
+      'make a picture',
+      'make a photo',
+      'generate image of',
+      'generate picture of',
+      'create image of',
+      'create picture of',
+      'image of a',
+      'image of an',
+      'picture of a',
+      'picture of an',
+      'draw me a',
+      'draw me an',
+      'paint me a',
     ];
     for (final pat in patterns) {
       if (t.contains(pat)) return true;
@@ -213,14 +250,18 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>> _callApi(
-      ChatMessage userMsg, String text) async {
-    final hasImage =
-        userMsg.attachments.any((a) => a.type == AttachmentType.image);
+    ChatMessage userMsg,
+    String text,
+  ) async {
+    final hasImage = userMsg.attachments.any(
+      (a) => a.type == AttachmentType.image,
+    );
     final sessionId = _currentConversation?.id;
 
     if (hasImage) {
-      final imgAttach =
-          userMsg.attachments.firstWhere((a) => a.type == AttachmentType.image);
+      final imgAttach = userMsg.attachments.firstWhere(
+        (a) => a.type == AttachmentType.image,
+      );
       final bytes = await FileService.readAttachmentBytes(imgAttach);
       final resp = await _api.chatWithImage(
         message: text,
@@ -261,7 +302,6 @@ class ChatProvider extends ChangeNotifier {
       if (attachment != null) {
         _pendingAttachments.add(attachment);
         notifyListeners();
-        await sendMessage(AppConfig.instance.cameraAnalysisPrompt);
       }
     } catch (e) {
       debugPrint('Image analysis error: $e');
@@ -281,11 +321,26 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> analyzeWithCamera(BuildContext context) async {
     try {
-      final imagePath = await Navigator.push<String>(
+      final result = await Navigator.push<(String?, CameraResult)>(
         context,
         MaterialPageRoute(builder: (_) => const CameraScreen()),
       );
-      if (imagePath == null) return;
+      if (result == null) return;
+      final (imagePath, cameraResult) = result;
+      if (imagePath == null) {
+        if (cameraResult == CameraResult.error && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Failed to capture image'),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          );
+        }
+        return;
+      }
       final attachment = MessageAttachment(
         name: 'camera_${DateTime.now().millisecondsSinceEpoch}.jpg',
         path: imagePath,
@@ -293,7 +348,6 @@ class ChatProvider extends ChangeNotifier {
       );
       _pendingAttachments.add(attachment);
       notifyListeners();
-      await sendMessage(AppConfig.instance.cameraAnalysisPrompt);
     } catch (e) {
       debugPrint('Camera plugin unavailable, trying ImagePicker: $e');
       try {
@@ -301,7 +355,6 @@ class ChatProvider extends ChangeNotifier {
         if (image == null) return;
         _pendingAttachments.add(image);
         notifyListeners();
-        await sendMessage(AppConfig.instance.cameraAnalysisPrompt);
       } catch (e2) {
         debugPrint('Fallback camera also failed: $e2');
         if (context.mounted) {
@@ -315,6 +368,90 @@ class ChatProvider extends ChangeNotifier {
             ),
           );
         }
+      }
+    }
+  }
+
+  Future<void> captureAndAnalyze(BuildContext context) async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppDimens.sheetRadius),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: AppDimens.paddingLG),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppDimens.paddingMD),
+                child: Text(
+                  AppStrings.analyzeImage,
+                  style: const TextStyle(
+                    fontSize: AppDimens.fontSizeTitle,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.camera_alt_rounded),
+                title: Text(AppStrings.takePhoto),
+                subtitle: Text(AppStrings.captureWithCamera),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_rounded),
+                title: Text(AppStrings.chooseFromGallery),
+                subtitle: Text(AppStrings.selectFromGallery),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source == null || !context.mounted) return;
+
+    try {
+      MessageAttachment? attachment;
+      if (source == ImageSource.camera) {
+        try {
+          final result = await Navigator.push<(String?, CameraResult)>(
+            context,
+            MaterialPageRoute(builder: (_) => const CameraScreen()),
+          );
+          final imagePath = result?.$1;
+          if (imagePath != null) {
+            attachment = MessageAttachment(
+              name: 'camera_${DateTime.now().millisecondsSinceEpoch}.jpg',
+              path: imagePath,
+              type: AttachmentType.image,
+            );
+          }
+        } catch (_) {
+          attachment = await _fileService.pickImageFromCamera();
+        }
+      } else {
+        attachment = await _fileService.pickImageFromGallery();
+      }
+      if (attachment != null) {
+        _pendingAttachments.add(attachment);
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('${AppStrings.analysisError}: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${AppStrings.analysisError}: $e'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+        );
       }
     }
   }
@@ -388,90 +525,6 @@ class ChatProvider extends ChangeNotifier {
       }
     } catch (e) {
       debugPrint('File picker error: $e');
-    }
-  }
-
-  Future<void> captureAndAnalyze(BuildContext context) async {
-    final source = await showModalBottomSheet<ImageSource>(
-      context: context,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppDimens.sheetRadius),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: AppDimens.paddingLG),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: AppDimens.paddingMD),
-                child: Text(
-                  AppStrings.analyzeImage,
-                  style: const TextStyle(
-                    fontSize: AppDimens.fontSizeTitle,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              ListTile(
-                leading: const Icon(Icons.camera_alt_rounded),
-                title: Text(AppStrings.takePhoto),
-                subtitle: Text(AppStrings.captureWithCamera),
-                onTap: () => Navigator.pop(ctx, ImageSource.camera),
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_library_rounded),
-                title: Text(AppStrings.chooseFromGallery),
-                subtitle: Text(AppStrings.selectFromGallery),
-                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    if (source == null || !context.mounted) return;
-
-    try {
-      MessageAttachment? attachment;
-      if (source == ImageSource.camera) {
-        try {
-          final imagePath = await Navigator.push<String>(
-            context,
-            MaterialPageRoute(builder: (_) => const CameraScreen()),
-          );
-          if (imagePath != null) {
-            attachment = MessageAttachment(
-              name: 'camera_${DateTime.now().millisecondsSinceEpoch}.jpg',
-              path: imagePath,
-              type: AttachmentType.image,
-            );
-          }
-        } catch (_) {
-          attachment = await _fileService.pickImageFromCamera();
-        }
-      } else {
-        attachment = await _fileService.pickImageFromGallery();
-      }
-      if (attachment != null) {
-        _pendingAttachments.add(attachment);
-        notifyListeners();
-        await sendMessage(AppConfig.instance.cameraAnalysisPrompt);
-      }
-    } catch (e) {
-      debugPrint('${AppStrings.analysisError}: $e');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${AppStrings.analysisError}: $e'),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-          ),
-        );
-      }
     }
   }
 
@@ -608,17 +661,9 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void executeIntent(dynamic action) {
-    if (action == null) return;
-    if (action is String && action.isNotEmpty) {
+  void executeIntent(String action) {
+    if (action.isNotEmpty) {
       sendMessage(action);
-    } else {
-      try {
-        final query = action.params['query'] as String?;
-        if (query != null && query.isNotEmpty) {
-          sendMessage(query);
-        }
-      } catch (_) {}
     }
   }
 
