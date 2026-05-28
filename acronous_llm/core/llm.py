@@ -101,8 +101,10 @@ class LocalLLM:
 
     def _generate_openai(self, prompt, system_prompt, stream=False):
         try:
-            if len(prompt) > 10000:
-                prompt = prompt[:10000] + "\n\n[Earlier context was truncated due to length.]"
+            if len(system_prompt) + len(prompt) > 8000:
+                max_user = max(0, 7000 - len(system_prompt))
+                if len(prompt) > max_user:
+                    prompt = "[Earlier context truncated]\n" + prompt[-max_user:]
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
@@ -121,8 +123,10 @@ class LocalLLM:
 
     def _stream_openai(self, prompt, system_prompt):
         try:
-            if len(prompt) > 10000:
-                prompt = prompt[:10000] + "\n\n[Earlier context was truncated due to length.]"
+            if len(system_prompt) + len(prompt) > 8000:
+                max_user = max(0, 7000 - len(system_prompt))
+                if len(prompt) > max_user:
+                    prompt = "[Earlier context truncated]\n" + prompt[-max_user:]
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
@@ -144,8 +148,10 @@ class LocalLLM:
 
     def _generate_anthropic(self, prompt, system_prompt):
         try:
-            if len(prompt) > 10000:
-                prompt = prompt[:10000] + "\n\n[Earlier context truncated due to length.]"
+            if len(system_prompt) + len(prompt) > 8000:
+                max_user = max(0, 7000 - len(system_prompt))
+                if len(prompt) > max_user:
+                    prompt = "[Earlier context truncated]\n" + prompt[-max_user:]
             resp = self._anthropic_client.messages.create(
                 model=self.config.LLM_MODEL,
                 system=system_prompt,
@@ -160,12 +166,16 @@ class LocalLLM:
 
     def _stream_anthropic(self, prompt, system_prompt):
         try:
+            if len(system_prompt) + len(prompt) > 8000:
+                max_user = max(0, 7000 - len(system_prompt))
+                if len(prompt) > max_user:
+                    prompt = "[Earlier context truncated]\n" + prompt[-max_user:]
             with self._anthropic_client.messages.stream(
                 model=self.config.LLM_MODEL,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.config.TEMPERATURE,
-                max_tokens=self.config.MAX_TOKENS,
+                max_tokens=min(self.config.MAX_TOKENS, 1024),
             ) as stream:
                 for text in stream.text_stream:
                     yield text
