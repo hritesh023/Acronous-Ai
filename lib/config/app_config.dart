@@ -84,7 +84,7 @@ class AppConfig {
     imageMaxDimension = _envDouble('IMAGE_MAX_DIMENSION', 1920);
 
     speechListenDuration =
-        Duration(seconds: _envInt('SPEECH_LISTEN_SECONDS', 60));
+        Duration(seconds: _envInt('SPEECH_LISTEN_SECONDS', 86400));
     speechPauseDuration = Duration(seconds: _envInt('SPEECH_PAUSE_SECONDS', 3));
     speechLocale = _env('SPEECH_LOCALE', 'en_US');
     speechPartialResults = true;

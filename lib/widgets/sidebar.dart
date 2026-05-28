@@ -132,7 +132,6 @@ class _SidebarWidgetState extends State<SidebarWidget> {
             child: InkWell(
               onTap: () {
                 widget.chatProvider.newChat();
-                widget.onClose();
               },
               borderRadius: BorderRadius.circular(10),
             child: SizedBox(

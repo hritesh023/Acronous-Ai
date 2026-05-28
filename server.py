@@ -11,7 +11,7 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -34,9 +34,41 @@ app = FastAPI(title="Acronous AI API", version="1.0.0")
 PRIVATE_INFO_MSG = ""
 
 def _safe_error(e: Exception, fallback: str = "") -> str:
+    err = str(e)
+    if err and len(err) > 10:
+        return err
     if fallback:
         return fallback
     return ""
+
+def _server_ip_geolocation(request=None):
+    try:
+        import requests as http_req
+        client_ip = ""
+        if request:
+            forwarded = request.headers.get("X-Forwarded-For", "")
+            if forwarded:
+                client_ip = forwarded.split(",")[0].strip()
+            if not client_ip:
+                client_ip = request.headers.get("CF-Connecting-IP", "")
+            if not client_ip:
+                client_ip = request.headers.get("X-Real-IP", "")
+        if not client_ip or client_ip in ("127.0.0.1", "::1", "localhost"):
+            return {"display": "", "timezone": "", "city": "", "country": ""}
+        resp = http_req.get(f"http://ip-api.com/json/{client_ip}", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("status") == "success":
+                city = data.get("city", "") or ""
+                country = data.get("country", "") or ""
+                tz = data.get("timezone", "") or ""
+                lat = data.get("lat")
+                lon = data.get("lon")
+                display = f"{city}, {country}" if city and country else city or country or ""
+                return {"display": display, "timezone": tz, "city": city, "country": country, "lat": lat, "lon": lon}
+    except Exception:
+        pass
+    return {"display": "", "timezone": "", "city": "", "country": ""}
 
 _PRIVATE_DISCLOSURE_PATTERNS = [
     r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b",
@@ -54,6 +86,7 @@ def _sanitize_public_text(text: str) -> str:
             return PRIVATE_INFO_MSG
     cleaned = re.sub(r"\[Current date and time:[^\]]*\]", "", cleaned)
     cleaned = re.sub(r"\[Web-fetched [^\]]*\]", "", cleaned)
+    cleaned = re.sub(r"\[User location:[^\]]*\]", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 
@@ -71,15 +104,38 @@ async def startup_check():
     if config.LLM_PROVIDER in ("openai", "groq", "together", "anthropic"):
         if not config.LLM_API_KEY:
             logger.warning(f"LLM provider set to '{config.LLM_PROVIDER}' but no API key configured. Set ACRONOUS_LLM_API_KEY in .env.")
+        else:
+            try:
+                resp = await asyncio.to_thread(
+                    core_engine.llm.generate,
+                    "Reply with exactly: OK",
+                    system_prompt="Reply with exactly: OK"
+                )
+                if resp and "ok" in resp.strip().lower():
+                    logger.info("LLM connection verified successfully")
+                else:
+                    logger.warning(f"LLM responded but unexpected: {resp[:100]}")
+            except Exception as e:
+                logger.error(f"LLM connection test FAILED: {type(e).__name__}: {e}")
         logger.info(f"Using cloud LLM provider: {config.LLM_PROVIDER}, model: {config.LLM_MODEL}")
 
 @app.get("/v1/wakeup")
 async def wakeup():
+    try:
+        resp = await asyncio.to_thread(
+            core_engine.llm.generate,
+            "Reply with: ok",
+            system_prompt="Reply with only the word: ok"
+        )
+    except Exception:
+        pass
     return {"status": "ok"}
 
 class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
+    timezone: str = ""
+    location: str = ""
 
 class ChatResponse(BaseModel):
     response: str
@@ -93,6 +149,8 @@ class ChatResponse(BaseModel):
 class ImageGenRequest(BaseModel):
     prompt: str
     session_id: str = "default"
+    timezone: str = ""
+    location: str = ""
 
 _FLUTTER_WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build", "web")
 
@@ -106,6 +164,20 @@ async def root():
 @app.get("/v1/health")
 async def health():
     return {"status": "ok"}
+
+@app.get("/v1/ready")
+async def ready():
+    llm = core_engine.llm
+    available = (
+        llm._openai_client is not None or
+        llm._anthropic_client is not None
+    )
+    if available:
+        return {"status": "ok"}
+    return JSONResponse(
+        content={"status": "warming"},
+        status_code=503,
+    )
 
 @app.get("/v1/health/llm")
 async def health_llm():
@@ -122,29 +194,56 @@ async def health_llm():
     )
 
 @app.post("/v1/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, fastapi_request: Request):
+    _UNAUTH_KEYWORDS = ["authentication", "unauthorized", "api key", "invalid_api_key", "401", "403"]
+    location = req.location
+    user_timezone = req.timezone
+    geo = None
+    if not location and fastapi_request:
+        geo = _server_ip_geolocation(fastapi_request)
+        location = geo.get("display", "")
+        if not user_timezone and geo.get("timezone"):
+            user_timezone = geo.get("timezone", "")
     try:
+        result = None
         try:
-            result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id)
+            result = await asyncio.to_thread(
+                agent_engine.process,
+                req.message,
+                req.session_id,
+                context=None,
+                messages=None,
+                timezone=user_timezone,
+                location=location,
+            )
         except Exception as first_err:
-            logger.info(f"First attempt failed ({first_err}), retrying once...")
-            try:
-                result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry")
-            except Exception:
-                result = {"content": "", "type": "error"}
+            err_msg = str(first_err).lower()
+            is_auth = any(kw in err_msg for kw in _UNAUTH_KEYWORDS)
+            if not is_auth:
+                logger.info(f"First attempt failed ({first_err}), retrying once...")
+                try:
+                    result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry", timezone=user_timezone, location=location)
+                except Exception as retry_err:
+                    logger.error(f"Retry also failed: {retry_err}")
+                    result = {"content": "", "type": "error"}
 
         if isinstance(result, dict) and result.get("type") == "error" and not result.get("content"):
             logger.info("Retrying chat after empty error result...")
-            result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry")
+            try:
+                result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry2")
+            except Exception:
+                pass
 
         if isinstance(result, dict) and result.get("type") == "error" and not result.get("content"):
-            result = {"content": "", "type": "error"}
+            result = {"content": "I encountered a temporary issue processing your request. Please try again.", "type": "chat"}
 
         if result and isinstance(result, dict):
             content = _sanitize_public_text(result.get("content", "") or "")
             resp_type = result.get("type", "chat")
             image_data = result.get("image_data", "") or ""
             image_type = result.get("image_type", "") or ""
+            if not content and resp_type == "error":
+                resp_type = "chat"
             return ChatResponse(
                 response=content,
                 session_id=req.session_id,
@@ -178,7 +277,7 @@ async def chat_stream(req: ChatRequest):
     def _produce():
         try:
             chunks = []
-            for chunk in agent_engine.process_stream(req.message, req.session_id):
+            for chunk in agent_engine.process_stream(req.message, req.session_id, timezone=req.timezone):
                 chunks.append(str(chunk))
             q.put(_sanitize_public_text("".join(chunks)))
         except Exception as e:
@@ -342,7 +441,7 @@ async def generate_image_post(req: ImageGenRequest):
             "type": "error",
             "image_data": "",
         }
-    result = await asyncio.to_thread(agent_engine.generate_image, req.prompt, req.session_id)
+    result = await asyncio.to_thread(agent_engine.generate_image, req.prompt, req.session_id, req.timezone, req.location)
     content = _sanitize_public_text(result.get("content", "") or "")
     if result.get("type") == "error":
         return {
@@ -439,7 +538,7 @@ async def api_chat(req: ApiChatRequest):
             analysis = result.get("analysis")
             if not content and resp_type != "error":
                 resp_type = "error"
-                content = _safe_error(RuntimeError("Empty response from AI engine"))
+                content = ""
             return {
                 "content": content,
                 "type": resp_type,
@@ -479,7 +578,7 @@ async def generate_qr_code(req: QRCodeRequest):
         return {"image": b64, "format": "png"}
     except Exception as e:
         logger.error(f"QR generation failed: {e}")
-        return JSONResponse(content={"error": "QR code generation failed. Please try again."}, status_code=500)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 # ── /api/image/redesign ─────────────────────────────────────────────────────
 
@@ -503,7 +602,7 @@ async def redesign_image(
         return {"content": b64, "error": None, "prompt": prompt}
     except Exception as e:
         logger.error(f"Image redesign failed: {e}")
-        return JSONResponse(content={"content": None, "error": "Image redesign failed. Please try again."}, status_code=500)
+        return JSONResponse(content={"content": None, "error": str(e)}, status_code=500)
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -561,7 +660,7 @@ async def web_search(req: SearchRequest):
         return {"results": results}
     except Exception as e:
         logger.error(f"Web search failed: {e}")
-        return JSONResponse(content={"error": "Search failed. Please try again.", "results": []}, status_code=500)
+        return JSONResponse(content={"error": str(e), "results": []}, status_code=500)
 
 # ── /api/voice/transcribe ───────────────────────────────────────────────────
 
@@ -579,7 +678,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         return {"text": ""}
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
-        return {"text": "", "error": "Transcription failed. Please try again."}
+        return {"text": "", "error": str(e)}
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -617,7 +716,7 @@ async def process_document(file: UploadFile = File(...)):
         return {"text": text, "filename": file.filename, "size": len(content)}
     except Exception as e:
         logger.error(f"Document processing failed: {e}")
-        return {"text": "", "error": "Document processing failed. Please try again."}
+        return {"text": "", "error": str(e)}
     finally:
         if temp_path.exists():
             temp_path.unlink()

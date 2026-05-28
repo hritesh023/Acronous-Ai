@@ -59,15 +59,14 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _loadConfig() async {
+    _setDefaultSuggestions();
     try {
       final config = await widget.chatProvider.apiClient.getConfig();
       final list = config['suggestions'] as List? ?? [];
       if (list.isNotEmpty) {
         setState(() => _suggestions = list.map((e) => Suggestion.fromJson(e as Map<String, dynamic>)).toList());
-        return;
       }
     } catch (_) {}
-    _setDefaultSuggestions();
   }
 
   void _setDefaultSuggestions() {

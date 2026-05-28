@@ -44,19 +44,31 @@ export default {
 async function proxyToBackend(request, url, pathname) {
   url.hostname = BACKEND;
   url.pathname = pathname;
+
+  // Read body once up-front so we can retry (Request body is a stream, consumed once)
+  const body = request.method === 'GET' || request.method === 'HEAD'
+    ? undefined
+    : await request.clone().arrayBuffer();
+
+  const init = {
+    method: request.method,
+    headers: request.headers,
+    body,
+    signal: AbortSignal.timeout(300000),
+  };
+
   // Retry once for cold starts (Render can take 30-50s on first request)
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const resp = await fetch(url.toString(), {
-        ...request,
-        signal: AbortSignal.timeout(55000),
-      });
+      const resp = await fetch(url.toString(), init);
       return resp;
     } catch (e) {
       if (attempt === 0) {
         // First failure — wake backend and retry
         wakeBackend();
         await new Promise(r => setTimeout(r, 3000));
+        // ArrayBuffer can be reused across fetch calls
+        init.body = body;
         continue;
       }
       // Second failure — return 503

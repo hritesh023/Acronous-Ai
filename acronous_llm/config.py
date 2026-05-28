@@ -37,7 +37,7 @@ class AcronousConfig:
         self.LEARNING_RATE = 0.001
         self.MEMORY_MODE = os.getenv("ACRONOUS_MEMORY", "sqlite")
         self.TEMPERATURE = 0.7
-        self.MAX_TOKENS = 2048
+        self.MAX_TOKENS = int(os.getenv("ACRONOUS_MAX_TOKENS", "8192"))
         self.ENABLE_WEB = os.getenv("ACRONOUS_ENABLE_WEB", "true").lower() == "true"
         self.ENABLE_VISION = os.getenv("ACRONOUS_ENABLE_VISION", "false").lower() == "true"
         self.ENABLE_VOICE = os.getenv("ACRONOUS_ENABLE_VOICE", "false").lower() == "true"

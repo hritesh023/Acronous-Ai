@@ -7,8 +7,8 @@ Advanced AI assistant with LLM, image generation, vision, web search, and memory
 | Layer       | Provider           | Purpose                       |
 |-------------|--------------------|-------------------------------|
 | **LLM**     | Groq API           | Chat, reasoning, streaming    |
-| **Image**   | HF Inference API   | Image generation / editing    |
-| **Vision**  | HF Inference API   | Image analysis                |
+| **Image**   | Pollinations.ai    | Text-to-image generation      |
+| **Vision**  | Groq (LLaVA)       | Image analysis                |
 | **Search**  | DuckDuckGo         | Web search                    |
 | **Memory**  | SQLite             | Conversation history          |
 
@@ -19,8 +19,7 @@ Advanced AI assistant with LLM, image generation, vision, web search, and memory
 | `ACRONOUS_LLM_PROVIDER`    | `groq`                 |
 | `ACRONOUS_LLM_MODEL`       | `llama-3.1-8b-instant` |
 | `ACRONOUS_EMBED_MODEL`     | `all-MiniLM-L6-v2`     |
-| `ACRONOUS_IMAGE_PROVIDER`  | `huggingface`          |
-| `ACRONOUS_HF_IMAGE_MODEL`  | `Lykon/dreamshaper-8`  |
+| `ACRONOUS_IMAGE_PROVIDER`  | `openai`               |
 | `ACRONOUS_SEARCH`          | `duckduckgo`           |
 | `ACRONOUS_ENABLE_WEB`      | `true`                 |
 | `ACRONOUS_ENABLE_VISION`   | `true`                 |
@@ -28,7 +27,6 @@ Advanced AI assistant with LLM, image generation, vision, web search, and memory
 |                            |                        |
 | **Secret**                 | **Value**              |
 | `ACRONOUS_LLM_API_KEY`     | `gsk_...` (Groq key)   |
-| `HF_API_TOKEN`             | `hf_...` (HF token)    |
 
 ## Frontend Connection
 

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
+import '../config/app_config.dart';
 
 class ApiException implements Exception {
   final int statusCode;
@@ -143,7 +144,12 @@ class ApiClient {
       final response = await client
           .get(Uri.parse('$url/v1/health'))
           .timeout(timeout);
-      return response.statusCode == 200;
+      if (response.statusCode != 200) return false;
+      try {
+        final body = jsonDecode(response.body);
+        if (body is Map && body['status'] == 'ok') return true;
+      } catch (_) {}
+      return false;
     } catch (_) {
       return false;
     } finally {
@@ -152,23 +158,30 @@ class ApiClient {
   }
 
   static Future<String> detectBaseUrl({String? configuredUrl, String? savedUrl}) async {
-    final currentOrigin = _currentOrigin;
-    final currentHost = Uri.tryParse(currentOrigin)?.host ?? '';
+    final currentOrigin = _normalizeBaseUrl(_currentOrigin);
     final candidates = <String>[
+      'http://127.0.0.1:8000',
+      'http://localhost:8000',
+      if (currentOrigin.isNotEmpty) currentOrigin,
       ?savedUrl,
       ?configuredUrl,
-      'http://localhost:8000',
-      'http://127.0.0.1:8000',
     ];
     final checked = <String>{};
 
     for (final candidate in candidates) {
       final url = _normalizeBaseUrl(candidate);
       if (url.isEmpty || !checked.add(url)) continue;
+
+      final isRemote = url.startsWith('https://');
       await _wake(url);
-      final timeout = const Duration(seconds: 12);
+      final timeout = isRemote
+          ? const Duration(seconds: 45)
+          : const Duration(seconds: 12);
       final healthy = await _checkHealth(url, timeout: timeout);
-      if (healthy) return url;
+      if (healthy) {
+        debugPrint('[discover] Connected to: $url');
+        return url;
+      }
     }
 
     return '';
@@ -320,12 +333,23 @@ class ApiClient {
   Future<ChatResponse> chat({
     required String message,
     String? sessionId,
-    Duration? timeout = const Duration(seconds: 60),
+    String? timezone,
+    String? location,
+    Duration? timeout,
   }) async {
-    final resp = await _post('/v1/chat', {
+    final body = <String, dynamic>{
       'message': message,
       'session_id': sessionId ?? 'default',
-    }, timeout: timeout);
+    };
+    if (timezone != null && timezone.isNotEmpty) {
+      body['timezone'] = timezone;
+    }
+    if (location != null && location.isNotEmpty) {
+      body['location'] = location;
+    }
+    final actualTimeout = timeout ?? AppConfig.instance.apiChatTimeout;
+    final resp = await _post('/v1/chat', body,
+        timeout: actualTimeout > Duration.zero ? actualTimeout : null);
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
@@ -419,11 +443,17 @@ class ApiClient {
     required String prompt,
     String? sessionId,
     String? style,
+    Duration? timeout,
   }) async {
     final body = <String, dynamic>{'prompt': prompt};
     if (style != null) body['style'] = style;
     if (sessionId != null) body['session_id'] = sessionId;
-    return _post('/v1/image/generate', body);
+    final t = timeout ?? AppConfig.instance.apiImageGenTimeout;
+    return _post(
+      '/v1/image/generate',
+      body,
+      timeout: t > Duration.zero ? t : null,
+    );
   }
 
   Future<Map<String, dynamic>> generateQRCode({

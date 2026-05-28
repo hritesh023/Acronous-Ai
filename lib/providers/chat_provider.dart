@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import '../api/client.dart';
 import '../config/app_config.dart';
@@ -26,9 +30,9 @@ class ChatProvider extends ChangeNotifier {
   bool get serverCheckDone => _serverCheckDone;
   bool get isConnecting => _isConnecting;
 
-  static const _serverNotFound = 'I could not connect to the AI service. Please make sure the server is running and try again.';
-  static const _serverError = 'The AI service encountered an error. Please try again.';
-  static const _genericError = 'Something went wrong. Please try sending your message again.';
+  static const _serverNotFound = '';
+  static const _serverError = '';
+  static const _genericError = '';
   static const _privateInfoResponse = '';
   static final RegExp _privateInfoPattern = RegExp(
     r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b|\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space)\b.{0,120}\b(powers me|is my provider|backend|model|runs me|hosts me)\b|\b(api key|secret|system prompt|internal configuration|backend technology|technical architecture|infrastructure details)\b|\b(as an ai (assistant|model|language model)|i am a (helpful|useful) (ai|assistant)|i am an ai)\b.{0,100}\b(created by|developed by|built by|made by)\b",
@@ -39,13 +43,19 @@ class ChatProvider extends ChangeNotifier {
   static String _sanitizeAssistantText(String text) {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return '';
-    if (_privateInfoPattern.hasMatch(trimmed)) {
-      return _privateInfoResponse;
-    }
-    return trimmed
+    final cleaned = trimmed
         .replaceAll(RegExp(r'\[Current date and time:[^\]]*\]'), '')
         .replaceAll(RegExp(r'\[Web-fetched [^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[User location:[^\]]*\]'), '')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
+    if (cleaned.isEmpty) {
+      return trimmed;
+    }
+    if (_privateInfoPattern.hasMatch(cleaned)) {
+      return cleaned;
+    }
+    return cleaned;
   }
 
   final List<Conversation> _conversations = [];
@@ -68,7 +78,7 @@ class ChatProvider extends ChangeNotifier {
   double _ttsSpeed = 0.5;
   double _ttsPitch = 1.0;
   bool _autoSendVoice = false;
-  bool _continuousVoiceEnabled = false;
+  bool _continuousVoiceEnabled = true;
   bool _backgroundAssistantEnabled = false;
 
   ChatProvider({
@@ -94,6 +104,7 @@ class ChatProvider extends ChangeNotifier {
     await _initTts();
     await _discoverServer(savedUrl: savedUrl);
     _newConversation();
+    _fetchLocationInfo();
   }
 
   Future<void> _discoverServer({int retries = 3, String? savedUrl}) async {
@@ -102,12 +113,14 @@ class ChatProvider extends ChangeNotifier {
     _serverCheckDone = false;
     notifyListeners();
 
+    String? lastUrl;
     for (var attempt = 1; attempt <= retries; attempt++) {
       try {
         final bestUrl = await ApiClient.detectBaseUrl(
           configuredUrl: AppConfig.instance.apiBaseUrl,
           savedUrl: savedUrl,
         );
+        lastUrl = bestUrl;
         if (bestUrl.isNotEmpty) {
           _api.updateBaseUrl(bestUrl);
           _isServerConnected = true;
@@ -125,7 +138,10 @@ class ChatProvider extends ChangeNotifier {
       }
 
       if (attempt < retries) {
-        await Future.delayed(Duration(seconds: attempt * 3));
+        final delay = lastUrl?.startsWith('https://') == true
+            ? attempt * 10
+            : attempt * 3;
+        await Future.delayed(Duration(seconds: delay));
       }
     }
     debugPrint(
@@ -139,10 +155,13 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void _startKeepAlive() {
-    Future.delayed(const Duration(minutes: 4), () async {
+    Future.delayed(const Duration(minutes: 2), () async {
       try {
-        await _api.healthCheck();
-      } catch (_) {}
+        await _api.wakeup();
+      } catch (_) {
+        _isServerConnected = false;
+        _discoverServer(retries: 1);
+      }
       if (_keepAliveActive) _startKeepAlive();
     });
   }
@@ -251,6 +270,54 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  String _cachedLocation = '';
+  String _cachedCity = '';
+  String _cachedCountry = '';
+
+  Future<void> _fetchLocationInfo() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('http://ip-api.com/json/'))
+          .timeout(const Duration(seconds: 5));
+      if (resp.statusCode == 200) {
+        final data = jsonDecode(resp.body) as Map<String, dynamic>;
+        if (data['status'] == 'success') {
+          _cachedCity = (data['city'] as String?) ?? '';
+          _cachedCountry = (data['country'] as String?) ?? '';
+          final tz = (data['timezone'] as String?) ?? '';
+          final city = _cachedCity;
+          final country = _cachedCountry;
+          if (city.isNotEmpty && country.isNotEmpty) {
+            _cachedLocation = '$city, $country';
+          } else if (city.isNotEmpty) {
+            _cachedLocation = city;
+          } else if (country.isNotEmpty) {
+            _cachedLocation = country;
+          }
+          if (tz.isNotEmpty) {
+            _cachedTimezoneName = tz;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  String _cachedTimezoneName = '';
+
+  String get _userTimezone {
+    try {
+      final offset = DateTime.now().timeZoneOffset;
+      final totalMinutes = offset.inMinutes;
+      final sign = totalMinutes >= 0 ? '+' : '-';
+      final absMinutes = totalMinutes.abs();
+      final hours = absMinutes ~/ 60;
+      final minutes = absMinutes % 60;
+      return 'UTC$sign${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}';
+    } catch (_) {
+      return '';
+    }
+  }
+
   static const String autoDetectPrompt =
       'Analyze this image and auto-detect its type. '
       'If it contains a QR code or barcode, decode its contents. '
@@ -272,6 +339,7 @@ class ChatProvider extends ChangeNotifier {
     }
 
     _isLoading = true;
+    _isTakingLong = false;
     notifyListeners();
 
     final userMsg = ChatMessage(
@@ -285,69 +353,77 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     if (!_isServerConnected) {
-      _currentConversation!.messages.add(
-        ChatMessage(role: 'assistant', content: _serverNotFound),
-      );
-      _isLoading = false;
-      _prefs.saveConversations(_conversations).catchError((_) {});
-      notifyListeners();
-      return;
-    }
-
-    try {
-      final resp = await _callApi(userMsg, text);
-      final imageData = resp['image_data'] as String? ?? '';
-      final rawContent = _sanitizeAssistantText(
-        resp['response'] as String? ?? '',
-      );
-      final respType = resp['type'] as String? ?? 'chat';
-      final isImageGen = _isImageGenRequest(text);
-      if (isImageGen && imageData.isEmpty) {
-        final fallback = rawContent.isNotEmpty
-            ? rawContent
-            : 'The image generation service did not return an image. Please try a different prompt.';
+      debugPrint('[chat] Not connected, attempting re-discovery...');
+      await _discoverServer(retries: 1);
+      if (!_isServerConnected) {
         _currentConversation!.messages.add(
-          ChatMessage(role: 'assistant', content: fallback),
+          ChatMessage(role: 'assistant', content: _serverNotFound),
         );
         _isLoading = false;
         _prefs.saveConversations(_conversations).catchError((_) {});
         notifyListeners();
         return;
       }
-      if (rawContent.isEmpty && imageData.isEmpty) {
-        debugPrint('[chat] Server returned empty response (type=$respType)');
+    }
+
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        final resp = await _callApi(userMsg, text);
+        final imageData = resp['image_data'] as String? ?? '';
+        final rawContent = _sanitizeAssistantText(
+          resp['response'] as String? ?? '',
+        );
+        final respType = resp['type'] as String? ?? 'chat';
+        final isImageGen = _isImageGenRequest(text);
+        if (rawContent.isEmpty && imageData.isEmpty) {
+          debugPrint('[chat] Server returned empty response (type=$respType)');
+          _isLoading = false;
+          _prefs.saveConversations(_conversations).catchError((_) {});
+          notifyListeners();
+          return;
+        }
+        if (respType == 'error') {
+          debugPrint('[chat] Server returned error response: $rawContent');
+        }
         _currentConversation!.messages.add(
           ChatMessage(
             role: 'assistant',
-            content: respType == 'error'
-                ? 'The AI service had an error processing your request. Please try again.'
-                : _genericError,
+            content: rawContent,
+            imageData: imageData,
           ),
         );
+        _isTakingLong = false;
         _isLoading = false;
         _prefs.saveConversations(_conversations).catchError((_) {});
         notifyListeners();
         return;
+      } catch (e) {
+        debugPrint('[chat] API call failed (attempt ${attempt + 1}): $e');
+        final isAuthError = e is ApiException && (e.statusCode == 401 || e.statusCode == 403);
+        if (attempt < 2 && !isAuthError) {
+          if (_isTakingLong != true) {
+            _isTakingLong = true;
+            notifyListeners();
+          }
+          await _discoverServer(retries: 1);
+          if (_isServerConnected) {
+            await Future.delayed(Duration(seconds: (attempt + 1) * 2));
+          }
+          continue;
+        }
+        _isServerConnected = false;
+        unawaited(_discoverServer());
+        final errMsg = (e is ApiException) ? e.message : '';
+        if (errMsg.isNotEmpty) {
+          _currentConversation!.messages.add(
+            ChatMessage(role: 'assistant', content: errMsg),
+          );
+        }
+        break;
       }
-      if (respType == 'error') {
-        debugPrint('[chat] Server returned error response: $rawContent');
-      }
-      _currentConversation!.messages.add(
-        ChatMessage(
-          role: 'assistant',
-          content: rawContent,
-          imageData: imageData,
-        ),
-      );
-    } catch (e) {
-      debugPrint('[chat] API call failed');
-      _isServerConnected = false;
-      _discoverServer();
-      _currentConversation!.messages.add(
-        ChatMessage(role: 'assistant', content: _serverError),
-      );
     }
 
+    _isTakingLong = false;
     _isLoading = false;
     _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
@@ -429,9 +505,23 @@ class ChatProvider extends ChangeNotifier {
       return {'response': resp.content, 'image_data': '', 'type': resp.type};
     }
     if (_isImageGenRequest(text)) {
-      return _api.generateImage(prompt: text, sessionId: sessionId);
+      final imgResp = await _api.generateImage(prompt: text, sessionId: sessionId);
+      return {
+        'response': (imgResp['response'] as String?) ?? (imgResp['content'] as String?) ?? '',
+        'image_data': (imgResp['image_data'] as String?) ?? (imgResp['imageBase64'] as String?) ?? '',
+        'type': (imgResp['type'] as String?) ?? 'image_gen',
+      };
     }
-    final resp = await _api.chat(message: text, sessionId: sessionId);
+    final timezone = _cachedTimezoneName.isNotEmpty
+        ? _cachedTimezoneName
+        : _userTimezone;
+    final location = _cachedLocation.isNotEmpty ? _cachedLocation : null;
+    final resp = await _api.chat(
+      message: text,
+      sessionId: sessionId,
+      timezone: timezone.isNotEmpty ? timezone : null,
+      location: location,
+    );
     return {'response': resp.content, 'image_data': '', 'type': resp.type};
   }
 
@@ -596,43 +686,53 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> startVoiceInput() async {
-    final available = await _speech.initialize(
-      onError: (_) {
+    try {
+      final available = await _speech.initialize(
+        onError: (_) {
+          _isListening = false;
+          notifyListeners();
+        },
+        onStatus: (status) {
+          if (status == 'notListening' && _isListening) {
+            _isListening = false;
+            if (_voiceText.isNotEmpty && _autoSendVoice) {
+              final text = _voiceText;
+              _voiceText = '';
+              sendMessage(text);
+            }
+            if (_continuousVoiceEnabled) {
+              Future.delayed(const Duration(milliseconds: 500), startVoiceInput);
+            }
+            notifyListeners();
+          }
+        },
+      );
+      if (!available) return;
+
+      _isListening = true;
+      _voiceText = '';
+      notifyListeners();
+
+      await _speech.startListening(
+        onResult: (result) {
+          _voiceText = result.recognizedWords ?? '';
+          notifyListeners();
+        },
+      );
+    } catch (e) {
+      debugPrint('Voice input error: $e');
+      if (_continuousVoiceEnabled) {
+        Future.delayed(const Duration(milliseconds: 500), startVoiceInput);
+      } else {
         _isListening = false;
         notifyListeners();
-      },
-      onStatus: (status) {
-        if (status == 'notListening' && _isListening) {
-          _isListening = false;
-          if (_voiceText.isNotEmpty && _autoSendVoice) {
-            final text = _voiceText;
-            _voiceText = '';
-            sendMessage(text);
-          }
-          if (_continuousVoiceEnabled) {
-            Future.delayed(const Duration(milliseconds: 500), startVoiceInput);
-          }
-          notifyListeners();
-        }
-      },
-    );
-    if (!available) return;
-
-    _isListening = true;
-    _voiceText = '';
-    notifyListeners();
-
-    await _speech.startListening(
-      onResult: (result) {
-        _voiceText = result.recognizedWords ?? '';
-        notifyListeners();
-      },
-    );
+      }
+    }
   }
 
   void stopVoiceInput() {
-    _speech.stopListening();
     _isListening = false;
+    _speech.stopListening();
     notifyListeners();
   }
 

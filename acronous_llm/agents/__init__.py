@@ -17,25 +17,10 @@ class AcronousAgentEngine:
         self.router = QueryRouter(neural_engine, core_engine)
         self.planner = TaskPlanner(core_engine)
 
-    def _web_time_location(self):
-        if not self.core.llm.is_old_model():
-            return ""
-        parts = []
-        try:
-            t = self.core.search.fetch_current_time()
-            if t:
-                parts.append(f"[Web-fetched current time: {t}]")
-        except Exception:
-            pass
-        try:
-            loc = self.core.search.fetch_current_location()
-            if loc:
-                parts.append(f"[Web-fetched current location: {loc}]")
-        except Exception:
-            pass
-        if parts:
-            return "\n" + "\n".join(parts)
-        return ""
+    def _build_time_context(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).astimezone()
+        return f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
 
     def estimate_complexity(self, query):
         if not query or not query.strip():
@@ -66,15 +51,63 @@ class AcronousAgentEngine:
             return "moderate"
         return "simple"
 
-    def process(self, query, session_id="default", context=None, messages=None):
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).astimezone()
-        time_context = f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
-        web_info = self._web_time_location()
+    def _timezone_context(self, timezone="", location=""):
+        time_parts = []
+        if location:
+            time_parts.append(f"[User location: {location}]")
+        from datetime import datetime, timezone as tz_base
+        if timezone:
+            from datetime import timedelta, timezone as tz_mod
+            user_now = None
+            try:
+                try:
+                    from zoneinfo import ZoneInfo
+                    user_tz = ZoneInfo(timezone)
+                    user_now = datetime.now(user_tz)
+                    tz_label = user_now.strftime('%Z')
+                except (ImportError, KeyError, TypeError):
+                    try:
+                        import pytz
+                        user_tz = pytz.timezone(timezone)
+                        user_now = datetime.now(user_tz)
+                        tz_label = user_now.strftime('%Z')
+                    except (ImportError, KeyError):
+                        user_now = None
+            except Exception:
+                user_now = None
+            if user_now is None:
+                try:
+                    offset_str = timezone.replace("UTC", "").strip()
+                    sign = 1 if offset_str.startswith("+") else -1
+                    parts = offset_str.lstrip("+-").split(":")
+                    hours = int(parts[0])
+                    minutes = int(parts[1]) if len(parts) > 1 else 0
+                    offset = timedelta(hours=sign * hours, minutes=sign * minutes)
+                    user_tz = tz_mod(offset)
+                    user_now = datetime.now(user_tz)
+                    tz_label = user_now.strftime('%z')
+                except Exception:
+                    pass
+            if user_now is not None:
+                utc_now = datetime.now(tz_mod.utc)
+                time_parts.append(
+                    f"[Current date and time: {user_now.strftime('%A, %B %d, %Y at %I:%M %p')} {tz_label}]\n"
+                    f"[Current UTC time: {utc_now.strftime('%A, %B %d, %Y at %I:%M %p UTC')}]"
+                )
+        if not any("[Current date and time:" in p for p in time_parts):
+            now = datetime.now(tz_base.utc).astimezone()
+            time_parts.append(
+                f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]\n"
+                f"[Current UTC time: {datetime.now(tz_base.utc).strftime('%A, %B %d, %Y at %I:%M %p UTC')}]"
+            )
+        return "\n".join(time_parts)
+
+    def process(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
+        time_context = self._timezone_context(timezone, location)
         if context:
-            context = f"{time_context}{web_info}\n{context}"
+            context = f"{time_context}\n{context}"
         else:
-            context = f"{time_context}{web_info}"
+            context = time_context
         complexity = self.estimate_complexity(query)
         query = self.router.auto_correct(query)
         route = self.router.route(query)
@@ -87,15 +120,12 @@ class AcronousAgentEngine:
             result["complexity_label"] = self._complexity_bucket(complexity)
         return result
 
-    def process_stream(self, query, session_id="default", context=None, messages=None):
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).astimezone()
-        time_context = f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
-        web_info = self._web_time_location()
+    def process_stream(self, query, session_id="default", context=None, messages=None, timezone=""):
+        time_context = self._timezone_context(timezone)
         if context:
-            context = f"{time_context}{web_info}\n{context}"
+            context = f"{time_context}\n{context}"
         else:
-            context = f"{time_context}{web_info}"
+            context = time_context
         query = self.router.auto_correct(query)
         route = self.router.route(query)
         if route.get("needs_planning"):
@@ -108,18 +138,18 @@ class AcronousAgentEngine:
         yield from self.router.execute_stream(query, route, session_id, messages=messages, context=context)
 
     def process_with_image(self, query, image, session_id="default", messages=None):
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).astimezone()
-        web_info = self._web_time_location()
-        context = f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]{web_info}"
+        context = self._build_time_context()
         query = self.router.auto_correct(query)
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, image=image, messages=messages, context=context)
 
-    def generate_image(self, prompt, session_id="default"):
-        context = ""
+    def generate_image(self, prompt, session_id="default", timezone="", location=""):
+        time_context = self._timezone_context(timezone, location)
+        context = time_context
         try:
-            context = self.core.memory.get_recent_context(session_id)
+            mem_context = self.core.memory.get_recent_context(session_id)
+            if mem_context:
+                context = f"{time_context}\n{mem_context}"
         except Exception:
             pass
         return self.router._handle_image_generation(prompt, context)
@@ -134,10 +164,7 @@ class AcronousAgentEngine:
         return self.router._handle_image_modification(query, image_path)
 
     def process_with_file(self, query, file_path, session_id="default", messages=None):
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).astimezone()
-        web_info = self._web_time_location()
-        context = f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]{web_info}"
+        context = self._build_time_context()
         query = self.router.auto_correct(query)
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, file_path=file_path, messages=messages, context=context)

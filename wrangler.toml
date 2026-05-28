@@ -1,0 +1,7 @@
+name = "acronous-ai"
+compatibility_date = "2026-05-28"
+
+routes = [
+  { pattern = "acronous.com/*", zone_id = "b6a4d55add4ffb7af2fbcccc8c4805ad" },
+  { pattern = "www.acronous.com/*", zone_id = "b6a4d55add4ffb7af2fbcccc8c4805ad" },
+]
