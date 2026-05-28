@@ -18,7 +18,7 @@ class ImageGenerator:
         self._inpaint_pipe = None
         self._is_available = False
         self._diffusers_model = os.getenv("ACRONOUS_DIFFUSERS_MODEL")
-        self._openai_api_key = os.getenv("ACRONOUS_OPENAI_API_KEY") or os.getenv("ACRONOUS_LLM_API_KEY") or ""
+        self._openai_api_key = os.getenv("ACRONOUS_OPENAI_API_KEY") or ""
         self._replicate_api_token = os.getenv("REPLICATE_API_TOKEN")
         self._provider = os.getenv("ACRONOUS_IMAGE_PROVIDER", "auto").lower()
         self._init_pipeline()
@@ -45,7 +45,7 @@ class ImageGenerator:
         if provider:
             return provider
 
-        return "openai"
+        return ""
 
     def _generate_negative_prompt(self, prompt, image_type="realistic"):
         try:
@@ -118,7 +118,7 @@ Negative prompt:"""
                 last_error = result[1] if result and result[1] else ""
 
         if last_error:
-            logger.warning(f"All image providers failed for '{prompt[:60]}': {last_error}")
+            logger.warning(f"Image generation failed for '{prompt[:60]}': {last_error}")
             fallback = self._generate_fallback_image(prompt, width, height)
             if fallback is not None:
                 return fallback, None
