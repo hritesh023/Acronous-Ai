@@ -124,32 +124,15 @@ Negative prompt:"""
             from PIL import ImageDraw, ImageFont
             import hashlib
             hash_int = int(hashlib.md5(prompt.encode()).hexdigest()[:8], 16)
-            bg_colors = [
-                (25, 25, 55), (40, 20, 50), (20, 40, 55), (35, 30, 45),
-                (20, 35, 60), (45, 25, 35), (30, 40, 30), (55, 35, 25),
-            ]
-            accent_colors = [
-                (100, 140, 255), (200, 100, 255), (100, 200, 255), (255, 150, 100),
-                (100, 255, 180), (255, 100, 150), (150, 200, 100), (200, 180, 100),
-            ]
-            idx = hash_int % len(bg_colors)
-            bg = bg_colors[idx]
-            accent = accent_colors[idx]
-            img = Image.new("RGB", (width, height), bg)
-            draw = ImageDraw.Draw(img)
-            for i in range(6):
-                cx = (hash_int * (i + 1) * 137) % width
-                cy = (hash_int * (i + 1) * 251) % height
-                r = 30 + (hash_int * (i + 1)) % 120
-                alpha = 30 + (hash_int * (i + 1)) % 60
-                overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-                overlay_draw = ImageDraw.Draw(overlay)
-                overlay_draw.ellipse(
-                    [cx - r, cy - r, cx + r, cy + r],
-                    fill=(*accent, alpha)
-                )
-                img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
-            draw = ImageDraw.Draw(img)
+            gradient = Image.new("RGB", (width, height))
+            for y in range(height):
+                t = y / height
+                r = int(20 + t * 35)
+                g = int(20 + t * 30)
+                b = int(50 + t * 45)
+                for x in range(width):
+                    gradient.putpixel((x, y), (r, g, b))
+            draw = ImageDraw.Draw(gradient)
             words = prompt.split()[:8]
             lines = []
             current = ""
@@ -163,14 +146,14 @@ Negative prompt:"""
                     current = w
             if current:
                 lines.append(current)
-            y_offset = height // 2 - len(lines) * 12
+            y_offset = height // 2 - len(lines) * 14
             for line in lines:
                 bbox = draw.textbbox((0, 0), line, font=None)
                 tw = bbox[2] - bbox[0]
-                draw.text(((width - tw) // 2, y_offset), line, fill=(220, 220, 240))
-                y_offset += 28
+                draw.text(((width - tw) // 2, y_offset), line, fill=(200, 200, 230))
+                y_offset += 30
             buf = io.BytesIO()
-            img.save(buf, format="PNG")
+            gradient.save(buf, format="PNG")
             return buf.getvalue()
         except Exception:
             return None

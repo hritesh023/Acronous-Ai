@@ -1118,31 +1118,35 @@ Response:"""
     def _enrich_image_prompt(self, query, image_type="realistic", search_data=""):
         try:
             if image_type == "realistic":
-                prompt_text = f"""Rewrite this image description into a detailed photographic prompt. The generated image should look like a real photograph — natural, authentic, and true to life.
+                prompt_text = f"""Rewrite this into a detailed, high-quality image prompt for DALL-E 3. The image must look photorealistic — sharp focus, rich details, natural lighting, vivid colors.
 
-Focus on: natural lighting, authentic textures, realistic materials, genuine colors, real-world composition, natural depth and dimension.
-Use natural photographic language that describes what a camera would capture.
-Return ONLY the enhanced prompt.
+Rules:
+- Describe the subject clearly and specifically
+- Add lighting, mood, composition, and texture details
+- Use natural photographic language
+- If the user request is vague, add reasonable visual detail
+- Do NOT add elements not implied by the user
+- Return ONLY the enhanced prompt, no quotes, no labels
 
 Original: {query}
 Enhanced:"""
                 if search_data:
-                    prompt_text = f"""Rewrite this image description into a detailed photographic prompt. The generated image should look like a real photograph — natural, authentic, and true to life.
+                    prompt_text = f"""Rewrite this into a detailed, high-quality image prompt for DALL-E 3. The image must look photorealistic — sharp focus, rich details, natural lighting, vivid colors.
 
-Focus on: natural lighting, authentic textures, realistic materials, genuine colors, real-world composition, natural depth and dimension.
-Use natural photographic language that describes what a camera would capture.
-
-Here is real-world context about the subject:
+Rules:
+- Describe the subject clearly and specifically
+- Add lighting, mood, composition, and texture details
+- Use natural photographic language
+- Use this real-world context for accuracy:
 {search_data}
-
-Use this context to make the description accurate and grounded in reality.
-Return ONLY the enhanced prompt.
+- Do NOT add elements not implied by the user
+- Return ONLY the enhanced prompt, no quotes, no labels
 
 Original: {query}
 Enhanced:"""
-                system = "You enhance prompts for photographic realism using natural language. Return only the enhanced prompt."
+                system = "You enhance prompts for photorealistic image generation. Return only the enhanced prompt."
             elif image_type == "animated":
-                prompt_text = f"""Rewrite this for an animated/cartoon style generator. Focus on vibrant colors and stylized art. Return ONLY the enhanced prompt.
+                prompt_text = f"""Rewrite this for an animated/cartoon style image. Use vibrant colors, stylized art, expressive features. Return ONLY the enhanced prompt.
 
 Original: {query}
 Enhanced:"""
