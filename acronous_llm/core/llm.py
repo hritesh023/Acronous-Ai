@@ -101,6 +101,8 @@ class LocalLLM:
 
     def _generate_openai(self, prompt, system_prompt, stream=False):
         try:
+            if len(prompt) > 10000:
+                prompt = prompt[:10000] + "\n\n[Earlier context was truncated due to length.]"
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
@@ -109,7 +111,7 @@ class LocalLLM:
                 model=self.config.LLM_MODEL,
                 messages=messages,
                 temperature=self.config.TEMPERATURE,
-                max_tokens=self.config.MAX_TOKENS,
+                max_tokens=min(self.config.MAX_TOKENS, 1024),
                 stream=False,
             )
             return resp.choices[0].message.content or ""
@@ -119,6 +121,8 @@ class LocalLLM:
 
     def _stream_openai(self, prompt, system_prompt):
         try:
+            if len(prompt) > 10000:
+                prompt = prompt[:10000] + "\n\n[Earlier context was truncated due to length.]"
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
@@ -127,7 +131,7 @@ class LocalLLM:
                 model=self.config.LLM_MODEL,
                 messages=messages,
                 temperature=self.config.TEMPERATURE,
-                max_tokens=self.config.MAX_TOKENS,
+                max_tokens=min(self.config.MAX_TOKENS, 1024),
                 stream=True,
             )
             for chunk in stream:
@@ -140,12 +144,14 @@ class LocalLLM:
 
     def _generate_anthropic(self, prompt, system_prompt):
         try:
+            if len(prompt) > 10000:
+                prompt = prompt[:10000] + "\n\n[Earlier context truncated due to length.]"
             resp = self._anthropic_client.messages.create(
                 model=self.config.LLM_MODEL,
                 system=system_prompt,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=self.config.TEMPERATURE,
-                max_tokens=self.config.MAX_TOKENS,
+                max_tokens=min(self.config.MAX_TOKENS, 1024),
             )
             return "".join(block.text for block in resp.content if block.type == "text")
         except Exception as e:
