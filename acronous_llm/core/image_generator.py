@@ -117,8 +117,6 @@ Negative prompt:"""
                     return result
                 last_error = result[1] if result and result[1] else ""
 
-        if last_error:
-            logger.warning(f"Image generation failed for '{prompt[:60]}': {last_error}")
         return None, self._generate_error_message(last_error, prompt)
 
     def _generate_fallback_image(self, prompt, width, height):
