@@ -1095,10 +1095,12 @@ Response:"""
             fallback = self.core.image_gen._generate_fallback_image(query, 512, 512)
             if fallback is not None:
                 b64 = base64.b64encode(fallback).decode("utf-8")
-                return {"type": "image_gen", "content": "", "image_data": b64, "image_type": "fallback", "sources": []}
+                content = f"I wasn't able to generate the image right now. {error or 'The image service is temporarily unavailable.'} Please try again with a different prompt or try again later."
+                return {"type": "image_gen", "content": content, "image_data": b64, "image_type": "fallback", "sources": []}
         except Exception:
             pass
-        return {"type": "chat", "content": "", "sources": []}
+        content = f"I encountered an issue generating that image. {error or 'The image service is temporarily unavailable.'} Please try again."
+        return {"type": "chat", "content": content, "sources": []}
 
     def _classify_image_prompt(self, query):
         q = query.lower()
