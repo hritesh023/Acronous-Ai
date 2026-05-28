@@ -31,9 +31,6 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static const _serverNotFound = '';
-  static const _serverError = '';
-  static const _genericError = '';
-  static const _privateInfoResponse = '';
   static final RegExp _privateInfoPattern = RegExp(
     r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b|\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space)\b.{0,120}\b(powers me|is my provider|backend|model|runs me|hosts me)\b|\b(api key|secret|system prompt|internal configuration|backend technology|technical architecture|infrastructure details)\b|\b(as an ai (assistant|model|language model)|i am a (helpful|useful) (ai|assistant)|i am an ai)\b.{0,100}\b(created by|developed by|built by|made by)\b",
     caseSensitive: false,
@@ -132,7 +129,7 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        
+      } catch (_) {
       }
 
       if (attempt < retries) {
@@ -367,7 +364,6 @@ class ChatProvider extends ChangeNotifier {
           resp['response'] as String? ?? '',
         );
         final respType = resp['type'] as String? ?? 'chat';
-        final isImageGen = _isImageGenRequest(text);
         if (rawContent.isEmpty && imageData.isEmpty) {
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -735,7 +731,7 @@ class ChatProvider extends ChangeNotifier {
         _pendingAttachments.add(attachment);
         notifyListeners();
       }
-    } catch (e) {
+    } catch (_) {
     }
   }
 
@@ -746,7 +742,7 @@ class ChatProvider extends ChangeNotifier {
         _pendingAttachments.add(attachment);
         notifyListeners();
       }
-    } catch (e) {
+    } catch (_) {
     }
   }
 
@@ -771,7 +767,7 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
         },
       );
-    } catch (e) {
+    } catch (_) {
     }
   }
 

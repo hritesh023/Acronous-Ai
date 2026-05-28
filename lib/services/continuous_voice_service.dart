@@ -84,7 +84,7 @@ class ContinuousVoiceService extends ChangeNotifier {
           onText?.call(recognizedText);
         },
       );
-    } catch (e) {
+    } catch (_) {
     }
 
     _isListening = false;
@@ -126,7 +126,7 @@ class ContinuousVoiceService extends ChangeNotifier {
             notifyListeners();
           },
         );
-      } catch (e) {
+      } catch (_) {
       }
 
       _isListening = false;

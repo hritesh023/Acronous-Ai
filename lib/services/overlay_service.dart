@@ -58,26 +58,11 @@ class OverlayService extends ChangeNotifier {
   }
 
   Future<void> showOverlay() async {
-    try {
-      OverlayService._ensureContext();
-      if (_overlayEntry != null) return;
-      _overlayEntry = OverlayEntry(
-        builder: (_) => _AcronousOverlay(onDismiss: hideOverlay),
-      );
-      if (navigatorKey?.currentState != null) {
-        navigatorKey!.currentState!.overlay?.insert(_overlayEntry!);
-      }
-    } catch (e) {
-    }
+    await showSystemOverlay();
   }
 
   void hideOverlay() {
-    try {
-      _overlayEntry?.remove();
-      _overlayEntry = null;
-    } catch (e) {
-    }
-  }
+    hideSystemOverlay();
   }
 
   void setWantsOverlay(bool v) {
