@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
+import '../services/overlay_service.dart';
 import 'voice_popup.dart';
 import 'voice_command_widget.dart';
 
@@ -110,12 +111,19 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
     final cs = Theme.of(context).colorScheme;
     final size = MediaQuery.of(context).size;
 
-    return Consumer2<ChatProvider, AuthProvider>(
-      builder: (context, chat, auth, _) {
-        if (!chat.backgroundAssistantEnabled ||
-            auth.status != AuthStatus.authenticated) {
-          return widget.child;
+    return Consumer3<ChatProvider, AuthProvider, OverlayService>(
+      builder: (context, chat, auth, overlay, _) {
+        if (!context.mounted) return widget.child;
+        final showFloating = chat.backgroundAssistantEnabled &&
+            auth.status == AuthStatus.authenticated;
+        final wantsOverlay = chat.systemOverlayEnabled &&
+            auth.status == AuthStatus.authenticated;
+        if (wantsOverlay != overlay.wantsOverlay) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (context.mounted) overlay.setWantsOverlay(wantsOverlay);
+          });
         }
+        if (!showFloating) return widget.child;
 
         final posY = _posY.clamp(0.05, 0.85);
         final isNearRightEdge =
@@ -196,7 +204,7 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
               _posY = (posY + details.delta.dy / size.height).clamp(0.05, 0.85);
               _posX = (_posX + details.delta.dx).clamp(
                 0,
-                size.width - _hiddenStrip,
+                size.width - _popOutWidth,
               );
             });
           },

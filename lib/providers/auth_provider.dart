@@ -64,7 +64,7 @@ class AuthProvider extends ChangeNotifier {
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     } catch (e) {
-      _error = e.toString();
+      _error = 'Sign in failed. Please try again.';
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     }
@@ -100,7 +100,7 @@ class AuthProvider extends ChangeNotifier {
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     } catch (e) {
-      _error = e.toString();
+      _error = 'Sign up failed. Please try again.';
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     }

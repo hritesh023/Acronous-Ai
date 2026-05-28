@@ -46,6 +46,9 @@ class MemorySystem:
         """)
         self.conn.commit()
 
+    def add(self, session_id, role, content, metadata=None):
+        return self.add_message(session_id, role, content, metadata)
+
     def add_message(self, session_id, role, content, metadata=None):
         ts = datetime.now().isoformat()
         self.short_term.append({

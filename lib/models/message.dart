@@ -51,7 +51,7 @@ class MessageAttachment {
 
 class ChatMessage {
   final String role;
-  final String content;
+  String content;
   final DateTime timestamp;
   final List<MessageAttachment> attachments;
   final String id;
@@ -106,12 +106,19 @@ class Conversation {
        createdAt = createdAt ?? DateTime.now(),
        updatedAt = updatedAt ?? DateTime.now();
 
-  String get displayTitle =>
-      messages.isNotEmpty
-          ? messages.first.content
-              .substring(0, _min(50, messages.first.content.length))
-              .replaceAll('\n', ' ')
-          : 'New Chat';
+  String get displayTitle {
+    if (messages.isEmpty) return 'New Chat';
+    final first = messages.first;
+    if (first.content.isNotEmpty) {
+      return first.content
+          .substring(0, _min(50, first.content.length))
+          .replaceAll('\n', ' ');
+    }
+    if (first.attachments.isNotEmpty) {
+      return 'Sent ${first.attachments.length} attachment${first.attachments.length > 1 ? 's' : ''}';
+    }
+    return 'New Chat';
+  }
 
   static int _min(int a, int b) => a < b ? a : b;
 

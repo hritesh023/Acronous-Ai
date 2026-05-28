@@ -129,4 +129,15 @@ class PreferencesService {
     final data = conversations.map((c) => c.toJson()).toList();
     await prefs.setString(AppPrefKeys.conversations, jsonEncode(data));
   }
+
+  Future<String> loadServerUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(AppPrefKeys.serverUrl) ?? '';
+  }
+
+  Future<void> saveServerUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(AppPrefKeys.serverUrl, url);
+  }
+
 }

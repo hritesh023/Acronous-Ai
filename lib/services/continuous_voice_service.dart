@@ -48,6 +48,11 @@ class ContinuousVoiceService extends ChangeNotifier {
     void Function(String text)? onText,
     void Function()? onDone,
   }) async {
+    if (_isListening || _speech.isListening) {
+      onDone?.call();
+      return;
+    }
+
     _isListening = true;
     _state = ContinuousVoiceState.listening;
     notifyListeners();
@@ -95,6 +100,11 @@ class ContinuousVoiceService extends ChangeNotifier {
 
   Future<void> _runLoop() async {
     while (_isRunning) {
+      if (_speech.isListening) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        continue;
+      }
+
       _isListening = true;
       notifyListeners();
 

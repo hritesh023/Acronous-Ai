@@ -11,38 +11,53 @@ class ChatInput extends StatefulWidget {
   State<ChatInput> createState() => _ChatInputState();
 }
 
-class _ChatInputState extends State<ChatInput> {
+class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   bool _isComposing = false;
   bool _showExtras = false;
   bool _isSyncingVoice = false;
   String _lastSyncedVoiceText = '';
+  bool _disposed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
 
   @override
   void dispose() {
+    _disposed = true;
+    WidgetsBinding.instance.removeObserver(this);
+    FocusManager.instance.primaryFocus?.unfocus();
+    _focusNode.unfocus();
     _controller.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
-  void _sendText() {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      _focusNode.unfocus();
+    }
+  }
+
+  void _sendText([String? text]) {
+    if (_disposed) return;
     final chat = context.read<ChatProvider>();
-    final text = _controller.text.trim();
-    if (text.isEmpty && chat.pendingAttachments.isEmpty) {
+    final msg = (text ?? _controller.text).trim();
+    if (msg.isEmpty && chat.pendingAttachments.isEmpty) {
       return;
     }
     _controller.clear();
+    _focusNode.unfocus();
     setState(() {
       _isComposing = false;
       _showExtras = false;
     });
-    _focusNode.requestFocus();
-    if (text.isEmpty && chat.pendingAttachments.isNotEmpty) {
-      chat.sendPendingAnalysis();
-    } else {
-      chat.sendMessage(text);
-    }
+    chat.sendMessage(msg);
   }
 
   void _onChanged(String v) {
@@ -60,7 +75,7 @@ class _ChatInputState extends State<ChatInput> {
         _controller.text == _lastSyncedVoiceText) {
       _isSyncingVoice = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
+        if (!_disposed && mounted) {
           if (chat.voiceText.isNotEmpty &&
               _controller.text == _lastSyncedVoiceText) {
             _controller.text = chat.voiceText;
@@ -90,7 +105,8 @@ class _ChatInputState extends State<ChatInput> {
           children: [
             if (chat.pendingAttachments.isNotEmpty)
               _buildAttachmentChips(chat, cs),
-            if (_showExtras) _buildExtrasRow(chat, cs),
+            if (_showExtras && !chat.isLoading)
+              _buildExtrasRow(chat, cs),
             Container(
               decoration: BoxDecoration(
                 color: cs.surfaceContainerHighest.withValues(alpha: 0.15),
@@ -124,22 +140,27 @@ class _ChatInputState extends State<ChatInput> {
                   ),
                   const SizedBox(width: AppDimens.gapXS),
                   Expanded(
-                    child: TextField(
-                      controller: _controller,
-                      focusNode: _focusNode,
-                      maxLines: 5,
-                      minLines: 1,
-                      textInputAction: TextInputAction.send,
-                      onChanged: _onChanged,
-                      onSubmitted:
-                          chat.isLoading ? null : (_) => _sendText(),
-                      decoration: const InputDecoration(
-                        hintText: AppStrings.messageHint,
-                        border: InputBorder.none,
-                        filled: false,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 4,
-                          vertical: 9,
+                    child: RepaintBoundary(
+                      child: TextField(
+                        key: const ValueKey('chat_text_field'),
+                        controller: _controller,
+                        focusNode: _focusNode,
+                        maxLines: 5,
+                        minLines: 1,
+                        textInputAction: TextInputAction.send,
+                        onChanged: _onChanged,
+                        onSubmitted: chat.isLoading
+                            ? null
+                            : (v) => _sendText(v.trim()),
+                        readOnly: chat.isLoading,
+                        decoration: const InputDecoration(
+                          hintText: AppStrings.messageHint,
+                          border: InputBorder.none,
+                          filled: false,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 9,
+                          ),
                         ),
                       ),
                     ),
@@ -185,25 +206,24 @@ class _ChatInputState extends State<ChatInput> {
                           Padding(
                             padding: const EdgeInsets.only(bottom: 3, right: 3),
                             child: Material(
-                              color: hasContent && !chat.isLoading
-                                  ? cs.primary
-                                  : Colors.transparent,
+                              color: chat.isLoading
+                                  ? cs.error.withValues(alpha: 0.15)
+                                  : (hasContent ? cs.primary : Colors.transparent),
                               borderRadius: BorderRadius.circular(10),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(10),
-                                onTap: chat.isLoading ? null : _sendText,
+                                onTap: chat.isLoading
+                                    ? () => chat.cancelGeneration()
+                                    : _sendText,
                               child: Container(
                                 width: AppDimens.inputIconSize,
                                 height: AppDimens.inputIconSize,
                                 alignment: Alignment.center,
                                 child: chat.isLoading
-                                    ? SizedBox(
-                                        width: 16,
-                                        height: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: cs.onSurfaceVariant,
-                                        ),
+                                    ? Icon(
+                                        Icons.stop_rounded,
+                                        size: AppDimens.inputIconInnerSize - 2,
+                                        color: cs.error,
                                       )
                                     : Icon(
                                         Icons.arrow_upward_rounded,
@@ -263,12 +283,13 @@ class _ChatInputState extends State<ChatInput> {
               );
             }),
             ActionChip(
-              avatar: Icon(Icons.auto_awesome, size: 16, color: cs.primary),
+              avatar: Icon(Icons.auto_awesome, size: 16,
+                  color: chat.isLoading ? cs.onSurfaceVariant.withValues(alpha: 0.3) : cs.primary),
               label: Text(
                 AppStrings.analyzeImage,
                 style: TextStyle(
                   fontSize: AppDimens.fontSizeSM,
-                  color: cs.primary,
+                  color: chat.isLoading ? cs.onSurfaceVariant.withValues(alpha: 0.3) : cs.primary,
                 ),
               ),
               onPressed: chat.isLoading ? null : () => chat.sendPendingAnalysis(),
@@ -278,7 +299,11 @@ class _ChatInputState extends State<ChatInput> {
                   horizontal: AppDimens.paddingSM),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(16),
-                side: BorderSide(color: cs.primary.withValues(alpha: 0.3)),
+                side: BorderSide(
+                  color: chat.isLoading
+                      ? cs.onSurfaceVariant.withValues(alpha: 0.1)
+                      : cs.primary.withValues(alpha: 0.3),
+                ),
               ),
             ),
           ],

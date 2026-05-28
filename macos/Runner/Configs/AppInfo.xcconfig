@@ -11,4 +11,4 @@ PRODUCT_NAME = acronous_ai_flutter
 PRODUCT_BUNDLE_IDENTIFIER = com.acronousai.acronousAiFlutter
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.acronousai. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © com.acronousai. All rights reserved.

@@ -9,11 +9,29 @@ import '../constants/app_constants.dart';
 import '../models/message.dart';
 import '../providers/chat_provider.dart';
 import '../widgets/image_viewer.dart';
+import '../widgets/markdown_renderer.dart';
 
 class ChatMessageWidget extends StatelessWidget {
   final ChatMessage message;
 
   const ChatMessageWidget({super.key, required this.message});
+
+  bool _hasCodeBlocks(String text) {
+    if (text.contains('```')) return true;
+    final inlineCode = RegExp(r'`[^`\n]+`');
+    if (inlineCode.hasMatch(text)) return true;
+    final codePatterns = [
+      RegExp(r'(?:function|class|def |import |from |const |let |var |if\s*\()',
+          caseSensitive: false),
+      RegExp(r'[{};]\s*$', multiLine: true),
+      RegExp(r'^\s*(?:public|private|protected|static|void|int|string|bool|float|double|return)\s',
+          multiLine: true, caseSensitive: false),
+    ];
+    for (final p in codePatterns) {
+      if (p.hasMatch(text)) return true;
+    }
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -64,18 +82,19 @@ class ChatMessageWidget extends StatelessWidget {
                     bottomRight: const Radius.circular(AppDimens.bubbleRadiusSmall),
                   ),
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      message.content,
-                      style: TextStyle(
-                        color: cs.onPrimary,
-                        fontSize: AppDimens.fontSizeBody,
-                        height: 1.35,
-                      ),
-                    ),
-                    SizedBox(height: AppDimens.paddingXS),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (message.content.isNotEmpty)
+                          Text(
+                            message.content,
+                            style: TextStyle(
+                              color: cs.onPrimary,
+                              fontSize: AppDimens.fontSizeBody,
+                              height: 1.35,
+                            ),
+                          ),
+                        SizedBox(height: AppDimens.paddingXS),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -165,14 +184,8 @@ class ChatMessageWidget extends StatelessWidget {
                       children: [
                         if (message.imageData.isNotEmpty)
                           _buildGeneratedImage(context, message.imageData, cs),
-                        Text(
-                          message.content,
-                          style: TextStyle(
-                            color: cs.onSurface,
-                            fontSize: AppDimens.fontSizeBody,
-                            height: 1.35,
-                          ),
-                        ),
+                        if (message.content.isNotEmpty)
+                          MarkdownRenderer(content: message.content),
                       ],
                     ),
                   ),
@@ -189,29 +202,35 @@ class ChatMessageWidget extends StatelessWidget {
                           ),
                         ),
                         SizedBox(width: AppDimens.gapLG),
-                        _ActionIcon(
-                          icon: Icons.content_copy_outlined,
-                          size: AppDimens.iconSmall,
-                          onTap: () {
-                            Clipboard.setData(
-                              ClipboardData(text: message.content),
-                            );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(AppStrings.copied),
-                                behavior: SnackBarBehavior.floating,
-                                duration: const Duration(seconds: 1),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 6,
+                        Tooltip(
+                          message: 'Copy entire response',
+                          waitDuration: const Duration(milliseconds: 300),
+                          child: _ActionIcon(
+                            icon: Icons.content_copy_outlined,
+                            size: AppDimens.iconSmall,
+                            onTap: () {
+                              Clipboard.setData(
+                                ClipboardData(text: message.content),
+                              );
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(AppStrings.copied),
+                                  behavior: SnackBarBehavior.floating,
+                                  duration: const Duration(seconds: 1),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 6,
+                                  ),
+                                  margin: const EdgeInsets.only(bottom: 60),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
                                 ),
-                                margin: const EdgeInsets.only(bottom: 60),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                              ),
-                            );
-                          },
+                              );
+                            },
+                          ),
                         ),
+                        if (_hasCodeBlocks(message.content))
+                          const SizedBox.shrink(),
                         SizedBox(width: AppDimens.gapSM),
                         Consumer<ChatProvider>(
                           builder: (context, chat, _) {

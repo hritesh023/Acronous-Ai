@@ -93,7 +93,7 @@ BEGIN
             VALUE "FileDescription", "acronous_ai_flutter" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "acronous_ai_flutter" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.acronousai. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) com.acronousai. All rights reserved." "\0"
             VALUE "OriginalFilename", "acronous_ai_flutter.exe" "\0"
             VALUE "ProductName", "acronous_ai_flutter" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"

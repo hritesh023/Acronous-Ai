@@ -97,6 +97,7 @@ class _AuthPageState extends State<AuthPage>
                   key: _formKey,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       SizedBox(height: size.height * 0.05),
                       Container(

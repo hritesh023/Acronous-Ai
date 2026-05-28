@@ -87,3 +87,37 @@ class WebSearch:
         for r in results:
             r["content"] = self.fetch_page_content(r["url"])
         return results
+
+    def fetch_current_time(self):
+        try:
+            results = self.search("current date and time right now", max_results=3)
+            snippets = [r.get("snippet", "") for r in results if r.get("snippet")]
+            if snippets:
+                return "\n".join(snippets[:2])
+            content_parts = []
+            for r in results:
+                c = r.get("content", "")
+                if c:
+                    content_parts.append(c[:500])
+            if content_parts:
+                return "\n".join(content_parts[:2])
+        except Exception:
+            pass
+        return ""
+
+    def fetch_current_location(self):
+        try:
+            results = self.search("what is my location ip address", max_results=3)
+            snippets = [r.get("snippet", "") for r in results if r.get("snippet")]
+            if snippets:
+                return "\n".join(snippets[:2])
+            content_parts = []
+            for r in results:
+                c = r.get("content", "")
+                if c:
+                    content_parts.append(c[:500])
+            if content_parts:
+                return "\n".join(content_parts[:2])
+        except Exception:
+            pass
+        return ""

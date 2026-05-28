@@ -1,8 +1,19 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 
+class ApiException implements Exception {
+  final int statusCode;
+  final String message;
+  final Map<String, dynamic>? body;
+
+  ApiException(this.statusCode, this.message, [this.body]);
+
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+}
 
 class ChatRequest {
   final String query;
@@ -48,6 +59,8 @@ class ChatResponse {
   final String? imageBase64;
   final String? videoUrl;
   final String? audioUrl;
+  final int complexity;
+  final String complexityLabel;
 
   ChatResponse({
     required this.content,
@@ -59,6 +72,8 @@ class ChatResponse {
     this.imageBase64,
     this.videoUrl,
     this.audioUrl,
+    this.complexity = 0,
+    this.complexityLabel = 'simple',
   });
 
   factory ChatResponse.fromJson(Map<String, dynamic> json) => ChatResponse(
@@ -77,84 +92,224 @@ class ChatResponse {
     analysis: json['analysis'] as Map<String, dynamic>?,
     sessionId: json['session_id'] as String? ?? '',
     imageUrl: json['image_url'] as String?,
-    imageBase64: json['image_base64'] as String?,
+    imageBase64:
+        (json['image_base64'] as String?) ?? (json['image_data'] as String?),
     videoUrl: json['video_url'] as String?,
     audioUrl: json['audio_url'] as String?,
+    complexity: json['complexity'] as int? ?? 0,
+    complexityLabel: json['complexity_label'] as String? ?? 'simple',
   );
 }
 
 class ApiClient {
   String _baseUrl;
   String? _authToken;
-  final http.Client _client = http.Client();
+  http.Client _client = http.Client();
 
-  ApiClient({String baseUrl = ''}) : _baseUrl = baseUrl;
+  ApiClient({String baseUrl = '', this.httpClient}) : _baseUrl = baseUrl {
+    if (httpClient != null) _client = httpClient!;
+  }
+
+  http.Client? httpClient;
 
   String get baseUrl => _baseUrl;
   void updateBaseUrl(String url) => _baseUrl = url;
 
+  static String get _currentOrigin {
+    final uri = Uri.base;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return '';
+    if (uri.host.isEmpty) return '';
+    final port = uri.port;
+    if (port <= 0 || port == 80 || port == 443) {
+      return '${uri.scheme}://${uri.host}';
+    }
+    return '${uri.scheme}://${uri.host}:$port';
+  }
+
+  static String _normalizeBaseUrl(String url) {
+    final trimmed = url.trim();
+    if (trimmed.isEmpty) return '';
+    return trimmed.endsWith('/')
+        ? trimmed.substring(0, trimmed.length - 1)
+        : trimmed;
+  }
+
+  static Future<bool> _checkHealth(
+    String url, {
+    Duration timeout = const Duration(seconds: 5),
+  }) async {
+    final client = http.Client();
+    try {
+      final response = await client
+          .get(Uri.parse('$url/v1/health'))
+          .timeout(timeout);
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close();
+    }
+  }
+
+  static Future<String> detectBaseUrl({String? configuredUrl, String? savedUrl}) async {
+    final currentOrigin = _currentOrigin;
+    final currentHost = Uri.tryParse(currentOrigin)?.host ?? '';
+    final candidates = <String>[
+      ?savedUrl,
+      ?configuredUrl,
+      'http://localhost:8000',
+      'http://127.0.0.1:8000',
+    ];
+    final checked = <String>{};
+
+    for (final candidate in candidates) {
+      final url = _normalizeBaseUrl(candidate);
+      if (url.isEmpty || !checked.add(url)) continue;
+      await _wake(url);
+      final timeout = const Duration(seconds: 12);
+      final healthy = await _checkHealth(url, timeout: timeout);
+      if (healthy) return url;
+    }
+
+    return '';
+  }
+
+  static Future<void> _wake(String url) async {
+    final client = http.Client();
+    try {
+      await client
+          .get(Uri.parse('$url/v1/wakeup'))
+          .timeout(const Duration(seconds: 5));
+    } catch (_) {
+    } finally {
+      client.close();
+    }
+  }
+
   void setAuthToken(String? token) => _authToken = token;
+
+  void cancelCurrentRequest() {
+    try {
+      _client.close();
+    } catch (_) {}
+    _client = http.Client();
+  }
 
   Map<String, String> get _headers => {
     'Content-Type': 'application/json',
     if (_authToken != null) 'Authorization': 'Bearer $_authToken',
   };
 
-  Future<Map<String, dynamic>> _get(String path) async {
-    final response = await _client.get(
-      Uri.parse('$_baseUrl$path'),
-      headers: _headers,
-    );
-    return jsonDecode(response.body) as Map<String, dynamic>;
+  Map<String, dynamic> _checkResponse(http.Response response) {
+    final body = response.body;
+    Map<String, dynamic> json;
+    try {
+      json = jsonDecode(body) as Map<String, dynamic>;
+    } catch (e) {
+      final status = response.statusCode;
+      debugPrint(
+        '[api] Non-JSON response ($status): ${body.substring(0, body.length.clamp(0, 500))}',
+      );
+      throw ApiException(
+        status,
+        'Server error ($status): ${body.substring(0, body.length.clamp(0, 200))}',
+        <String, dynamic>{'response': body},
+      );
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final msg =
+          json['detail'] as String? ??
+          json['message'] as String? ??
+          json['error'] as String? ??
+          'HTTP ${response.statusCode}';
+      debugPrint('[api] Error response (${response.statusCode}): $msg');
+      throw ApiException(response.statusCode, msg, json);
+    }
+    return json;
+  }
+
+  Future<Map<String, dynamic>> _get(String path, {Duration? timeout}) async {
+    var future = _client.get(Uri.parse('$_baseUrl$path'), headers: _headers);
+    if (timeout != null) future = future.timeout(timeout);
+    return _checkResponse(await future);
   }
 
   Future<Map<String, dynamic>> _post(
     String path,
-    Map<String, dynamic> body,
-  ) async {
-    final response = await _client.post(
+    Map<String, dynamic> body, {
+    Duration? timeout,
+  }) async {
+    var future = _client.post(
       Uri.parse('$_baseUrl$path'),
       headers: _headers,
       body: jsonEncode(body),
     );
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    if (timeout != null) future = future.timeout(timeout);
+    return _checkResponse(await future);
   }
 
-  Future<Map<String, dynamic>> _delete(String path) async {
-    final response = await _client.delete(
-      Uri.parse('$_baseUrl$path'),
-      headers: _headers,
-    );
-    if (response.body.isEmpty) return {};
-    return jsonDecode(response.body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> _delete(String path, {Duration? timeout}) async {
+    var future = _client.delete(Uri.parse('$_baseUrl$path'), headers: _headers);
+    if (timeout != null) future = future.timeout(timeout);
+    final response = await future;
+    if (response.body.isEmpty && response.statusCode == 200) return {};
+    return _checkResponse(response);
   }
 
   Future<Map<String, dynamic>> _put(
     String path,
-    Map<String, dynamic> body,
-  ) async {
-    final response = await _client.put(
+    Map<String, dynamic> body, {
+    Duration? timeout,
+  }) async {
+    var future = _client.put(
       Uri.parse('$_baseUrl$path'),
       headers: _headers,
       body: jsonEncode(body),
     );
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    if (timeout != null) future = future.timeout(timeout);
+    return _checkResponse(await future);
   }
 
   Future<Map<String, dynamic>> _uploadFile(
     String path,
     File file,
-    Map<String, String> fields,
-  ) async {
+    Map<String, String> fields, {
+    Duration? timeout,
+  }) async {
     final request = http.MultipartRequest('POST', Uri.parse('$_baseUrl$path'));
     if (_authToken != null) {
       request.headers['Authorization'] = 'Bearer $_authToken';
     }
     request.fields.addAll(fields);
     request.files.add(await http.MultipartFile.fromPath('file', file.path));
-    final streamedResponse = await request.send();
+    var future = request.send();
+    if (timeout != null) future = future.timeout(timeout);
+    final streamedResponse = await future;
     final response = await http.Response.fromStream(streamedResponse);
-    return jsonDecode(response.body) as Map<String, dynamic>;
+    return _checkResponse(response);
+  }
+
+  Future<Map<String, dynamic>> _multipartPost(
+    String path,
+    Map<String, String> fields,
+    Uint8List fileBytes,
+    String fileName, {
+    Duration? timeout,
+  }) async {
+    final uri = Uri.parse('$_baseUrl$path');
+    final request = http.MultipartRequest('POST', uri);
+    if (_authToken != null) {
+      request.headers['Authorization'] = 'Bearer $_authToken';
+    }
+    request.fields.addAll(fields);
+    request.files.add(
+      http.MultipartFile.fromBytes('file', fileBytes, filename: fileName),
+    );
+    var future = request.send();
+    if (timeout != null) future = future.timeout(timeout);
+    final streamed = await future;
+    final response = await http.Response.fromStream(streamed);
+    return _checkResponse(response);
   }
 
   Future<ChatResponse> chatRequest(ChatRequest request) async {
@@ -165,16 +320,53 @@ class ApiClient {
   Future<ChatResponse> chat({
     required String message,
     String? sessionId,
+    Duration? timeout = const Duration(seconds: 60),
   }) async {
     final resp = await _post('/v1/chat', {
       'message': message,
-      'session_id': ?sessionId,
-    });
+      'session_id': sessionId ?? 'default',
+    }, timeout: timeout);
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
       type: resp['type'] as String? ?? 'chat',
+      complexity: resp['complexity'] as int? ?? 0,
+      complexityLabel: resp['complexity_label'] as String? ?? 'simple',
+      imageBase64: resp['image_data'] as String?,
     );
+  }
+
+  Stream<String> chatStream(String message, {String? sessionId}) async* {
+    final uri = Uri.parse('$_baseUrl/v1/chat/stream');
+    final client = http.Client();
+    try {
+      final request = http.Request('POST', uri)
+        ..headers['Content-Type'] = 'application/json'
+        ..body = jsonEncode({
+          'message': message,
+          'session_id': sessionId ?? 'default',
+        });
+      final streamedResp = await client.send(request);
+      final lines = streamedResp.stream
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+      await for (final line in lines) {
+        if (line.startsWith('data: ')) {
+          final data = line.substring(6);
+          if (data.trim().isEmpty) continue;
+          try {
+            final json = jsonDecode(data) as Map<String, dynamic>;
+            if (json['done'] == true) break;
+            if (json['error'] != null) throw Exception(json['error']);
+            yield json['content'] as String? ?? '';
+          } catch (_) {
+            rethrow;
+          }
+        }
+      }
+    } finally {
+      client.close();
+    }
   }
 
   Future<ChatResponse> chatWithImage({
@@ -182,17 +374,17 @@ class ApiClient {
     required Uint8List imageBytes,
     required String fileName,
     String? sessionId,
+    Duration? timeout,
   }) async {
-    final uri = Uri.parse('$_baseUrl/v1/chat/image');
-    final request = http.MultipartRequest('POST', uri);
-    request.fields['message'] = message;
-    if (sessionId != null) request.fields['session_id'] = sessionId;
-    request.files.add(
-      http.MultipartFile.fromBytes('file', imageBytes, filename: fileName),
+    final fields = <String, String>{'message': message};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    final resp = await _multipartPost(
+      '/v1/chat/image',
+      fields,
+      imageBytes,
+      fileName,
+      timeout: timeout,
     );
-    final streamed = await request.send();
-    final response = await http.Response.fromStream(streamed);
-    final resp = jsonDecode(response.body) as Map<String, dynamic>;
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
@@ -205,17 +397,17 @@ class ApiClient {
     required String fileName,
     String message = '',
     String? sessionId,
+    Duration? timeout,
   }) async {
-    final uri = Uri.parse('$_baseUrl/v1/chat/file');
-    final request = http.MultipartRequest('POST', uri);
-    request.fields['message'] = message;
-    if (sessionId != null) request.fields['session_id'] = sessionId;
-    request.files.add(
-      http.MultipartFile.fromBytes('file', fileBytes, filename: fileName),
+    final fields = <String, String>{'message': message};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    final resp = await _multipartPost(
+      '/v1/chat/file',
+      fields,
+      fileBytes,
+      fileName,
+      timeout: timeout,
     );
-    final streamed = await request.send();
-    final response = await http.Response.fromStream(streamed);
-    final resp = jsonDecode(response.body) as Map<String, dynamic>;
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
@@ -243,8 +435,14 @@ class ApiClient {
     return _post('/api/image/qr-code', body);
   }
 
-  Future<Map<String, dynamic>> redesignImage(File file, String prompt) async {
-    return _uploadFile('/api/image/redesign', file, {'prompt': prompt});
+  Future<Map<String, dynamic>> redesignImage(
+    File file,
+    String prompt, {
+    Duration? timeout,
+  }) async {
+    return _uploadFile('/api/image/redesign', file, {
+      'prompt': prompt,
+    }, timeout: timeout);
   }
 
   Future<ChatResponse> analyzeImage(
@@ -252,6 +450,7 @@ class ApiClient {
     String? sessionId,
     List<Map<String, String>>? messages,
     String? analysisType,
+    Duration? timeout,
   }) async {
     final request = http.MultipartRequest(
       'POST',
@@ -266,7 +465,9 @@ class ApiClient {
       request.fields['messages'] = jsonEncode(messages);
     }
     if (analysisType != null) request.fields['analysis_type'] = analysisType;
-    final streamedResponse = await request.send();
+    var analyzeFuture = request.send();
+    if (timeout != null) analyzeFuture = analyzeFuture.timeout(timeout);
+    final streamedResponse = await analyzeFuture;
     final response = await http.Response.fromStream(streamedResponse);
     return ChatResponse.fromJson(
       jsonDecode(response.body) as Map<String, dynamic>,
@@ -324,6 +525,14 @@ class ApiClient {
 
   Future<Map<String, dynamic>> getConfig() async {
     return _get('/api/config');
+  }
+
+  Future<Map<String, dynamic>> wakeup() async {
+    try {
+      return await _get('/v1/wakeup', timeout: const Duration(seconds: 5));
+    } catch (_) {
+      return {'status': 'ok'};
+    }
   }
 
   Future<Map<String, dynamic>> getMe() => _get('/api/auth/me');

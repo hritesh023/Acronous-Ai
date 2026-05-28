@@ -18,9 +18,41 @@ class ChatProvider extends ChangeNotifier {
   final SpeechService _speech;
   final TtsService _tts;
 
+  bool _isServerConnected = false;
+  bool _serverCheckDone = false;
+  bool _isConnecting = true;
+
+  bool get isServerConnected => _isServerConnected;
+  bool get serverCheckDone => _serverCheckDone;
+  bool get isConnecting => _isConnecting;
+
+  static const _serverNotFound = 'I could not connect to the AI service. Please make sure the server is running and try again.';
+  static const _serverError = 'The AI service encountered an error. Please try again.';
+  static const _genericError = 'Something went wrong. Please try sending your message again.';
+  static const _privateInfoResponse = '';
+  static final RegExp _privateInfoPattern = RegExp(
+    r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b|\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space)\b.{0,120}\b(powers me|is my provider|backend|model|runs me|hosts me)\b|\b(api key|secret|system prompt|internal configuration|backend technology|technical architecture|infrastructure details)\b|\b(as an ai (assistant|model|language model)|i am a (helpful|useful) (ai|assistant)|i am an ai)\b.{0,100}\b(created by|developed by|built by|made by)\b",
+    caseSensitive: false,
+    dotAll: true,
+  );
+
+  static String _sanitizeAssistantText(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return '';
+    if (_privateInfoPattern.hasMatch(trimmed)) {
+      return _privateInfoResponse;
+    }
+    return trimmed
+        .replaceAll(RegExp(r'\[Current date and time:[^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[Web-fetched [^\]]*\]'), '')
+        .trim();
+  }
+
   final List<Conversation> _conversations = [];
   Conversation? _currentConversation;
   bool _isLoading = false;
+  bool _isTakingLong = false;
+  bool get isTakingLong => _isTakingLong;
   ThemeMode _themeMode = ThemeMode.system;
 
   bool _isListening = false;
@@ -55,9 +87,67 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> _init() async {
     await _loadPrefs();
+    final savedUrl = await _prefs.loadServerUrl();
+    if (savedUrl.isNotEmpty) {
+      _api.updateBaseUrl(savedUrl);
+    }
     await _initTts();
+    await _discoverServer(savedUrl: savedUrl);
     _newConversation();
   }
+
+  Future<void> _discoverServer({int retries = 3, String? savedUrl}) async {
+    _isServerConnected = false;
+    _isConnecting = true;
+    _serverCheckDone = false;
+    notifyListeners();
+
+    for (var attempt = 1; attempt <= retries; attempt++) {
+      try {
+        final bestUrl = await ApiClient.detectBaseUrl(
+          configuredUrl: AppConfig.instance.apiBaseUrl,
+          savedUrl: savedUrl,
+        );
+        if (bestUrl.isNotEmpty) {
+          _api.updateBaseUrl(bestUrl);
+          _isServerConnected = true;
+          await _prefs.saveServerUrl(bestUrl);
+          await _api.wakeup();
+          _startKeepAlive();
+          _isConnecting = false;
+          _serverCheckDone = true;
+          notifyListeners();
+          return;
+        }
+        debugPrint('[discover] No server found on attempt $attempt');
+      } catch (e) {
+        debugPrint('[discover] Attempt $attempt failed: $e');
+      }
+
+      if (attempt < retries) {
+        await Future.delayed(Duration(seconds: attempt * 3));
+      }
+    }
+    debugPrint(
+      '[discover] All $retries attempts exhausted — server unreachable',
+    );
+
+    _isServerConnected = false;
+    _isConnecting = false;
+    _serverCheckDone = true;
+    notifyListeners();
+  }
+
+  void _startKeepAlive() {
+    Future.delayed(const Duration(minutes: 4), () async {
+      try {
+        await _api.healthCheck();
+      } catch (_) {}
+      if (_keepAliveActive) _startKeepAlive();
+    });
+  }
+
+  final bool _keepAliveActive = true;
 
   List<Conversation> get conversations => _conversations;
   Conversation? get currentConversation => _currentConversation;
@@ -154,7 +244,15 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  static const String autoDetectPrompt = 'Analyze this image and auto-detect its type. '
+  void cancelGeneration() {
+    _isLoading = false;
+    _isTakingLong = false;
+    _api.cancelCurrentRequest();
+    notifyListeners();
+  }
+
+  static const String autoDetectPrompt =
+      'Analyze this image and auto-detect its type. '
       'If it contains a QR code or barcode, decode its contents. '
       'If it contains text in another language, translate it. '
       'If it appears to be a medical image, analyze for diseases or anomalies. '
@@ -162,7 +260,10 @@ class ChatProvider extends ChangeNotifier {
       'If it is a document or screenshot, extract and summarize the content. '
       'Otherwise, provide a detailed analysis of what you see.';
 
-  Future<void> sendMessage(String text, {List<MessageAttachment>? attachments}) async {
+  Future<void> sendMessage(
+    String text, {
+    List<MessageAttachment>? attachments,
+  }) async {
     final attach = attachments ?? _pendingAttachments;
     if (text.trim().isEmpty && attach.isEmpty) return;
 
@@ -183,21 +284,67 @@ class ChatProvider extends ChangeNotifier {
     if (attachments == null) _pendingAttachments.clear();
     notifyListeners();
 
+    if (!_isServerConnected) {
+      _currentConversation!.messages.add(
+        ChatMessage(role: 'assistant', content: _serverNotFound),
+      );
+      _isLoading = false;
+      _prefs.saveConversations(_conversations).catchError((_) {});
+      notifyListeners();
+      return;
+    }
+
     try {
       final resp = await _callApi(userMsg, text);
       final imageData = resp['image_data'] as String? ?? '';
-      final assistantMsg = ChatMessage(
-        role: 'assistant',
-        content: resp['response'] as String? ?? '',
-        imageData: imageData,
+      final rawContent = _sanitizeAssistantText(
+        resp['response'] as String? ?? '',
       );
-      _currentConversation!.messages.add(assistantMsg);
-    } catch (e) {
-      final msg = _shouldShowConnectionError(e)
-          ? AppStrings.connectionError
-          : e.toString();
+      final respType = resp['type'] as String? ?? 'chat';
+      final isImageGen = _isImageGenRequest(text);
+      if (isImageGen && imageData.isEmpty) {
+        final fallback = rawContent.isNotEmpty
+            ? rawContent
+            : 'The image generation service did not return an image. Please try a different prompt.';
+        _currentConversation!.messages.add(
+          ChatMessage(role: 'assistant', content: fallback),
+        );
+        _isLoading = false;
+        _prefs.saveConversations(_conversations).catchError((_) {});
+        notifyListeners();
+        return;
+      }
+      if (rawContent.isEmpty && imageData.isEmpty) {
+        debugPrint('[chat] Server returned empty response (type=$respType)');
+        _currentConversation!.messages.add(
+          ChatMessage(
+            role: 'assistant',
+            content: respType == 'error'
+                ? 'The AI service had an error processing your request. Please try again.'
+                : _genericError,
+          ),
+        );
+        _isLoading = false;
+        _prefs.saveConversations(_conversations).catchError((_) {});
+        notifyListeners();
+        return;
+      }
+      if (respType == 'error') {
+        debugPrint('[chat] Server returned error response: $rawContent');
+      }
       _currentConversation!.messages.add(
-        ChatMessage(role: 'assistant', content: msg),
+        ChatMessage(
+          role: 'assistant',
+          content: rawContent,
+          imageData: imageData,
+        ),
+      );
+    } catch (e) {
+      debugPrint('[chat] API call failed');
+      _isServerConnected = false;
+      _discoverServer();
+      _currentConversation!.messages.add(
+        ChatMessage(role: 'assistant', content: _serverError),
       );
     }
 
@@ -286,14 +433,6 @@ class ChatProvider extends ChangeNotifier {
     }
     final resp = await _api.chat(message: text, sessionId: sessionId);
     return {'response': resp.content, 'image_data': '', 'type': resp.type};
-  }
-
-  bool _shouldShowConnectionError(Object e) {
-    final msg = e.toString();
-    return msg.contains('Connection refused') ||
-        msg.contains('SocketException') ||
-        msg.contains('Failed to fetch') ||
-        msg.contains('ClientException');
   }
 
   Future<void> pickImageForAnalysis(BuildContext context) async {
@@ -658,6 +797,7 @@ class ChatProvider extends ChangeNotifier {
   void setSystemOverlayEnabled(bool v) {
     _systemOverlayEnabled = v;
     _prefs.saveSystemOverlay(v);
+    _overlayService?.setWantsOverlay(v);
     notifyListeners();
   }
 
@@ -675,6 +815,12 @@ class ChatProvider extends ChangeNotifier {
       _continuousVoiceEnabled = await _prefs.loadContinuousVoice();
       _autoSendVoice = await _prefs.loadAutoSendVoice();
       _backgroundAssistantEnabled = await _prefs.loadBackgroundAssistant();
+      _systemOverlayEnabled = await _prefs.loadSystemOverlay();
+      if (_systemOverlayEnabled) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _overlayService?.setWantsOverlay(true);
+        });
+      }
       final loaded = await _prefs.loadConversations();
       _conversations.addAll(loaded);
       if (_conversations.isNotEmpty) {

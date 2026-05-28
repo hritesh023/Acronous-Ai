@@ -77,6 +77,7 @@ class _VoicePopupState extends State<VoicePopup>
     });
     await _speech.listen(
       onResult: (result) {
+        if (!mounted) return;
         final words = result.recognizedWords;
         setState(() {
           _recognizedText = words;

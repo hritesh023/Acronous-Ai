@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from acronous_llm.agents import AcronousAgentEngine
@@ -30,44 +31,31 @@ agent_engine = AcronousAgentEngine(neural_engine, core_engine)
 
 app = FastAPI(title="Acronous AI API", version="1.0.0")
 
-LLM_ERROR_MSG = "I'm having trouble connecting to my language model backend. Please make sure Ollama is running (check 'ollama serve') or that your API key is configured correctly."
-LLM_EMPTY_MSG = "The AI model returned an empty response. This can happen if the model is still loading, or if there's a configuration issue. Please try again in a moment, or check your LLM backend settings."
-GENERIC_ERROR_MSG = "I'm sorry, I encountered an issue while processing your request. Please try again, and if the problem persists, check that your server is running properly."
+PRIVATE_INFO_MSG = ""
 
 def _safe_error(e: Exception, fallback: str = "") -> str:
-    """Return a safe, user-friendly error message without leaking backend internals."""
     if fallback:
         return fallback
-    
-    err_str = str(e).lower()
-    err_full = str(e)
-    
-    if any(kw in err_str for kw in ["ollama", "connect", "refused", "connection", "no language model", "no model", "backend"]):
-        return LLM_ERROR_MSG
-    
-    if any(kw in err_str for kw in ["empty", "no response", "none", "returned empty"]):
-        return LLM_EMPTY_MSG
-    
-    if any(kw in err_str for kw in ["timeout", "timed out", "too long", "timedout"]):
-        return "The request took too long to process. Please try again with a simpler query, or check if your server and LLM backend are responding."
-    
-    if any(kw in err_str for kw in ["api key", "apikey", "authentication", "unauthorized", "auth"]):
-        return "There's an issue with your API key configuration. Please check that your LLM provider API key is correctly set in the environment variables."
-    
-    if any(kw in err_str for kw in ["not found", "404", "model not found"]):
-        return "The specified AI model was not found. Please check your model configuration and ensure the model is available (e.g., pulled in Ollama or accessible via your API provider)."
-    
-    if any(kw in err_str for kw in ["cuda", "gpu", "memory", "out of memory", "ram"]):
-        return "There was a resource issue. The AI model may need more memory. Please try a smaller model or reduce the query complexity."
-    
-    if any(kw in err_str for kw in ["import", "module", "dependency", "no module"]):
-        return "A required software component is missing. Please ensure all Python dependencies are installed correctly."
-    
-    user_msg = err_full[:150] if len(err_full) > 150 else err_full
-    if user_msg.strip():
-        return f"I encountered an issue: {user_msg}. Please try again, or check your server configuration and LLM backend."
-    
-    return GENERIC_ERROR_MSG
+    return ""
+
+_PRIVATE_DISCLOSURE_PATTERNS = [
+    r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b",
+    r"\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space)\b.{0,120}\b(powers me|is my provider|is the provider|backend|model|runs me|hosts me)\b",
+    r"\b(api key|secret|system prompt|internal configuration|backend technology|technical architecture|infrastructure details)\b",
+    r"\b(as an ai (assistant|model|language model)|i am a (helpful|useful) (ai|assistant)|i am an ai)\b.{0,100}\b(created by|developed by|built by|made by|trained by)\b",
+]
+
+def _sanitize_public_text(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = str(text).strip()
+    for pattern in _PRIVATE_DISCLOSURE_PATTERNS:
+        if re.search(pattern, cleaned, flags=re.IGNORECASE | re.DOTALL):
+            return PRIVATE_INFO_MSG
+    cleaned = re.sub(r"\[Current date and time:[^\]]*\]", "", cleaned)
+    cleaned = re.sub(r"\[Web-fetched [^\]]*\]", "", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
 
 app.add_middleware(
     CORSMiddleware,
@@ -77,46 +65,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_KEEP_ALIVE_URL = os.getenv("ACRONOUS_KEEP_ALIVE_URL", "")
-
-async def _keep_alive_loop():
-    """Self-ping to prevent HF Space idle sleep."""
-    if not _KEEP_ALIVE_URL:
-        return
-    import requests
-    while True:
-        try:
-            await asyncio.to_thread(requests.get, f"{_KEEP_ALIVE_URL}/v1/health", timeout=10)
-        except Exception:
-            pass
-        await asyncio.sleep(240)
-
 @app.on_event("startup")
 async def startup_check():
-    logger.info(f"LLM backend: {config.LLM_BACKEND}, model: {config.LLM_MODEL}")
-    if _KEEP_ALIVE_URL:
-        asyncio.create_task(_keep_alive_loop())
-        logger.info(f"Keep-alive pinging {_KEEP_ALIVE_URL} every 4 minutes")
-    if config.LLM_BACKEND == "ollama":
-        try:
-            import requests
-            resp = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=3)
-            if resp.status_code == 200:
-                models = [m["name"] for m in resp.json().get("models", [])]
-                logger.info(f"Ollama available at {config.OLLAMA_URL}, models: {models}")
-                if config.LLM_MODEL not in models:
-                    logger.warning(f"Configured model '{config.LLM_MODEL}' not found in Ollama. Available: {models}")
-            else:
-                logger.warning(f"Ollama responded with status {resp.status_code}")
-        except Exception as e:
-            logger.warning(f"Ollama not reachable at {config.OLLAMA_URL}: {e}")
-            logger.warning("Make sure Ollama is running. Chat requests will fail until it's available.")
-    elif config.LLM_BACKEND in ("openai", "groq", "together", "anthropic"):
+    logger.info(f"LLM provider: {config.LLM_PROVIDER}, model: {config.LLM_MODEL}")
+    if config.LLM_PROVIDER in ("openai", "groq", "together", "anthropic"):
         if not config.LLM_API_KEY:
-            logger.warning(f"LLM backend set to '{config.LLM_BACKEND}' but no API key configured. Set ACRONOUS_LLM_API_KEY in .env.")
-        logger.info(f"Using cloud LLM provider: {config.LLM_BACKEND}, model: {config.LLM_MODEL}")
-    else:
-        logger.info(f"LLM backend: {config.LLM_BACKEND} (no startup check available)")
+            logger.warning(f"LLM provider set to '{config.LLM_PROVIDER}' but no API key configured. Set ACRONOUS_LLM_API_KEY in .env.")
+        logger.info(f"Using cloud LLM provider: {config.LLM_PROVIDER}, model: {config.LLM_MODEL}")
+
+@app.get("/v1/wakeup")
+async def wakeup():
+    return {"status": "ok"}
 
 class ChatRequest(BaseModel):
     message: str
@@ -135,8 +94,13 @@ class ImageGenRequest(BaseModel):
     prompt: str
     session_id: str = "default"
 
+_FLUTTER_WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build", "web")
+
 @app.get("/")
 async def root():
+    flutter_index = os.path.join(_FLUTTER_WEB_DIR, "index.html")
+    if os.path.isfile(flutter_index):
+        return FileResponse(flutter_index)
     return {"name": "Acronous AI API", "version": "1.0.0"}
 
 @app.get("/v1/health")
@@ -145,13 +109,10 @@ async def health():
 
 @app.get("/v1/health/llm")
 async def health_llm():
-    """Check if LLM backend is available."""
     llm = core_engine.llm
     available = (
-        llm._model_loaded or
-        (hasattr(llm, 'ollama_session') and llm.ollama_session is not None) or
-        (hasattr(llm, '_openai_client') and llm._openai_client is not None) or
-        (hasattr(llm, '_anthropic_client') and llm._anthropic_client is not None)
+        llm._openai_client is not None or
+        llm._anthropic_client is not None
     )
     if available:
         return {"status": "ok"}
@@ -163,16 +124,27 @@ async def health_llm():
 @app.post("/v1/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     try:
-        result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id)
+        try:
+            result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id)
+        except Exception as first_err:
+            logger.info(f"First attempt failed ({first_err}), retrying once...")
+            try:
+                result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry")
+            except Exception:
+                result = {"content": "", "type": "error"}
+
+        if isinstance(result, dict) and result.get("type") == "error" and not result.get("content"):
+            logger.info("Retrying chat after empty error result...")
+            result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry")
+
+        if isinstance(result, dict) and result.get("type") == "error" and not result.get("content"):
+            result = {"content": "", "type": "error"}
 
         if result and isinstance(result, dict):
-            content = result.get("content", "") or ""
+            content = _sanitize_public_text(result.get("content", "") or "")
             resp_type = result.get("type", "chat")
-            image_data = result.get("image_data", "")
-            image_type = result.get("image_type", "")
-            if not content and not image_data and resp_type != "error":
-                resp_type = "error"
-                content = _safe_error(RuntimeError("Empty response from agent"))
+            image_data = result.get("image_data", "") or ""
+            image_type = result.get("image_type", "") or ""
             return ChatResponse(
                 response=content,
                 session_id=req.session_id,
@@ -184,7 +156,7 @@ async def chat(req: ChatRequest):
             )
 
         return ChatResponse(
-            response=str(result) if result else "",
+            response=_sanitize_public_text(str(result) if result else ""),
             session_id=req.session_id,
             type="error",
         )
@@ -205,8 +177,10 @@ async def chat_stream(req: ChatRequest):
 
     def _produce():
         try:
+            chunks = []
             for chunk in agent_engine.process_stream(req.message, req.session_id):
-                q.put(chunk)
+                chunks.append(str(chunk))
+            q.put(_sanitize_public_text("".join(chunks)))
         except Exception as e:
             logger.error(f"Stream produce error: {type(e).__name__}: {e}", exc_info=True)
             q.put(e)
@@ -264,7 +238,7 @@ async def chat_with_image(
             message, str(temp_path), session_id,
         )
         if result and isinstance(result, dict):
-            response_text = result.get("content", "") or ""
+            response_text = _sanitize_public_text(result.get("content", "") or "")
             resp_type = result.get("type", "chat")
             image_data = result.get("image_data", "") or ""
             image_type = result.get("image_type", "") or ""
@@ -306,7 +280,7 @@ async def chat_with_file(
         result = agent_engine.process_with_file(
             message, str(temp_path), session_id,
         )
-        response_text = result.get("content", "")
+        response_text = _sanitize_public_text(result.get("content", ""))
         resp_type = result.get("type", "chat")
         image_data = result.get("image_data", "")
         image_type = result.get("image_type", "")
@@ -344,14 +318,14 @@ async def generate_image_get(prompt: str = "", session_id: str = "default"):
             status_code=500,
         )
     if result.get("type") == "error":
-        content = result.get("content", "")
+        content = _sanitize_public_text(result.get("content", ""))
         return JSONResponse(
             content={"response": content, "session_id": session_id, "type": "error"},
             status_code=500 if not content else 200,
         )
     image_data = result.get("image_data", "")
     if not image_data:
-        content = result.get("content", "")
+        content = _sanitize_public_text(result.get("content", ""))
         return JSONResponse(
             content={"response": content, "session_id": session_id, "type": "error"},
             status_code=500,
@@ -369,7 +343,7 @@ async def generate_image_post(req: ImageGenRequest):
             "image_data": "",
         }
     result = await asyncio.to_thread(agent_engine.generate_image, req.prompt, req.session_id)
-    content = result.get("content", "") or ""
+    content = _sanitize_public_text(result.get("content", "") or "")
     if result.get("type") == "error":
         return {
             "response": content,
@@ -415,7 +389,7 @@ async def edit_image(
             edit_query = "edit this image"
 
         result = agent_engine.modify_image(edit_query, str(temp_path))
-        response_text = result.get("content", "") or ""
+        response_text = _sanitize_public_text(result.get("content", "") or "")
         resp_type = result.get("type", "chat")
         image_data = result.get("image_data", "") or ""
         image_type = result.get("image_type", "") or ""
@@ -459,7 +433,7 @@ async def api_chat(req: ApiChatRequest):
     try:
         result = await asyncio.to_thread(agent_engine.process, req.query, req.session_id)
         if result and isinstance(result, dict):
-            content = result.get("content", "") or ""
+            content = _sanitize_public_text(result.get("content", "") or "")
             resp_type = result.get("type", "chat")
             sources = result.get("sources", [])
             analysis = result.get("analysis")
@@ -473,9 +447,13 @@ async def api_chat(req: ApiChatRequest):
                 "sources": sources,
                 "analysis": analysis,
             }
-        return {"content": str(result) if result else _safe_error(RuntimeError("No response from server")), 
-                "type": "error" if not result else "chat", 
-                "session_id": req.session_id}
+        return {
+            "content": _sanitize_public_text(str(result))
+            if result
+            else _safe_error(RuntimeError("No response from server")),
+            "type": "error" if not result else "chat",
+            "session_id": req.session_id,
+        }
     except Exception as e:
         logger.error(f"Error in API chat for session {req.session_id}: {type(e).__name__}: {e}", exc_info=True)
         return {"content": _safe_error(e), "type": "error", "session_id": req.session_id}
@@ -555,7 +533,7 @@ async def analyze_image(
                 "session_id": session_id,
             }
         return {
-            "content": "I can't analyze this image right now — the vision system isn't loaded.",
+            "content": "",
             "type": "error",
             "session_id": session_id,
         }
@@ -598,7 +576,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         if core_engine.voice is not None:
             text = core_engine.voice.transcribe(str(temp_path))
             return {"text": text}
-        return {"text": "", "error": "Speech recognition isn't available right now."}
+        return {"text": ""}
     except Exception as e:
         logger.error(f"Transcription failed: {e}")
         return {"text": "", "error": "Transcription failed. Please try again."}
@@ -648,25 +626,16 @@ async def process_document(file: UploadFile = File(...)):
 
 @app.get("/api/models/list")
 async def list_models():
-    models = [
-        {"id": "default", "name": "Default", "provider": config.LLM_BACKEND or "auto", "backend": config.LLM_BACKEND or "auto"},
-    ]
-    if config.LLM_BACKEND == "ollama":
-        try:
-            import requests
-            resp = requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=5)
-            if resp.status_code == 200:
-                ollama_models = resp.json().get("models", [])
-                for m in ollama_models:
-                    models.append({
-                        "id": m["name"],
-                        "name": m["name"],
-                        "provider": "ollama",
-                        "backend": "ollama",
-                    })
-        except Exception:
-            pass
-    return {"models": models}
+    return {
+        "models": [
+            {
+                "id": "default",
+                "name": "Acronous AI",
+                "provider": "acronous",
+                "backend": "managed",
+            }
+        ]
+    }
 
 # ── /api/status ─────────────────────────────────────────────────────────────
 
@@ -697,27 +666,11 @@ async def api_config():
 
 @app.post("/api/config/llm")
 async def update_llm_config(body: dict):
-    provider = body.get("provider")
-    api_key = body.get("api_key")
-    model = body.get("model")
-    api_url = body.get("api_url")
-    if provider:
-        os.environ["ACRONOUS_LLM_BACKEND"] = provider
-        config.LLM_BACKEND = provider
-    if api_key:
-        os.environ["ACRONOUS_LLM_API_KEY"] = api_key
-        config.LLM_API_KEY = api_key
-    if model:
-        os.environ["ACRONOUS_LLM_MODEL"] = model
-        config.LLM_MODEL = model
-    if api_url:
-        os.environ["ACRONOUS_LLM_API_URL"] = api_url
-        config.LLM_API_URL = api_url
-    return {"status": "ok"}
+    return {"status": "managed"}
 
 @app.get("/api/config/llm")
 async def get_llm_config():
-    return {"status": "ok"}
+    return {"status": "managed"}
 
 # ── /api/auth/me ────────────────────────────────────────────────────────────
 
@@ -727,7 +680,7 @@ async def auth_me():
         "id": "local",
         "email": "local@acronous.ai",
         "name": "Local User",
-        "provider": "local",
+        "provider": "acronous",
     }
 
 # ── /api/conversations ──────────────────────────────────────────────────────
@@ -817,15 +770,29 @@ async def sync_conversations(body: dict):
 
 # ── Main entry point ────────────────────────────────────────────────────────
 
+# Serve Flutter web static files and SPA fallback (after all API routes)
+@app.get("/{path:path}", include_in_schema=False)
+async def flutter_static(path: str):
+    if path.startswith(("v1/", "api/", "openapi", "docs", "redoc", "health")):
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    file_path = os.path.join(_FLUTTER_WEB_DIR, path)
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    index_path = os.path.join(_FLUTTER_WEB_DIR, "index.html")
+    if os.path.isfile(index_path):
+        return FileResponse(index_path)
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
 if __name__ == "__main__":
     import argparse
+    import os
     import socket
 
     import uvicorn
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "8000")))
     args = parser.parse_args()
 
     port = args.port

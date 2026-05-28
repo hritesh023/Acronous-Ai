@@ -44,17 +44,62 @@ class IntentClassifier(nn.Module):
             embedding = embedding.unsqueeze(0)
         with torch.no_grad():
             logits = self.forward(embedding)
+            nn_logits = logits.clone()
             probs = F.softmax(logits, dim=-1)
             pred = torch.argmax(probs, dim=-1)
+
+        nn_pred, nn_conf = self._predict_nearest(embedding)
+        if nn_conf > float(probs.max()):
+            pred = torch.tensor([nn_pred])
+            probs = F.softmax(nn_logits, dim=-1) * 0.3
+            probs[0, nn_pred] = nn_conf * 0.7 + probs[0, nn_pred] * 0.3
+
         if return_probs:
             return int(pred), probs.squeeze().tolist()
         return int(pred)
 
+    def _predict_nearest(self, embedding):
+        if isinstance(embedding, np.ndarray):
+            embedding = torch.from_numpy(embedding).float()
+        if embedding.dim() == 1:
+            embedding = embedding.unsqueeze(0)
+
+        best_intent = 0
+        best_sim = -1.0
+        for intent_id, ex_list in self.examples.items():
+            if not ex_list:
+                continue
+            ex_tensor = torch.stack([e if isinstance(e, torch.Tensor) else torch.tensor(e) for e in ex_list])
+            if ex_tensor.dim() == 1:
+                ex_tensor = ex_tensor.unsqueeze(0)
+            sims = F.cosine_similarity(embedding, ex_tensor)
+            max_sim = sims.max().item()
+            if max_sim > best_sim:
+                best_sim = max_sim
+                best_intent = intent_id
+
+        confidence = max(0.0, min(1.0, (best_sim + 1.0) / 2.0))
+        return best_intent, confidence
+
     def predict_with_threshold(self, embedding, threshold=0.4):
-        pred, probs = self.predict(embedding, return_probs=True)
-        if max(probs) < threshold:
-            return -1, probs
-        return pred, probs
+        if isinstance(embedding, np.ndarray):
+            embedding = torch.from_numpy(embedding).float()
+        if embedding.dim() == 1:
+            embedding = embedding.unsqueeze(0)
+        with torch.no_grad():
+            logits = self.forward(embedding)
+            probs = F.softmax(logits, dim=-1)
+            pred = torch.argmax(probs, dim=-1)
+
+        nn_pred, nn_probs = self._predict_nearest(embedding)
+        if nn_probs > float(probs.max()):
+            pred = nn_pred
+            probs = F.one_hot(torch.tensor(pred), num_classes=self.num_intents).float() * nn_probs
+
+        confidence = float(probs.max())
+        if confidence < threshold:
+            return -1, probs.squeeze().tolist()
+        return int(pred), probs.squeeze().tolist()
 
     def add_example(self, embedding, intent_id):
         if 0 <= intent_id < self.num_intents:

@@ -58,7 +58,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 _SwitchTile(
                   icon: Icons.mic_rounded,
                   title: 'Always-on Listening',
-                  subtitle: 'Continuously listen for voice commands like Siri/Google Assistant',
+                  subtitle: 'Continuously listen for voice commands and process them automatically',
                   value: chat.continuousVoiceSearchEnabled,
                   onChanged: (v) => chat.setContinuousVoiceSearchEnabled(v),
                   cs: cs,
@@ -78,8 +78,8 @@ class _SettingsPageState extends State<SettingsPage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'Voice commands like "call John", "open google.com", '
-                            '"send message to Mom" will be processed automatically',
+                            'Voice commands like "call John", "send a message", '
+                            'or "open a website" will be processed automatically',
                             style: TextStyle(
                               fontSize: AppDimens.fontSizeMD,
                               color: cs.onSurfaceVariant,

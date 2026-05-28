@@ -66,7 +66,6 @@ class _SidebarWidgetState extends State<SidebarWidget> {
 
     return Container(
       width: 280,
-      height: double.infinity,
       color: bgColor,
       child: Column(
         children: [
@@ -93,7 +92,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
               'assets/logo.png',
               width: 20,
               height: 20,
-              errorBuilder: (_, __, ___) => Container(
+              errorBuilder: (_, _, _) => Container(
                 width: 20,
                 height: 20,
                 decoration: BoxDecoration(

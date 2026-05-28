@@ -5,6 +5,21 @@ class AppConfig {
 
   static final AppConfig instance = AppConfig._();
 
+  static const String remoteServerUrl =
+      'https://acronous-ai.onrender.com';
+
+  bool get isWeb {
+    try {
+      return !Platform.isAndroid &&
+          !Platform.isIOS &&
+          !Platform.isWindows &&
+          !Platform.isMacOS &&
+          !Platform.isLinux;
+    } catch (_) {
+      return true;
+    }
+  }
+
   late final String apiBaseUrl;
   late final Duration apiChatTimeout;
   late final Duration apiImageTimeout;
@@ -43,7 +58,13 @@ class AppConfig {
   late final String settingsRoute;
 
   void load() {
-    apiBaseUrl = _env('API_BASE_URL', 'http://localhost:8000');
+    apiBaseUrl = _env(
+      'API_BASE_URL',
+      const String.fromEnvironment(
+        'API_BASE_URL',
+        defaultValue: remoteServerUrl,
+      ),
+    );
     apiChatTimeout = Duration(seconds: _envInt('API_CHAT_TIMEOUT', 0));
     apiImageTimeout = Duration(seconds: _envInt('API_IMAGE_TIMEOUT', 0));
     apiFileTimeout = Duration(seconds: _envInt('API_FILE_TIMEOUT', 0));

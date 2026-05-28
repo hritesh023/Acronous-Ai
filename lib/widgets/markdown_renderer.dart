@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 class MarkdownRenderer extends StatelessWidget {
   final String content;
@@ -7,10 +8,14 @@ class MarkdownRenderer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final html = _parseMarkdown(content);
+    final cs = Theme.of(context).colorScheme;
+    final nodes = _parseMarkdown(content);
     return SizedBox(
       width: double.infinity,
-      child: _buildWidgetTree(html, context),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: nodes.map((node) => _buildNode(node, context, cs)).toList(),
+      ),
     );
   }
 
@@ -81,8 +86,7 @@ class MarkdownRenderer extends StatelessWidget {
           if (current != null) nodes.add(current);
           current = _MdNode(type: 'unordered_list', text: '');
         }
-        current!.text +=
-            '• ${line.replaceFirst(RegExp(r'^[-*]\s'), '')}\n';
+        current!.text += '• ${line.replaceFirst(RegExp(r'^[-*]\s'), '')}\n';
         continue;
       }
       if (RegExp(r'^\d+\.\s').hasMatch(line)) {
@@ -127,18 +131,7 @@ class MarkdownRenderer extends StatelessWidget {
     return nodes;
   }
 
-  Widget _buildWidgetTree(List<_MdNode> nodes, BuildContext context) {
-    final children = <Widget>[];
-    for (final node in nodes) {
-      children.add(_buildNode(node, context));
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: children,
-    );
-  }
-
-  Widget _buildNode(_MdNode node, BuildContext context) {
+  Widget _buildNode(_MdNode node, BuildContext context, ColorScheme cs) {
     switch (node.type) {
       case 'h1':
         return Padding(
@@ -147,6 +140,7 @@ class MarkdownRenderer extends StatelessWidget {
             _applyInlineFormatting(node.text),
             style: Theme.of(context).textTheme.headlineSmall?.copyWith(
               fontWeight: FontWeight.w700,
+              color: cs.onSurface,
             ),
           ),
         );
@@ -157,6 +151,7 @@ class MarkdownRenderer extends StatelessWidget {
             _applyInlineFormatting(node.text),
             style: Theme.of(context).textTheme.titleLarge?.copyWith(
               fontWeight: FontWeight.w700,
+              color: cs.onSurface,
             ),
           ),
         );
@@ -167,102 +162,142 @@ class MarkdownRenderer extends StatelessWidget {
             _applyInlineFormatting(node.text),
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
               fontWeight: FontWeight.w600,
+              color: cs.onSurface,
             ),
           ),
         );
       case 'code_block':
-        return Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: const Color(0xFF12122A),
-            border: Border.all(color: const Color(0x14FFFFFF)),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (node.lang.isNotEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1C1C35),
-                    border: const Border(
-                      bottom: BorderSide(color: Color(0x14FFFFFF)),
-                    ),
-                  ),
-                  child: Text(
-                    node.lang,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF505070),
-                      letterSpacing: 0.5,
-                    ),
-                  ),
-                ),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.all(14),
-                child: SelectableText(
-                  node.text,
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                    color: Color(0xFFA78BFA),
-                    height: 1.55,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
+        return _buildCodeBlock(node, context, cs);
       case 'blockquote':
         return Container(
           width: double.infinity,
           margin: const EdgeInsets.symmetric(vertical: 8),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0x1E7C3AED),
-            border: const Border(
-              left: BorderSide(color: Color(0xFF7C3AED), width: 3),
+            color: cs.primary.withValues(alpha: 0.08),
+            border: Border(
+              left: BorderSide(color: cs.primary, width: 3),
             ),
             borderRadius: BorderRadius.circular(4),
           ),
           child: Text(
             _applyInlineFormatting(node.text.trim()),
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: const Color(0xFFB0B0C8),
+              color: cs.onSurfaceVariant,
             ),
           ),
         );
       case 'unordered_list':
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
-          child: _buildListItems(node.text, context),
+          child: _buildListItems(node.text, context, cs),
         );
       case 'ordered_list':
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
-          child: _buildListItems(node.text, context),
+          child: _buildListItems(node.text, context, cs),
         );
       case 'table':
-        return _buildTable(node.text, context);
+        return _buildTable(node.text, context, cs);
       default:
         return Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: SelectableText.rich(
             TextSpan(
-              style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0)),
-              children: _buildInlineSpans(node.text),
+              style: TextStyle(
+                fontSize: 15,
+                height: 1.65,
+                color: cs.onSurface,
+              ),
+              children: _buildInlineSpans(node.text, cs),
             ),
           ),
         );
     }
   }
 
-  Widget _buildListItems(String text, BuildContext context) {
+  Widget _buildCodeBlock(_MdNode node, BuildContext context, ColorScheme cs) {
+    final isDark = cs.brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF12122A) : const Color(0xFFF0EEF8);
+    final headerColor = isDark ? const Color(0xFF1C1C35) : const Color(0xFFE4E1F2);
+    final langColor = isDark ? const Color(0xFF505070) : const Color(0xFF6B6890);
+    final codeColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.3)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: headerColor,
+              border: Border(
+                bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.2)),
+              ),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  node.lang.isNotEmpty ? node.lang : 'code',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: langColor,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: node.text));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text('Code copied'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    );
+                  },
+                  child: Icon(
+                    Icons.content_copy_rounded,
+                    size: 14,
+                    color: langColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.all(14),
+            child: SelectableText(
+              node.text,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: codeColor,
+                height: 1.55,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildListItems(String text, BuildContext context, ColorScheme cs) {
     final items = text.split('\n').where((l) => l.trim().isNotEmpty).toList();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,15 +315,15 @@ class MarkdownRenderer extends StatelessWidget {
                 child: Text(
                   prefix,
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: const Color(0xFF707090),
+                    color: cs.onSurfaceVariant,
                   ),
                 ),
               ),
               Expanded(
                 child: RichText(
                   text: TextSpan(
-                    style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0)),
-                    children: _buildInlineSpans(content),
+                    style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurface),
+                    children: _buildInlineSpans(content, cs),
                   ),
                 ),
               ),
@@ -299,7 +334,7 @@ class MarkdownRenderer extends StatelessWidget {
     );
   }
 
-  Widget _buildTable(String text, BuildContext context) {
+  Widget _buildTable(String text, BuildContext context, ColorScheme cs) {
     final rows = text.split('\n').where((l) => l.trim().isNotEmpty).toList();
     if (rows.isEmpty) return const SizedBox.shrink();
 
@@ -320,9 +355,7 @@ class MarkdownRenderer extends StatelessWidget {
                     style: TextStyle(
                       fontWeight: i == 0 ? FontWeight.w600 : FontWeight.normal,
                       fontSize: 13,
-                      color: i == 0
-                          ? const Color(0xFFB0B0C8)
-                          : const Color(0xFFE8E8F0),
+                      color: i == 0 ? cs.onSurfaceVariant : cs.onSurface,
                     ),
                   ),
                 ))
@@ -334,14 +367,14 @@ class MarkdownRenderer extends StatelessWidget {
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 12),
       decoration: BoxDecoration(
-        border: Border.all(color: const Color(0x14FFFFFF)),
+        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.3)),
         borderRadius: BorderRadius.circular(10),
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Table(
           border: TableBorder(
-            horizontalInside: BorderSide(color: const Color(0x14FFFFFF)),
+            horizontalInside: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.2)),
           ),
           columnWidths: _calculateColumnWidths(rows),
           children: tableRows,
@@ -375,51 +408,56 @@ class MarkdownRenderer extends StatelessWidget {
         .replaceAllMapped(RegExp(r'\[([^\]]+)\]\([^)]+\)'), (m) => m.group(1)!);
   }
 
-  List<InlineSpan> _buildInlineSpans(String text) {
+  List<InlineSpan> _buildInlineSpans(String text, ColorScheme cs) {
     final spans = <InlineSpan>[];
     final regex = RegExp(
-        r'(\*\*\*(.*?)\*\*\*|\*\*(.*?)\*\*|\*(.*?)\*|~~(.*?)~~|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)|!\[([^\]]*)\]\(([^)]+)\))');
+        r'(\*\*\*(.*?)\*\*\*|\*\*(.*?)\*\*|\*(.*?)\*|~~(.*?)~~|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\))');
     int lastEnd = 0;
 
     for (final match in regex.allMatches(text)) {
       if (match.start > lastEnd) {
         spans.add(TextSpan(
           text: text.substring(lastEnd, match.start),
-          style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0)),
+          style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurface),
         ));
       }
 
       if (match.group(1)?.startsWith('***') == true) {
         spans.add(TextSpan(
           text: match.group(2),
-          style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0), fontWeight: FontWeight.w700, fontStyle: FontStyle.italic),
+          style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurface, fontWeight: FontWeight.w700, fontStyle: FontStyle.italic),
         ));
       } else if (match.group(1)?.startsWith('**') == true) {
         spans.add(TextSpan(
           text: match.group(3),
-          style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0), fontWeight: FontWeight.w700),
+          style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurface, fontWeight: FontWeight.w700),
         ));
       } else if (match.group(1)?.startsWith('*') == true) {
         spans.add(TextSpan(
           text: match.group(4),
-          style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0), fontStyle: FontStyle.italic),
+          style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurface, fontStyle: FontStyle.italic),
         ));
       } else if (match.group(1)?.startsWith('~~') == true) {
         spans.add(TextSpan(
           text: match.group(5),
-          style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFF707090), decoration: TextDecoration.lineThrough),
+          style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurfaceVariant, decoration: TextDecoration.lineThrough),
         ));
       } else if (match.group(1)?.startsWith('`') == true) {
+        final isDark = cs.brightness == Brightness.dark;
         spans.add(WidgetSpan(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: const Color(0xFF12122A),
+              color: isDark ? const Color(0xFF12122A) : const Color(0xFFF0EEF8),
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
               match.group(6)!,
-              style: const TextStyle(fontSize: 13, color: Color(0xFFA78BFA), fontFamily: 'monospace'),
+              style: TextStyle(
+                fontSize: 13,
+                color: isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9),
+                fontFamily: 'monospace',
+              ),
             ),
           ),
         ));
@@ -429,7 +467,7 @@ class MarkdownRenderer extends StatelessWidget {
             onTap: () {},
             child: Text(
               match.group(7)!,
-              style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFF7C3AED), decoration: TextDecoration.underline),
+              style: TextStyle(fontSize: 15, height: 1.65, color: cs.primary, decoration: TextDecoration.underline),
             ),
           ),
         ));
@@ -441,7 +479,7 @@ class MarkdownRenderer extends StatelessWidget {
     if (lastEnd < text.length) {
       spans.add(TextSpan(
         text: text.substring(lastEnd),
-        style: const TextStyle(fontSize: 15, height: 1.65, color: Color(0xFFE8E8F0)),
+        style: TextStyle(fontSize: 15, height: 1.65, color: cs.onSurface),
       ));
     }
 

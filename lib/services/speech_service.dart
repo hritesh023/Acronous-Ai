@@ -9,6 +9,7 @@ class SpeechService {
       : _speech = speech ?? stt.SpeechToText();
 
   bool get isInitialized => _isInitialized;
+  bool get isListening => _speech.isListening;
 
   Future<bool> initialize({
     void Function(String status)? onStatus,
@@ -26,6 +27,9 @@ class SpeechService {
   Future<void> startListening({
     required void Function(dynamic result) onResult,
   }) async {
+    if (_speech.isListening) {
+      await _speech.stop();
+    }
     final config = AppConfig.instance;
     await _speech.listen(
       onResult: onResult,
@@ -39,10 +43,14 @@ class SpeechService {
   }
 
   void stopListening() {
-    _speech.stop();
+    if (_speech.isListening) {
+      _speech.stop();
+    }
   }
 
   void dispose() {
-    _speech.stop();
+    if (_speech.isListening) {
+      _speech.stop();
+    }
   }
 }

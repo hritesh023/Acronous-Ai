@@ -77,8 +77,8 @@ class VisionEngine:
                 ]
                 results["top_label"] = labels[0]
                 results["top_confidence"] = round(top_probs[0][0].item(), 4)
-            except Exception as e:
-                results["classification_error"] = str(e)
+            except Exception:
+                results["classification_error"] = "classification failed"
         ocr_text = self._extract_text(image)
         if ocr_text:
             results["ocr_text"] = ocr_text

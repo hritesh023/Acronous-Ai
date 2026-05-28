@@ -1,9 +1,8 @@
 import io
 import json
-import math
 import os
 from pathlib import Path
-from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps
 import torch
 import numpy as np
 
@@ -27,100 +26,63 @@ class ImageGenerator:
         self._init_pipeline()
 
     def _init_pipeline(self):
-        if not self._diffusers_model:
-            return
-
-        try:
-            from diffusers import StableDiffusionPipeline
-        except Exception:
-            return
-
-        try:
-            is_cuda = self.config.DEVICE == "cuda"
-            dtype = torch.float16 if is_cuda else torch.float32
-
-            self._pipe = StableDiffusionPipeline.from_pretrained(
-                self._diffusers_model, torch_dtype=dtype, safety_checker=None
-            )
-
-            try:
-                from diffusers import DPMSolverMultistepScheduler
-                self._pipe.scheduler = DPMSolverMultistepScheduler.from_config(
-                    self._pipe.scheduler.config,
-                )
-            except Exception:
-                pass
-
-            self._pipe = self._pipe.to(self.config.DEVICE)
-
-            if hasattr(self._pipe, "enable_attention_slicing"):
-                self._pipe.enable_attention_slicing()
-            if hasattr(self._pipe, "vae") and hasattr(self._pipe.vae, "enable_slicing"):
-                self._pipe.vae.enable_slicing()
-            if is_cuda:
-                try:
-                    self._pipe.enable_xformers_memory_efficient_attention()
-                except Exception:
-                    pass
-                try:
-                    self._pipe.unet.to(memory_format=torch.channels_last)
-                except Exception:
-                    pass
-
-            self._is_available = True
-        except Exception:
-            return
-
-        try:
-            from diffusers import StableDiffusionInpaintPipeline
-            self._inpaint_pipe = StableDiffusionInpaintPipeline(
-                vae=self._pipe.vae,
-                text_encoder=self._pipe.text_encoder,
-                tokenizer=self._pipe.tokenizer,
-                unet=self._pipe.unet,
-                scheduler=self._pipe.scheduler,
-                safety_checker=None,
-                feature_extractor=self._pipe.feature_extractor,
-            )
-        except Exception:
-            pass
+        pass
 
     def is_available(self):
         return self._is_available
 
     def _get_active_provider(self):
         if self._provider != "auto":
-            return self._provider
+            provider = self._provider
+        else:
+            provider = None
 
-        if self._is_available:
-            return "diffusers"
+        if provider == "diffusers":
+            provider = None
+        elif provider == "huggingface" and not (self._hf_api_token and self._hf_model_id):
+            provider = None
+        elif provider == "openai" and not self._openai_api_key:
+            provider = None
+        elif provider == "replicate" and not self._replicate_api_token:
+            provider = None
+
+        if provider:
+            return provider
+
         if self._hf_api_token and self._hf_model_id:
             return "huggingface"
-        if self._openai_api_key and os.getenv("ACRONOUS_LLM_PROVIDER", "").lower() == "openai":
+        if self._openai_api_key:
             return "openai"
         if self._replicate_api_token:
             return "replicate"
 
         return None
 
+    def _generate_negative_prompt(self, prompt, image_type="realistic"):
+        try:
+            if self._llm:
+                neg_prompt_text = f"""Based on this image request, generate a negative prompt (what to avoid) for image generation. 
+Return ONLY a comma-separated list of undesired elements.
+
+Request: {prompt}
+Image type: {image_type}
+
+Negative prompt:"""
+                resp = self._llm.generate(
+                    neg_prompt_text,
+                    system_prompt="You generate negative prompts for image generation. Return only a comma-separated list."
+                )
+                if resp and resp.strip():
+                    return resp.strip().strip('"').strip("'")
+        except Exception:
+            pass
+        return ""
+
     def _get_default_negative_prompt(self):
-        return os.getenv(
-            "ACRONOUS_NEGATIVE_PROMPT",
-            "painting, cartoon, anime, illustration, sketch, drawing, "
-            "oil painting, acrylic, canvas texture, brush strokes, "
-            "unfinished, low resolution, worst quality, low quality, "
-            "blurry, ugly, deformed, distorted, bad anatomy, "
-            "watermark, text, extra limbs, extra fingers, fused fingers, "
-            "bad proportions, unnatural lighting, oversaturated, "
-            "low contrast, noisy, grainy, soft, hazy, duplicate"
-        )
+        return os.getenv("ACRONOUS_NEGATIVE_PROMPT", "bad quality, blurry, low resolution, distorted, ugly, deformed, watermark, text, signature, extra limbs, bad anatomy, cropped, worst quality, low quality, normal quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, out of frame, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, bad proportions, gross proportions, bad hands, missing fingers, extra digit, fewer digits, bad feet")
 
     def _get_simple_negative_prompt(self):
-        return os.getenv(
-            "ACRONOUS_NEGATIVE_PROMPT_SIMPLE",
-            "painting, cartoon, anime, illustration, sketch, drawing, "
-            "worst quality, low quality, blurry, ugly, deformed, unfinished, low detail"
-        )
+        return os.getenv("ACRONOUS_NEGATIVE_PROMPT_SIMPLE", "")
 
     def generate(self, prompt, negative_prompt=None, steps=None, guidance_scale=None, height=None, width=None, image_type="realistic"):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
@@ -129,29 +91,32 @@ class ImageGenerator:
         width = width if width is not None else self.config.IMAGE_WIDTH
         provider = self._get_active_provider()
 
+        if negative_prompt is None:
+            negative_prompt = self._generate_negative_prompt(prompt, image_type)
+
         if provider == "diffusers":
             if not self._is_available:
-                return None, " "
+                return None, self._generate_error_message("diffusers model not available", prompt)
             return self._generate_diffusers(prompt, negative_prompt, steps, guidance_scale, height, width, image_type)
 
         if provider == "huggingface":
             if not self._hf_api_token:
-                return None, " "
+                return None, self._generate_error_message("HuggingFace API token not configured", prompt)
             if not self._hf_model_id:
-                return None, " "
+                return None, self._generate_error_message("HuggingFace model ID not configured", prompt)
             return self._generate_hf_api(prompt, negative_prompt, steps, guidance_scale, height, width, image_type)
 
         if provider == "openai":
             if not self._openai_api_key:
-                return None, " "
+                return None, self._generate_error_message("OpenAI API key not configured", prompt)
             return self._generate_openai_image(prompt)
 
         if provider == "replicate":
             if not self._replicate_api_token:
-                return None, " "
+                return None, self._generate_error_message("Replicate API token not configured", prompt)
             return self._generate_replicate(prompt, negative_prompt, steps, guidance_scale, image_type)
 
-        return self._generate_pil_fallback(prompt, width, height)
+        return None, self._generate_error_message("no image provider available", prompt)
 
     def redesign(self, image, prompt, strength=0.7, steps=None, guidance_scale=None):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
@@ -160,22 +125,39 @@ class ImageGenerator:
 
         if provider == "diffusers":
             if not self._is_available:
-                return None, " "
+                return None, self._generate_error_message("diffusers model not available for redesign", prompt)
             return self._redesign_diffusers(image, prompt, strength, steps, guidance_scale)
 
         if provider == "huggingface":
             if not self._hf_api_token:
-                return None, " "
+                return None, self._generate_error_message("HuggingFace API token not configured for redesign", prompt)
             if not self._hf_model_id:
-                return None, " "
+                return None, self._generate_error_message("HuggingFace model ID not configured for redesign", prompt)
             return self._redesign_hf_api(image, prompt)
 
         if provider == "openai":
             if not self._openai_api_key:
-                return None, " "
+                return None, self._generate_error_message("OpenAI API key not configured for redesign", prompt)
             return self._redesign_openai_image(image, prompt)
 
-        return self._generate_pil_fallback(prompt, image.width if hasattr(image, 'width') else 768, image.height if hasattr(image, 'height') else 768)
+        return None, self._generate_error_message("no image provider available for redesign", prompt)
+
+    def _generate_error_message(self, error_type, prompt):
+        if self._llm:
+            try:
+                error_prompt = f"""I tried to generate an image for the user but the image generation service is not available.
+
+User's request: "{prompt}"
+
+Explain that image generation capabilities are not currently available. Do not suggest retrying or trying again. Do not mention specific backends, models, providers, or technical details. Be honest that the image generation service needs to be set up or reconfigured. Keep it to 2-3 sentences and do not use markdown."""
+                response = self._llm.generate(
+                    error_prompt,
+                    system_prompt="You are a helpful AI assistant. When image generation is unavailable, be honest and do not suggest retrying."
+                )
+                return response.strip().strip('"').strip("'").strip()
+            except Exception:
+                pass
+        return ""
 
     def inpaint(self, image, mask, prompt, negative_prompt=None, strength=0.85, steps=None, guidance_scale=None):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
@@ -187,7 +169,7 @@ class ImageGenerator:
 
         if provider == "diffusers":
             if not self._is_available:
-                return None, " "
+                return None, self._generate_error_message("diffusers model not available for inpainting", prompt)
             return self._inpaint_diffusers(image, mask, prompt, negative_prompt, strength, steps, guidance_scale)
 
         if provider in ("huggingface", "openai", "replicate"):
@@ -218,7 +200,7 @@ class ImageGenerator:
             mask_image = mask.resize(target_size, Image.LANCZOS)
 
             if negative_prompt is None:
-                negative_prompt = self._get_default_negative_prompt()
+                negative_prompt = self._generate_negative_prompt(prompt)
 
             result = self._inpaint_pipe(
                 prompt=prompt,
@@ -236,8 +218,8 @@ class ImageGenerator:
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             return buf.getvalue(), None
-        except Exception:
-            return None, " "
+        except Exception as e:
+            return None, self._generate_error_message(f"inpainting failed: {str(e)}", prompt)
 
     def _inpaint_fallback(self, image, mask, prompt, strength=0.85, steps=None, guidance_scale=None):
         try:
@@ -253,8 +235,8 @@ class ImageGenerator:
             buf = io.BytesIO()
             result.save(buf, format="PNG")
             return buf.getvalue(), None
-        except Exception:
-            return None, " "
+        except Exception as e:
+            return None, self._generate_error_message(f"inpaint fallback failed: {str(e)}", prompt)
 
     def _generate_mask_from_description(self, image, description):
         w, h = image.size
@@ -410,11 +392,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
         width = width if width is not None else self.config.IMAGE_WIDTH
         try:
             if negative_prompt is None:
-                negative_prompt = (
-                    self._get_simple_negative_prompt()
-                    if image_type != "realistic"
-                    else self._get_default_negative_prompt()
-                )
+                negative_prompt = self._generate_negative_prompt(prompt, image_type)
 
             result = self._pipe(
                 prompt,
@@ -431,8 +409,8 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             return buf.getvalue(), None
-        except Exception:
-            return None, " "
+        except Exception as e:
+            return None, self._generate_error_message(f"diffusers generation failed: {str(e)}", prompt)
 
     @torch.inference_mode()
     def _redesign_diffusers(self, image, prompt, strength=0.7, steps=None, guidance_scale=None):
@@ -459,48 +437,82 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             return buf.getvalue(), None
-        except Exception:
-            return None, " "
+        except Exception as e:
+            return None, self._generate_error_message(f"diffusers redesign failed: {str(e)}", prompt)
 
     def _generate_hf_api(self, prompt, negative_prompt=None, steps=None, guidance_scale=None, height=None, width=None, image_type="realistic"):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
         guidance_scale = guidance_scale if guidance_scale is not None else self.config.IMAGE_GUIDANCE_SCALE
         height = height if height is not None else self.config.IMAGE_HEIGHT
         width = width if width is not None else self.config.IMAGE_WIDTH
-        try:
-            import requests
-            if negative_prompt is None:
-                negative_prompt = (
-                    self._get_simple_negative_prompt()
-                    if image_type != "realistic"
-                    else self._get_default_negative_prompt()
-                )
-            payload = {
-                "inputs": prompt,
-                "parameters": {
-                    "negative_prompt": negative_prompt,
-                    "num_inference_steps": steps,
-                    "guidance_scale": guidance_scale,
+        import time, requests
+        max_retries = 3
+        retry_delay = 10
+        last_error = ""
+        for attempt in range(max_retries):
+            try:
+                if negative_prompt is None:
+                    negative_prompt = self._generate_negative_prompt(prompt, image_type)
+                payload = {
+                    "inputs": prompt,
+                    "parameters": {
+                        "negative_prompt": negative_prompt or "bad quality, blurry, low resolution, distorted, ugly, deformed, watermark",
+                        "num_inference_steps": steps,
+                        "guidance_scale": guidance_scale,
+                        "width": width,
+                        "height": height,
+                    }
                 }
-            }
-            headers = {"Authorization": f"Bearer {self._hf_api_token}"}
-            resp = requests.post(
-                f"https://api-inference.huggingface.co/models/{self._hf_model_id}",
-                headers=headers, json=payload
-            )
-            if resp.status_code == 200:
-                content_type = resp.headers.get("content-type", "")
-                if "image" in content_type or len(resp.content) > 1000:
-                    img = Image.open(io.BytesIO(resp.content))
-                    img = self._postprocess_image(img, image_type)
-                    if LOGO_PATH.exists():
-                        img = self._add_watermark(img)
-                    buf = io.BytesIO()
-                    img.save(buf, format="PNG")
-                    return buf.getvalue(), None
-            return None, " "
-        except Exception:
-            return None, " "
+                headers = {"Authorization": f"Bearer {self._hf_api_token}"}
+                resp = requests.post(
+                    f"https://api-inference.huggingface.co/models/{self._hf_model_id}",
+                    headers=headers, json=payload,
+                    timeout=(30, 180)
+                )
+                if resp.status_code == 200:
+                    content_type = resp.headers.get("content-type", "")
+                    if "image" in content_type or len(resp.content) > 1000:
+                        img = Image.open(io.BytesIO(resp.content))
+                        img = self._postprocess_image(img, image_type)
+                        if LOGO_PATH.exists():
+                            img = self._add_watermark(img)
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        return buf.getvalue(), None
+                    error_json = resp.json()
+                    if "loading" in str(error_json).lower() and attempt < max_retries - 1:
+                        last_error = "Model is still loading, retrying..."
+                        time.sleep(retry_delay)
+                        continue
+                elif resp.status_code == 503 and attempt < max_retries - 1:
+                    try:
+                        error_data = resp.json()
+                        estimated = error_data.get("estimated_time", 0)
+                        wait_time = min(int(estimated) + 5, 60) if estimated else retry_delay
+                    except Exception:
+                        wait_time = retry_delay
+                    last_error = f"HuggingFace model is loading (attempt {attempt+1}/{max_retries})"
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    last_error = f"HuggingFace API returned status {resp.status_code}"
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                    return None, self._generate_error_message(last_error, prompt)
+            except requests.exceptions.Timeout:
+                last_error = "HuggingFace API timed out (model may be loading on first request)"
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return None, self._generate_error_message(last_error, prompt)
+            except Exception as e:
+                last_error = f"HuggingFace API generation failed: {str(e)}"
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return None, self._generate_error_message(last_error, prompt)
+        return None, self._generate_error_message(last_error, prompt)
 
     def _redesign_hf_api(self, image, prompt):
         try:
@@ -515,7 +527,8 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             files = {"image": buf.getvalue()}
             resp = requests.post(
                 f"https://api-inference.huggingface.co/models/{self._hf_model_id}",
-                headers=headers, data=payload, files=files
+                headers=headers, data=payload, files=files,
+                timeout=(30, 180)
             )
             if resp.status_code == 200:
                 img = Image.open(io.BytesIO(resp.content))
@@ -525,14 +538,14 @@ Return ONLY valid JSON, no markdown, no code fences:"""
                 out_buf = io.BytesIO()
                 img.save(out_buf, format="PNG")
                 return out_buf.getvalue(), None
-            return None, " "
-        except Exception:
-            return None, " "
+            return None, self._generate_error_message("HuggingFace API redesign returned non-200 status", prompt)
+        except Exception as e:
+            return None, self._generate_error_message(f"HuggingFace API redesign failed: {str(e)}", prompt)
 
     def _generate_openai_image(self, prompt):
         model = os.getenv("ACRONOUS_OPENAI_IMAGE_MODEL")
         if not model:
-            return None, " "
+            return None, self._generate_error_message("OpenAI image model not configured", prompt)
 
         try:
             from openai import OpenAI
@@ -553,13 +566,13 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             out_buf = io.BytesIO()
             img.save(out_buf, format="PNG")
             return out_buf.getvalue(), None
-        except Exception:
-            return None, " "
+        except Exception as e:
+            return None, self._generate_error_message(f"OpenAI image generation failed: {str(e)}", prompt)
 
     def _redesign_openai_image(self, image, prompt):
         model = os.getenv("ACRONOUS_OPENAI_IMAGE_MODEL")
         if not model:
-            return None, " "
+            return None, self._generate_error_message("OpenAI image model not configured for redesign", prompt)
 
         try:
             from openai import OpenAI
@@ -596,8 +609,8 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             out_buf = io.BytesIO()
             img.save(out_buf, format="PNG")
             return out_buf.getvalue(), None
-        except Exception:
-            return None, " "
+        except Exception as e:
+            return None, self._generate_error_message(f"OpenAI image redesign failed: {str(e)}", prompt)
 
     def _generate_replicate(self, prompt, negative_prompt=None, steps=None, guidance_scale=None, image_type="realistic"):
         steps = steps if steps is not None else self.config.IMAGE_STEPS
@@ -605,11 +618,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
         try:
             import replicate
             if negative_prompt is None:
-                negative_prompt = (
-                    self._get_simple_negative_prompt()
-                    if image_type != "realistic"
-                    else self._get_default_negative_prompt()
-                )
+                negative_prompt = self._generate_negative_prompt(prompt, image_type)
             client = replicate.Client(api_token=self._replicate_api_token)
             model = os.getenv("ACRONOUS_REPLICATE_IMAGE_MODEL", "stability-ai/stable-diffusion:db21e45d3f7023abc2a46ab38be2d2b5e8e4b45b7e0f9b9e9c9b9e9c9b9e9c9b")
             output = client.run(model, input={
@@ -621,7 +630,7 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             })
             if output and len(output) > 0:
                 import requests
-                resp = requests.get(output[0])
+                resp = requests.get(output[0], timeout=60)
                 img = Image.open(io.BytesIO(resp.content))
                 img = self._postprocess_image(img, image_type)
                 if LOGO_PATH.exists():
@@ -629,50 +638,11 @@ Return ONLY valid JSON, no markdown, no code fences:"""
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 return buf.getvalue(), None
-            return None, " "
-        except Exception:
-            return None, " "
+            return None, self._generate_error_message("Replicate returned no output", prompt)
+        except Exception as e:
+            return None, self._generate_error_message(f"Replicate image generation failed: {str(e)}", prompt)
 
-    def _generate_pil_fallback(self, prompt, width, height):
-        try:
-            h = hash(prompt)
-            r_base = (h >> 16) & 0xFF
-            g_base = (h >> 8) & 0xFF
-            b_base = h & 0xFF
-            img = Image.new("RGB", (width, height))
-            pixels = img.load()
 
-            for y in range(height):
-                for x in range(width):
-                    wave = math.sin(x * 0.008 + y * 0.005) * 0.3 + 0.5
-                    wave2 = math.cos(x * 0.012 + y * 0.009) * 0.2 + 0.5
-                    r = min(255, max(0, int(r_base * (0.6 + wave * 0.4) + wave2 * 30)))
-                    g = min(255, max(0, int(g_base * (0.5 + wave2 * 0.5) + wave * 25)))
-                    b = min(255, max(0, int(b_base * (0.5 + wave * 0.3 + wave2 * 0.2) + wave2 * 20)))
-                    pixels[x, y] = (r, g, b)
-
-            draw = ImageDraw.Draw(img)
-            overlay_count = (abs(h) % 4) + 2
-            for i in range(overlay_count):
-                cx = int(((h >> (i * 3 + 6)) & 0xFF) / 255.0 * width)
-                cy = int(((h >> (i * 3 + 14)) & 0xFF) / 255.0 * height)
-                sr = max(20, min(width, height) // max(4, ((h >> (i * 2 + 4)) & 0x0F) + 3))
-                color = (
-                    min(255, max(0, (h >> (i * 5 + 2)) & 0xFF)),
-                    min(255, max(0, (h >> (i * 5 + 10)) & 0xFF)),
-                    min(255, max(0, (h >> (i * 5 + 18)) & 0xFF)),
-                )
-                box = [cx - sr, cy - sr, cx + sr, cy + sr]
-                if (h >> (i * 4)) & 1:
-                    draw.ellipse(box, fill=color)
-                else:
-                    draw.rectangle(box, fill=color)
-
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            return buf.getvalue(), None
-        except Exception:
-            return None, " "
 
     def _add_watermark(self, img):
         try:

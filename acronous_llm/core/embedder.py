@@ -8,31 +8,20 @@ class TextEmbedder:
         self.config = config
         self._model = None
         self._model_loaded = False
-        self.use_fallback = not os.getenv("ACRONOUS_USE_SENTENCE_TRANSFORMERS", "")
+        self._load_model()
 
     @property
     def model(self):
-        if not self._model_loaded and not self.use_fallback:
+        if not self._model_loaded:
             self._load_model()
         return self._model
 
     def _load_model(self):
         self._model_loaded = True
-        try:
-            from sentence_transformers import SentenceTransformer
-            import warnings
-            with warnings.catch_warnings():
-                warnings.filterwarnings("ignore")
-                self._model = SentenceTransformer(
-                    self.config.EMBED_MODEL,
-                    device=self.config.DEVICE
-                )
-                self.config.EMBED_DIM = self._model.get_sentence_embedding_dimension()
-        except Exception:
-            self._model = None
+        self._model = None
 
     def embed(self, text):
-        if not self.use_fallback and self.model is not None:
+        if self.model is not None:
             try:
                 emb = self.model.encode(text, normalize_embeddings=True)
                 return torch.from_numpy(emb).float()
@@ -41,7 +30,7 @@ class TextEmbedder:
         return self._fallback_embed(text)
 
     def embed_batch(self, texts):
-        if not self.use_fallback and self.model is not None:
+        if self.model is not None:
             try:
                 embs = self.model.encode(texts, normalize_embeddings=True)
                 return torch.from_numpy(embs).float()

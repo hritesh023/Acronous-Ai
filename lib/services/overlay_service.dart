@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
 class OverlayService extends ChangeNotifier {
   static const _channel = MethodChannel('acronous_ai/overlay');
@@ -8,10 +9,12 @@ class OverlayService extends ChangeNotifier {
   bool _isSystemOverlayVisible = false;
   bool _systemOverlayPermissionGranted = false;
   bool _isInitialized = false;
+  bool _wantsOverlay = false;
 
   bool get isSystemOverlayVisible => _isSystemOverlayVisible;
   bool get systemOverlayPermissionGranted => _systemOverlayPermissionGranted;
   bool get isInitialized => _isInitialized;
+  bool get wantsOverlay => _wantsOverlay;
 
   bool get isMobile =>
       !kIsWeb && (Platform.isAndroid || Platform.isIOS);
@@ -56,10 +59,19 @@ class OverlayService extends ChangeNotifier {
     }
   }
 
-  Future<bool> showSystemOverlay() async {
-    if (!supportsSystemOverlay || !_systemOverlayPermissionGranted) {
-      return false;
+  void setWantsOverlay(bool v) {
+    _wantsOverlay = v;
+    if (v) {
+      showSystemOverlay();
+    } else {
+      hideSystemOverlay();
     }
+  }
+
+  Future<bool> showSystemOverlay() async {
+    if (!supportsSystemOverlay) return false;
+    final hasPermission = await _checkOverlayPermission();
+    if (!hasPermission) return false;
     try {
       await _channel.invokeMethod('showOverlay');
       _isSystemOverlayVisible = true;
@@ -81,6 +93,17 @@ class OverlayService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Hide overlay error: $e');
       return false;
+    }
+  }
+
+  void onAppLifecycleChanged(AppLifecycleState state) {
+    if (!supportsSystemOverlay || !_wantsOverlay) return;
+    if (state == AppLifecycleState.paused) {
+      showSystemOverlay();
+    } else if (state == AppLifecycleState.resumed) {
+      if (_isSystemOverlayVisible) {
+        hideSystemOverlay();
+      }
     }
   }
 

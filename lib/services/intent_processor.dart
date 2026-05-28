@@ -122,7 +122,7 @@ class IntentProcessor {
 
   IntentAction? _parseSearch(String text) {
     final match = RegExp(
-      r'^(?:search|look\s+up|find|google)\s+(?:for\s+)?(.+)$',
+      r'^(?:search|look\s+up|find)\s+(?:for\s+)?(.+)$',
       caseSensitive: false,
     ).firstMatch(text);
     if (match != null) {

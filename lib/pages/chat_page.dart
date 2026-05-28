@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../models/message.dart';
@@ -7,6 +8,7 @@ import '../models/suggestion.dart';
 import '../widgets/chat_input.dart';
 import '../widgets/chat_message.dart';
 import '../widgets/sidebar.dart';
+import 'auth_page.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatProvider chatProvider;
@@ -31,32 +33,29 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _loadConfig();
-    widget.chatProvider.addListener(_scrollToBottom);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.chatProvider.loadTheme();
       if (widget.authProvider.status == AuthStatus.authenticated) {
         widget.chatProvider.loadServerConversations();
       }
     });
+    widget.authProvider.addListener(_onAuthChanged);
   }
 
   @override
   void dispose() {
-    widget.chatProvider.removeListener(_scrollToBottom);
+    widget.authProvider.removeListener(_onAuthChanged);
     _scrollController.dispose();
     super.dispose();
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOut,
-        );
-      }
-    });
+  void _onAuthChanged() {
+    if (widget.authProvider.status == AuthStatus.unauthenticated && mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AuthPage()),
+        (route) => false,
+      );
+    }
   }
 
   Future<void> _loadConfig() async {
@@ -65,13 +64,24 @@ class _ChatPageState extends State<ChatPage> {
       final list = config['suggestions'] as List? ?? [];
       if (list.isNotEmpty) {
         setState(() => _suggestions = list.map((e) => Suggestion.fromJson(e as Map<String, dynamic>)).toList());
+        return;
       }
     } catch (_) {}
+    _setDefaultSuggestions();
+  }
+
+  void _setDefaultSuggestions() {
+    if (_suggestions.isNotEmpty) return;
+    setState(() => _suggestions = [
+      Suggestion(icon: 'book', title: 'Learn Something', desc: 'Explain ML simply', query: 'Explain machine learning in simple terms'),
+      Suggestion(icon: 'code', title: 'Write Code', desc: 'Create a Python script', query: 'Write a Python script that scrapes a website'),
+      Suggestion(icon: 'image', title: 'Generate Art', desc: 'Draw a landscape', query: 'Draw a serene mountain landscape at sunset'),
+      Suggestion(icon: 'search', title: 'Research', desc: 'Latest AI news', query: 'What are the latest developments in artificial intelligence?'),
+    ]);
   }
 
   @override
   Widget build(BuildContext context) {
-    final messages = widget.chatProvider.currentMessages;
     final isDark = widget.chatProvider.themeMode == ThemeMode.dark ||
         (widget.chatProvider.themeMode == ThemeMode.system &&
             MediaQuery.of(context).platformBrightness == Brightness.dark);
@@ -86,9 +96,23 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 _buildTopBar(context),
                 Expanded(
-                  child: messages.isEmpty
-                      ? _buildWelcomeScreen(context)
-                      : _buildMessagesList(context, messages),
+                  child: Consumer<ChatProvider>(
+                    builder: (context, chat, _) {
+                      final msgs = chat.currentMessages;
+                      WidgetsBinding.instance.addPostFrameCallback((_) {
+                        if (_scrollController.hasClients) {
+                          _scrollController.animateTo(
+                            _scrollController.position.maxScrollExtent,
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                          );
+                        }
+                      });
+                      return msgs.isEmpty
+                          ? _buildWelcomeScreen(context)
+                          : _buildMessagesList(context, msgs, chat);
+                    },
+                  ),
                 ),
                 _buildInputArea(context),
                 if (widget.chatProvider.error != null)
@@ -141,6 +165,7 @@ class _ChatPageState extends State<ChatPage> {
               ),
             ),
           ),
+          const SizedBox(width: 8),
           const Spacer(),
           Material(
             color: Colors.transparent,
@@ -167,18 +192,20 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _buildWelcomeScreen(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 180),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
+      child: SingleChildScrollView(
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 180),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
+            children: [
             ClipRRect(
               borderRadius: BorderRadius.circular(14),
               child: Image.asset(
                 'assets/logo.png',
                 width: 52,
                 height: 52,
-                errorBuilder: (_, __, ___) => Container(
+                errorBuilder: (_, _, _) => Container(
                   width: 52,
                   height: 52,
                   decoration: BoxDecoration(
@@ -248,25 +275,29 @@ class _ChatPageState extends State<ChatPage> {
                   );
                 }).toList(),
               ),
-          ],
+           ],
+         ),
+       ),
         ),
-      ),
-    );
-  }
+     );
+   }
 
-  Widget _buildMessagesList(
-      BuildContext context, List<ChatMessage> messages) {
-    return ListView.builder(
-      controller: _scrollController,
-      padding: const EdgeInsets.fromLTRB(16, 24, 16, 200),
-      itemCount: messages.length + (widget.chatProvider.isLoading ? 1 : 0),
+    Widget _buildMessagesList(
+       BuildContext context, List<ChatMessage> messages, ChatProvider chat) {
+     return ListView.builder(
+       key: const ValueKey('messages_list'),
+       controller: _scrollController,
+       padding: const EdgeInsets.fromLTRB(16, 24, 16, 200),
+       itemCount: messages.length + (chat.isLoading ? 1 : 0),
       itemBuilder: (context, index) {
         if (index == messages.length) {
-          return const Padding(
-            padding: EdgeInsets.all(12),
+          return Padding(
+            padding: const EdgeInsets.all(12),
             child: Row(
               children: [
-                _TypingIndicator(),
+                 _TypingIndicator(
+                   isTakingLong: chat.isTakingLong,
+                 ),
               ],
             ),
           );
@@ -281,11 +312,12 @@ class _ChatPageState extends State<ChatPage> {
   Widget _buildInputArea(BuildContext context) {
     return Align(
       alignment: Alignment.bottomCenter,
+      key: const ValueKey('input_area'),
       child: Container(
         width: double.infinity,
         constraints: const BoxConstraints(maxWidth: 720),
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: const ChatInput(),
+        child: const ChatInput(key: ValueKey('chat_input')),
       ),
     );
   }
@@ -411,44 +443,96 @@ class _ChatPageState extends State<ChatPage> {
   }
 }
 
-class _TypingIndicator extends StatelessWidget {
-  const _TypingIndicator();
+class _TypingIndicator extends StatefulWidget {
+  final bool isTakingLong;
+
+  const _TypingIndicator({this.isTakingLong = false});
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late List<Animation<double>> _animations;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat();
+    _animations = List.generate(3, (i) {
+      return Tween<double>(begin: 0.3, end: 1.0).animate(
+        CurvedAnimation(
+          parent: _controller,
+          curve: Interval(i * 0.2, 0.6 + i * 0.2, curve: Curves.easeInOut),
+        ),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).brightness == Brightness.dark
-            ? const Color(0xFF1A1A30)
-            : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0x14FFFFFF)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: List.generate(3, (index) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: _dot(index),
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _dot(int index) {
-    return AnimatedOpacity(
-      duration: const Duration(milliseconds: 400),
-      opacity: 1.0,
-      child: Container(
-        width: 7,
-        height: 7,
-        decoration: const BoxDecoration(
-          color: Color(0xFF707090),
-          shape: BoxShape.circle,
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: cs.brightness == Brightness.dark
+                ? const Color(0xFF1A1A30)
+                : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0x14FFFFFF)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(3, (index) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: AnimatedBuilder(
+                  animation: _animations[index],
+                  builder: (context, child) {
+                    return Opacity(
+                      opacity: _animations[index].value,
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          color: Color(0xFF707090),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              );
+            }),
+          ),
         ),
-      ),
+        if (widget.isTakingLong)
+          Padding(
+            padding: const EdgeInsets.only(top: 8, left: 4),
+            child: Text(
+              'Still working on it…',
+              style: TextStyle(
+                fontSize: 12,
+                color: cs.onSurfaceVariant.withValues(alpha: 0.7),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }

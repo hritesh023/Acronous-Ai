@@ -68,13 +68,13 @@ class _SplashScreenState extends State<SplashScreen> {
     if (_navigated) return;
     _navigated = true;
     context.read<AuthProvider>().removeListener(_onAuthChanged);
+    if (!mounted) return;
+    final chatP = context.read<ChatProvider>();
+    final authP = context.read<AuthProvider>();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => status == AuthStatus.authenticated
-            ? ChatPage(
-                chatProvider: context.read<ChatProvider>(),
-                authProvider: context.read<AuthProvider>(),
-              )
+            ? ChatPage(chatProvider: chatP, authProvider: authP)
             : const AuthPage(),
       ),
     );
@@ -136,11 +136,35 @@ class _SplashScreenState extends State<SplashScreen> {
   }
 }
 
-class AcronousAIApp extends StatelessWidget {
+class AcronousAIApp extends StatefulWidget {
   const AcronousAIApp({super.key});
 
   @override
+  State<AcronousAIApp> createState() => _AcronousAIAppState();
+}
+
+class _AcronousAIAppState extends State<AcronousAIApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final overlay = context.read<OverlayService>();
+    overlay.onAppLifecycleChanged(state);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    context.read<ChatProvider>().attachOverlayService(context.read<OverlayService>());
     return Consumer<ChatProvider>(
       builder: (context, chat, _) => MaterialApp(
         navigatorKey: navigatorKey,

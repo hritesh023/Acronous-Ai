@@ -53,7 +53,9 @@ capacitor.config.json
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-/build/
+/build/*
+!/build/web/
+!/build/web/**
 /coverage/
 *.class
 *.log
@@ -68,7 +70,7 @@ capacitor.config.json
 .swiftpm/
 migrate_working_dir/
 
-# Local server management scripts (server runs on HF Spaces, not locally)
+# Local server management scripts
 server_manager.py
 .start_server.vbs
 install-service.bat

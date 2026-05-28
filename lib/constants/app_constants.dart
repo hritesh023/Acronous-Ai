@@ -87,7 +87,7 @@ class AppStrings {
   static const String earlier = 'Earlier';
 
   static const String settings = 'Settings';
-  static const String assistant = 'Assistant';
+  static const String assistant = 'System';
   static const String permissions = 'Permissions';
   static const String about = 'About';
   static const String appearance = 'Appearance';
@@ -96,7 +96,7 @@ class AppStrings {
   static const String dark = 'Dark';
   static const String system = 'System';
 
-  static const String backgroundAssistant = 'Background Assistant';
+  static const String backgroundAssistant = 'Floating Button';
   static const String backgroundAssistantSub = 'Floating quick-access button';
 
   static const String microphone = 'Microphone';
@@ -107,11 +107,12 @@ class AppStrings {
   static const String storageSub = 'File attachments & saving';
   static const String granted = 'Granted';
 
-  static const String poweredBy = 'Powered by';
-  static const String poweredBySub = 'Flutter + Python AI Engine';
+  static const String poweredBy = '';
+  static const String poweredBySub = '';
   static const String version = 'Version';
 
-  static const String connectionError = 'I can\'t reach the server right now. Is Acronous AI running?';
+  static const String connectionError = 'Something went wrong. Please try again.';
+  static const String serverError = 'Something went wrong. Please try again.';
 
   static const String cameraBtn = 'Camera';
   static const String galleryBtn = 'Gallery';
@@ -125,6 +126,9 @@ class AppStrings {
   static const String chooseFromGallery = 'Choose from Gallery';
   static const String selectFromGallery = 'Select existing image for analysis';
   static const String analysisError = 'Analysis error';
+  static const String attachPrompt = 'Attach a prompt';
+  static const String attachPromptSub = 'Add image to chat and type a message';
+  static const String analyzeImageSub = 'Send image for immediate analysis';
 
   static List<String> welcomeSuggestions = const [
     'What can you help me with?',
@@ -147,6 +151,7 @@ class AppPrefKeys {
   static const String systemOverlay = 'system_overlay';
   static const String overlayPermissionGranted = 'overlay_permission_granted';
   static const String conversations = 'conversations';
+  static const String serverUrl = 'server_url';
 }
 
 class AppColorValues {

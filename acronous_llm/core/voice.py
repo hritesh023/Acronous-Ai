@@ -100,18 +100,7 @@ class VoiceEngine:
                 os.unlink(tmp_path)
 
     def _fallback_stt(self, audio_path):
-        try:
-            import speech_recognition as sr
-            recognizer = sr.Recognizer()
-            recognizer.energy_threshold = 300
-            recognizer.dynamic_energy_threshold = True
-            recognizer.pause_threshold = 0.8
-            with sr.AudioFile(audio_path) as source:
-                recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = recognizer.record(source)
-            return recognizer.recognize_google(audio, language=self.config.LANG)
-        except Exception:
-            return ""
+        return ""
 
     def text_to_speech(self, text, output_path=None):
         if output_path is None:

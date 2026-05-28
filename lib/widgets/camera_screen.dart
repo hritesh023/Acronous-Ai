@@ -15,6 +15,9 @@ class _CameraScreenState extends State<CameraScreen>
   CameraController? _controller;
   bool _isInitialized = false;
   bool _isCapturing = false;
+  bool _isInitializing = false;
+  bool _hasError = false;
+  String? _errorMessage;
   List<CameraDescription> _cameras = [];
   int _currentCameraIndex = 0;
   @override
@@ -37,29 +40,52 @@ class _CameraScreenState extends State<CameraScreen>
       _controller?.dispose();
       _controller = null;
       _isInitialized = false;
+    } else if (state == AppLifecycleState.resumed && mounted) {
+      if (_controller == null && !_isInitialized && !_isInitializing) {
+        _hasError = false;
+        _errorMessage = null;
+        _initCamera();
+      }
     }
   }
 
   Future<void> _initCamera() async {
+    if (_isInitializing) return;
+    _isInitializing = true;
+    _hasError = false;
+    _errorMessage = null;
     try {
       final cameras = await availableCameras();
       if (!mounted) return;
       if (cameras.isEmpty) {
-        Navigator.pop(context, (null, CameraResult.noCamera));
+        setState(() {
+          _hasError = true;
+          _errorMessage = 'No camera found on this device';
+        });
         return;
       }
       _cameras = cameras;
-      final controller = CameraController(cameras[0], ResolutionPreset.medium);
+      final controller = CameraController(cameras[0], ResolutionPreset.veryHigh);
       _controller = controller;
       await controller.initialize();
       if (!mounted) {
         controller.dispose();
         return;
       }
+      if (_controller != controller) {
+        controller.dispose();
+        return;
+      }
       setState(() => _isInitialized = true);
     } catch (e) {
       if (!mounted) return;
-      Navigator.pop(context, (null, CameraResult.error));
+      if (_isInitialized) return;
+      setState(() {
+        _hasError = true;
+        _errorMessage = 'Could not access camera';
+      });
+    } finally {
+      _isInitializing = false;
     }
   }
 
@@ -70,7 +96,7 @@ class _CameraScreenState extends State<CameraScreen>
     _controller = null;
     _isInitialized = false;
     oldController?.dispose();
-    final controller = CameraController(_cameras[newIndex], ResolutionPreset.medium);
+    final controller = CameraController(_cameras[newIndex], ResolutionPreset.veryHigh);
     _controller = controller;
     try {
       await controller.initialize();
@@ -88,9 +114,11 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final image = await _controller!.takePicture();
       if (!mounted) return;
+      FocusManager.instance.primaryFocus?.unfocus();
       Navigator.pop(context, (image.path, CameraResult.success));
     } catch (_) {
       if (!mounted) return;
+      FocusManager.instance.primaryFocus?.unfocus();
       Navigator.pop(context, (null, CameraResult.error));
     } finally {
       _isCapturing = false;
@@ -115,9 +143,11 @@ class _CameraScreenState extends State<CameraScreen>
                 child: CameraPreview(_controller!),
               ),
             )
+          else if (_hasError)
+            _buildErrorState()
           else
             const Center(child: CircularProgressIndicator()),
-          if (_cameras.length > 1)
+          if (_isInitialized && _cameras.length > 1)
             Positioned(
               top: 60,
               right: 20,
@@ -138,33 +168,65 @@ class _CameraScreenState extends State<CameraScreen>
                   icon: const Icon(Icons.close, color: Colors.white, size: 28),
                   onPressed: () {
                     if (!mounted) return;
+                    FocusManager.instance.primaryFocus?.unfocus();
                     Navigator.pop(context, (null, CameraResult.cancelled));
                   },
                 ),
                 const SizedBox(width: 50),
-                GestureDetector(
-                  onTap: _capture,
-                  child: Container(
-                    width: 72,
-                    height: 72,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.white,
-                      border: Border.all(color: Colors.white70, width: 4),
-                    ),
+                if (_isInitialized)
+                  GestureDetector(
+                    onTap: _capture,
                     child: Container(
-                      margin: const EdgeInsets.all(6),
-                      decoration: const BoxDecoration(
+                      width: 72,
+                      height: 72,
+                      decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: Colors.white,
+                        border: Border.all(color: Colors.white70, width: 4),
+                      ),
+                      child: Container(
+                        margin: const EdgeInsets.all(6),
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                        ),
                       ),
                     ),
                   ),
-                ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.videocam_off_rounded,
+                color: Colors.white54, size: 64),
+            const SizedBox(height: 16),
+            Text(
+              _errorMessage ?? 'Could not access camera',
+              style: const TextStyle(color: Colors.white70, fontSize: 16),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: _isInitializing ? null : () {
+                _isInitialized = false;
+                _initCamera();
+              },
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
       ),
     );
   }

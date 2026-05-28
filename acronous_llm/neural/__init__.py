@@ -14,7 +14,7 @@ class AcronousNeuralEngine:
         self.clusterer = QueryClusterer(n_clusters=config.CLUSTER_COUNT)
         self.classifier = IntentClassifier(
             embed_dim=config.EMBED_DIM,
-            num_intents=8
+            num_intents=9
         )
         self.learner = OnlineLearner(
             model=self.network,

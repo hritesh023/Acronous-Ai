@@ -1,5 +1,6 @@
 import re
 import json
+from datetime import datetime
 
 class TaskPlanner:
     def __init__(self, core_engine):
@@ -14,10 +15,10 @@ class TaskPlanner:
             results.append(result)
         summary_prompt = f"""Original request: {query}
 
-Results from each step:
-{chr(10).join([f"- {r['step']}: {r['result'][:200]}" for r in results])}
+Research results gathered:
+{chr(10).join([f"- {r['step']}: {r['result'][:300]}" for r in results])}
 
-Synthesize these results into a comprehensive final answer."""
+Synthesize these findings into a natural, engaging, and well-structured final answer. Write it conversationally, as if you're explaining everything to the user in a clear, thoughtful way. Don't just list facts — tell a coherent story with the information."""
         final = self.core.llm.generate(summary_prompt)
         self.core.memory.add_message(session_id, "assistant", final, {"type": "planned"})
         return {
@@ -37,7 +38,8 @@ Synthesize these results into a comprehensive final answer."""
             steps.append({"action": "synthesize", "description": "Compare findings"})
         elif any(w in query_lower for w in ["research", "report", "article"]):
             steps.append({"action": "search", "target": query, "description": "Gather information"})
-            steps.append({"action": "search", "target": f"{query} latest 2025 2026", "description": "Find recent developments"})
+            current_year = datetime.now().year
+            steps.append({"action": "search", "target": f"{query} latest {current_year}", "description": "Find recent developments"})
             steps.append({"action": "synthesize", "description": "Compile research"})
         else:
             steps.append({"action": "search", "target": query, "description": "Search for information"})
@@ -86,14 +88,14 @@ Synthesize these results into a comprehensive final answer."""
             return {"step": step["description"], "result": snippets}
         elif step["action"] == "synthesize":
             rag_context, _ = self.core.rag.retrieve_with_context(original_query, k=5)
-            prompt = f"""Based on the gathered information, provide a comprehensive response.
+            prompt = f"""Based on the gathered information, provide a natural, conversational response.
 
 Context:
 {rag_context or 'No specific context available.'}
 
 Original Request: {original_query}
 
-Response:"""
+Write a clear, engaging answer that flows naturally — like you're explaining it to a friend."""
             response = self.core.llm.generate(prompt)
             return {"step": step["description"], "result": response}
         return {"step": step["description"], "result": ""}
