@@ -393,10 +393,28 @@ Respond naturally and conversationally as yourself. Use what you know and any in
         now = datetime.now(timezone.utc).astimezone()
         return f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
 
+    @staticmethod
+    def _is_image_query(query):
+        t = query.strip().lower()
+        if len(t) < 4:
+            return False
+        if any(t.startswith(p) for p in ['draw ', 'paint ', 'sketch ', 'generate ', 'create ', 'make an image', 'make a picture', 'make a photo']):
+            return True
+        patterns = ['generate an image', 'generate a picture', 'generate a photo',
+                     'create an image', 'create a picture', 'create a photo',
+                     'make an image', 'make a picture', 'make a photo',
+                     'generate image of', 'generate picture of', 'create image of',
+                     'create picture of', 'image of a', 'image of an',
+                     'picture of a', 'picture of an', 'photo of a', 'photo of an']
+        return any(p in t for p in patterns)
+
     def _handle_chat(self, query, context):
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).astimezone()
         current_time_str = now.strftime('%A, %B %d, %Y at %I:%M %p %Z')
+
+        if self._is_image_query(query):
+            return {"type": "chat", "content": "", "sources": []}
 
         search_data = ""
         search_results = []
@@ -523,48 +541,26 @@ Respond conversationally and naturally as yourself — be warm, thoughtful, and 
         return False
 
     def _handle_search(self, query, context):
+        if self._is_image_query(query):
+            return {"type": "chat", "content": "", "sources": []}
         if self._is_time_query(query):
-            try:
-                prompt = f"""{context}
-
-The user is asking about the current time or date.
-Tell them what the current date and time is in their timezone.
-Be warm and conversational. Just state the time/date clearly.
-
-User: {query}
-
-Response:"""
-                response = self.core.llm.generate(
-                    prompt,
-                    system_prompt="You tell the user the current date and time. You ALWAYS have access to the current time — it is provided to you in the context above. Never say you don't know or can't access real-time info. Just tell them the time."
-                )
-                if response and response.strip():
-                    return {"type": "chat", "content": response, "sources": []}
-            except Exception:
-                pass
-
-            try:
-                simple = f"""{context}
-
-The user asked: {query}
-
-Answer with exactly one sentence stating the current date and time. The time is provided above — use it."""
-                response = self.core.llm.generate(
-                    simple,
-                    system_prompt="You read the current time from the provided context and state it."
-                )
-                if response and response.strip():
-                    return {"type": "chat", "content": response, "sources": []}
-            except Exception:
-                pass
-
             import re
             time_match = re.search(r'\[Current date and time:\s*([^\]]*)\]', context)
             loc_match = re.search(r'\[User location:\s*([^\]]*)\]', context)
             if time_match:
                 time_str = time_match.group(1).strip()
                 loc_str = f" in {loc_match.group(1).strip()}" if loc_match else ""
-                return {"type": "chat", "content": f"It is currently {time_str}{loc_str}.", "sources": []}
+                formatted = f"It is currently {time_str}{loc_str}."
+                try:
+                    polish = self.core.llm.generate(
+                        f"Turn this into a natural, conversational response: the current date and time is {time_str}{loc_str}. Respond in 1 sentence.",
+                        system_prompt="You convert time announcements to natural conversational speech. Max 1 sentence."
+                    )
+                    if polish and polish.strip() and len(polish) < 200:
+                        formatted = polish.strip()
+                except Exception:
+                    pass
+                return {"type": "chat", "content": formatted, "sources": []}
 
         old_model_info = self._get_current_info_for_old_model()
         search_results = self.core.search.search_with_content(query, max_results=4)
