@@ -132,9 +132,7 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        debugPrint('[discover] No server found on attempt $attempt');
-      } catch (e) {
-        debugPrint('[discover] Attempt $attempt failed: $e');
+        
       }
 
       if (attempt < retries) {
@@ -144,10 +142,6 @@ class ChatProvider extends ChangeNotifier {
         await Future.delayed(Duration(seconds: delay));
       }
     }
-    debugPrint(
-      '[discover] All $retries attempts exhausted — server unreachable',
-    );
-
     _isServerConnected = false;
     _isConnecting = false;
     _serverCheckDone = true;
@@ -353,7 +347,6 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     if (!_isServerConnected) {
-      debugPrint('[chat] Not connected, attempting re-discovery...');
       await _discoverServer(retries: 1);
       if (!_isServerConnected) {
         _currentConversation!.messages.add(
@@ -376,14 +369,12 @@ class ChatProvider extends ChangeNotifier {
         final respType = resp['type'] as String? ?? 'chat';
         final isImageGen = _isImageGenRequest(text);
         if (rawContent.isEmpty && imageData.isEmpty) {
-          debugPrint('[chat] Server returned empty response (type=$respType)');
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
           notifyListeners();
           return;
         }
         if (respType == 'error') {
-          debugPrint('[chat] Server returned error response: $rawContent');
         }
         _currentConversation!.messages.add(
           ChatMessage(
@@ -398,7 +389,6 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
         return;
       } catch (e) {
-        debugPrint('[chat] API call failed (attempt ${attempt + 1}): $e');
         final isAuthError = e is ApiException && (e.statusCode == 401 || e.statusCode == 403);
         if (attempt < 2 && !isAuthError) {
           if (_isTakingLong != true) {
@@ -533,7 +523,6 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('Image analysis error: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -578,14 +567,12 @@ class ChatProvider extends ChangeNotifier {
       _pendingAttachments.add(attachment);
       notifyListeners();
     } catch (e) {
-      debugPrint('Camera plugin unavailable, trying ImagePicker: $e');
       try {
         final image = await _fileService.pickImageFromCamera();
         if (image == null) return;
         _pendingAttachments.add(image);
         notifyListeners();
       } catch (e2) {
-        debugPrint('Fallback camera also failed: $e2');
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -670,7 +657,6 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('${AppStrings.analysisError}: $e');
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -720,7 +706,6 @@ class ChatProvider extends ChangeNotifier {
         },
       );
     } catch (e) {
-      debugPrint('Voice input error: $e');
       if (_continuousVoiceEnabled) {
         Future.delayed(const Duration(milliseconds: 500), startVoiceInput);
       } else {
@@ -751,7 +736,6 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('Image picker error: $e');
     }
   }
 
@@ -763,7 +747,6 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
       }
     } catch (e) {
-      debugPrint('File picker error: $e');
     }
   }
 
@@ -789,7 +772,6 @@ class ChatProvider extends ChangeNotifier {
         },
       );
     } catch (e) {
-      debugPrint('TTS init error: $e');
     }
   }
 

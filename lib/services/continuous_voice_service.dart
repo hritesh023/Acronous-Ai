@@ -59,7 +59,6 @@ class ContinuousVoiceService extends ChangeNotifier {
 
     final available = await _speech.initialize(
       onError: (err) {
-        debugPrint('Voice error: $err');
         _isListening = false;
         _state = ContinuousVoiceState.idle;
         notifyListeners();
@@ -86,7 +85,6 @@ class ContinuousVoiceService extends ChangeNotifier {
         },
       );
     } catch (e) {
-      debugPrint('Listen error: $e');
     }
 
     _isListening = false;
@@ -110,7 +108,6 @@ class ContinuousVoiceService extends ChangeNotifier {
 
       final available = await _speech.initialize(
         onError: (err) {
-          debugPrint('Continuous voice error: $err');
           _isRunning = false;
           _isListening = false;
           _state = ContinuousVoiceState.idle;
@@ -130,7 +127,6 @@ class ContinuousVoiceService extends ChangeNotifier {
           },
         );
       } catch (e) {
-        debugPrint('Listen error: $e');
       }
 
       _isListening = false;

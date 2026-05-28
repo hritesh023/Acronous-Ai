@@ -42,7 +42,6 @@ class OverlayService extends ChangeNotifier {
       notifyListeners();
       return _systemOverlayPermissionGranted;
     } catch (e) {
-      debugPrint('Overlay permission error: $e');
       return false;
     }
   }
@@ -54,9 +53,31 @@ class OverlayService extends ChangeNotifier {
       _systemOverlayPermissionGranted = result ?? false;
       return _systemOverlayPermissionGranted;
     } catch (e) {
-      debugPrint('Check overlay permission error: $e');
       return false;
     }
+  }
+
+  Future<void> showOverlay() async {
+    try {
+      OverlayService._ensureContext();
+      if (_overlayEntry != null) return;
+      _overlayEntry = OverlayEntry(
+        builder: (_) => _AcronousOverlay(onDismiss: hideOverlay),
+      );
+      if (navigatorKey?.currentState != null) {
+        navigatorKey!.currentState!.overlay?.insert(_overlayEntry!);
+      }
+    } catch (e) {
+    }
+  }
+
+  void hideOverlay() {
+    try {
+      _overlayEntry?.remove();
+      _overlayEntry = null;
+    } catch (e) {
+    }
+  }
   }
 
   void setWantsOverlay(bool v) {
@@ -78,7 +99,6 @@ class OverlayService extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('Show overlay error: $e');
       return false;
     }
   }
@@ -91,7 +111,6 @@ class OverlayService extends ChangeNotifier {
       notifyListeners();
       return true;
     } catch (e) {
-      debugPrint('Hide overlay error: $e');
       return false;
     }
   }

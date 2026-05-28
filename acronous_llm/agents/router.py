@@ -1,10 +1,7 @@
 import json
 import base64
 import string as string_module
-import logging
 from pathlib import Path
-
-logger = logging.getLogger(__name__)
 
 SEED_EXAMPLES = {
     "image_generation": [
@@ -1101,8 +1098,6 @@ Response:"""
                 return {"type": "image_gen", "content": "", "image_data": b64, "image_type": "fallback", "sources": []}
         except Exception:
             pass
-        if error:
-            logger.warning(f"Image generation failed: {error}")
         return {"type": "chat", "content": "", "sources": []}
 
     def _classify_image_prompt(self, query):

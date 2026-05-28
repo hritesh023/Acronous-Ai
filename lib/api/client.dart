@@ -1,7 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 
@@ -179,7 +177,6 @@ class ApiClient {
           : const Duration(seconds: 12);
       final healthy = await _checkHealth(url, timeout: timeout);
       if (healthy) {
-        debugPrint('[discover] Connected to: $url');
         return url;
       }
     }
@@ -220,9 +217,6 @@ class ApiClient {
       json = jsonDecode(body) as Map<String, dynamic>;
     } catch (e) {
       final status = response.statusCode;
-      debugPrint(
-        '[api] Non-JSON response ($status): ${body.substring(0, body.length.clamp(0, 500))}',
-      );
       throw ApiException(
         status,
         'Server error ($status): ${body.substring(0, body.length.clamp(0, 200))}',
@@ -235,7 +229,6 @@ class ApiClient {
           json['message'] as String? ??
           json['error'] as String? ??
           'HTTP ${response.statusCode}';
-      debugPrint('[api] Error response (${response.statusCode}): $msg');
       throw ApiException(response.statusCode, msg, json);
     }
     return json;
