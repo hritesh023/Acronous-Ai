@@ -132,26 +132,6 @@ Negative prompt:"""
                 b = int(50 + t * 45)
                 for x in range(width):
                     gradient.putpixel((x, y), (r, g, b))
-            draw = ImageDraw.Draw(gradient)
-            words = prompt.split()[:8]
-            lines = []
-            current = ""
-            for w in words:
-                test = (current + " " + w).strip()
-                if len(test) <= 50:
-                    current = test
-                else:
-                    if current:
-                        lines.append(current)
-                    current = w
-            if current:
-                lines.append(current)
-            y_offset = height // 2 - len(lines) * 14
-            for line in lines:
-                bbox = draw.textbbox((0, 0), line, font=None)
-                tw = bbox[2] - bbox[0]
-                draw.text(((width - tw) // 2, y_offset), line, fill=(200, 200, 230))
-                y_offset += 30
             buf = io.BytesIO()
             gradient.save(buf, format="PNG")
             return buf.getvalue()
@@ -481,9 +461,13 @@ Return ONLY valid JSON, no markdown, no code fences:"""
             from openai import OpenAI
             client = OpenAI(api_key=self._openai_api_key)
             size = os.getenv("ACRONOUS_OPENAI_IMAGE_SIZE", "1024x1024")
+
+            max_prompt_len = 3900
+            truncated = prompt[:max_prompt_len] if len(prompt) > max_prompt_len else prompt
+
             resp = client.images.generate(
                 model=model,
-                prompt=prompt,
+                prompt=truncated,
                 n=1,
                 size=size,
                 quality="standard",
