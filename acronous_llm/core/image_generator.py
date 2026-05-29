@@ -19,39 +19,43 @@ class ImageGenerator:
         import urllib.parse
         import time
 
-        encoded = urllib.parse.quote(prompt)
         width = kwargs.get("width") or self.config.IMAGE_WIDTH
         height = kwargs.get("height") or self.config.IMAGE_HEIGHT
-        url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&model=flux&nologo=true"
 
-        max_retries = 2
+        urls_and_descriptions = [
+            (f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={width}&height={height}&model=flux&nologo=true", "flux"),
+            (f"https://image.pollinations.ai/prompt/{urllib.parse.quote(prompt)}?width={width}&height={height}&nologo=true", "default"),
+        ]
+
+        max_retries = 3
         last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                resp = requests.get(url, timeout=90)
-                if resp.status_code != 200:
-                    last_error = f"Pollinations returned {resp.status_code}"
+        for url, model_name in urls_and_descriptions:
+            for attempt in range(max_retries + 1):
+                try:
+                    resp = requests.get(url, timeout=90)
+                    if resp.status_code != 200:
+                        last_error = None
+                        if attempt < max_retries:
+                            time.sleep(2 * (attempt + 1))
+                            continue
+                        break
+                    img = Image.open(io.BytesIO(resp.content))
+                    img = self._postprocess_image(img)
+                    if LOGO_PATH.exists():
+                        img = self._add_watermark(img)
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    return buf.getvalue(), None
+                except requests.exceptions.Timeout:
+                    last_error = None
+                    if attempt < max_retries:
+                        time.sleep(3 * (attempt + 1))
+                        continue
+                except Exception as e:
+                    last_error = str(e)
                     if attempt < max_retries:
                         time.sleep(2 * (attempt + 1))
                         continue
-                    return None, last_error
-                img = Image.open(io.BytesIO(resp.content))
-                img = self._postprocess_image(img)
-                if LOGO_PATH.exists():
-                    img = self._add_watermark(img)
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                return buf.getvalue(), None
-            except requests.exceptions.Timeout:
-                last_error = "Pollinations API timed out"
-                if attempt < max_retries:
-                    time.sleep(3 * (attempt + 1))
-                    continue
-            except Exception as e:
-                last_error = f"Image generation failed: {str(e)}"
-                if attempt < max_retries:
-                    time.sleep(2 * (attempt + 1))
-                    continue
         return None, last_error
 
     def _generate_fallback_image(self, prompt, width, height):

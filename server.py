@@ -35,8 +35,18 @@ PRIVATE_INFO_MSG = ""
 
 def _safe_error(e: Exception, fallback: str = "") -> str:
     err = str(e)
+    api_error_patterns = [
+        "api key", "api_key", "unauthorized", "401", "403", "402",
+        "rate limit", "rate_limit", "quota", "insufficient",
+        "openai", "groq", "anthropic", "together", "pollinations",
+        "connection refused", "connection error", "timeout",
+        "internal server error", "server error",
+    ]
+    err_lower = err.lower()
+    if any(p in err_lower for p in api_error_patterns):
+        return fallback if fallback else ""
     if err and len(err) > 10:
-        return err
+        return ""
     if fallback:
         return fallback
     return ""

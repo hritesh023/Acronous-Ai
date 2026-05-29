@@ -50,7 +50,7 @@ class ChatProvider extends ChangeNotifier {
       return trimmed;
     }
     if (_privateInfoPattern.hasMatch(cleaned)) {
-      return cleaned;
+      return '';
     }
     return cleaned;
   }
@@ -123,6 +123,18 @@ class ChatProvider extends ChangeNotifier {
           _isServerConnected = true;
           await _prefs.saveServerUrl(bestUrl);
           await _api.wakeup();
+          final ready = await _api.waitForReady(
+            timeout: bestUrl.startsWith('https://')
+                ? const Duration(seconds: 60)
+                : const Duration(seconds: 20),
+          );
+          if (!ready) {
+            _startKeepAlive();
+            _isConnecting = false;
+            _serverCheckDone = true;
+            notifyListeners();
+            return;
+          }
           _startKeepAlive();
           _isConnecting = false;
           _serverCheckDone = true;
@@ -365,12 +377,17 @@ class ChatProvider extends ChangeNotifier {
         );
         final respType = resp['type'] as String? ?? 'chat';
         if (rawContent.isEmpty && imageData.isEmpty) {
+          if (attempt < 2) {
+            await _api.wakeup();
+            await Future.delayed(Duration(seconds: (attempt + 1) * 2));
+            continue;
+          }
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
           notifyListeners();
           return;
         }
-        if (respType == 'error') {
+        if (respType == 'error' && rawContent.isNotEmpty) {
         }
         _currentConversation!.messages.add(
           ChatMessage(

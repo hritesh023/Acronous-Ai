@@ -559,6 +559,18 @@ class ApiClient {
     }
   }
 
+  Future<bool> waitForReady({Duration timeout = const Duration(seconds: 30)}) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        final resp = await _get('/v1/ready', timeout: const Duration(seconds: 5));
+        if (resp['status'] == 'ok') return true;
+      } catch (_) {}
+      await Future.delayed(const Duration(seconds: 3));
+    }
+    return false;
+  }
+
   Future<Map<String, dynamic>> getMe() => _get('/api/auth/me');
 
   Future<List<Map<String, dynamic>>> listConversations() async {
