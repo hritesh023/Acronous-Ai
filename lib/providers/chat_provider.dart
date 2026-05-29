@@ -420,11 +420,7 @@ class ChatProvider extends ChangeNotifier {
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
-        setError(
-          e is ApiException
-              ? '${e.message} (${e.statusCode})'
-              : 'Request failed. Please try again.',
-        );
+        setError('Request failed. Please try again.');
         break;
       }
     }
