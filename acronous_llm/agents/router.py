@@ -8,10 +8,22 @@ class QueryRouter:
         self.neural = neural_engine
         self.core = core_engine
 
+    INTENT_MAP = {
+        "general_chat": "general_chat",
+        "web_search": "web_search",
+        "image_analysis": "general_chat",
+        "image_generation": "image_generation",
+        "voice_command": "general_chat",
+        "code_generation": "code_generation",
+        "translation": "translation",
+        "data_analysis": "web_search",
+        "planning_task": "general_chat",
+    }
+
     def route(self, query):
         query_lower = query.lower().strip()
         embedding = self.core.embedder.embed(query)
-        route_type = self._determine_type_with_llm(query)
+        route_type = self._determine_type_with_neural(query, embedding)
         features = {
             "type": route_type,
             "needs_search": route_type in ("web_search", "factual", "news"),
@@ -22,33 +34,15 @@ class QueryRouter:
         }
         return features
 
-    def _determine_type_with_llm(self, query):
-        prompt = f"""Classify this user request into exactly one category. Return ONLY the category name, nothing else.
-
-Categories:
-- web_search: ANY question seeking factual information, current events, news, politics, government officials, weather, time, date, prices, sports scores, definitions, explanations, who is, what is, where is, when did, how does — any information that requires up-to-date or external knowledge
-- image_generation: user asks to draw, paint, generate, create, or make an image/picture/photo/art/diagram
-- code_generation: user asks to write code, a function, program, algorithm, or debugging help
-- translation: user explicitly says "translate" or asks how to say something in another language
-- image_analysis: user uploaded or wants to analyze an image/photo
-- general_chat: ONLY simple greetings, casual conversation, opinions, jokes, or creative writing — NOT any question seeking information or facts
-
-IMPORTANT: When in doubt, choose web_search. Any question about a person, place, event, thing, concept, or fact MUST be web_search. Only choose general_chat if the user is clearly just greeting, thanking, or making small talk with no information-seeking intent.
-
-User request: {query}
-Category:"""
+    def _determine_type_with_neural(self, query, embedding):
+        if not query or not query.strip():
+            return "general_chat"
         try:
-            result = self.core.llm.generate(
-                prompt,
-                system_prompt="You classify user requests into categories. Return only the category name."
-            )
-            result = result.strip().lower().strip('"').strip("'").strip()
-            valid = {"image_generation", "web_search", "code_generation", "translation", "image_analysis", "general_chat"}
-            if result in valid:
-                return result
-            return "web_search"
+            intent_id = self.neural.predict_intent(embedding)
+            intent_name = self.neural.classifier.get_intent_name(intent_id)
+            return self.INTENT_MAP.get(intent_name, "general_chat")
         except Exception:
-            return "web_search"
+            return "general_chat"
 
     def execute(self, query, route, session_id="default", image=None, messages=None, file_path=None, context=None, max_tokens=None):
         try:
@@ -99,7 +93,7 @@ Category:"""
             else:
                 result = self._handle_chat(query, context, max_tokens)
         except Exception:
-            result = {"type": "error", "content": "The AI service is currently unavailable. Please try again.", "sources": []}
+            result = {"type": "error", "content": "Something went wrong. Please try again.", "sources": []}
 
         if result and result.get("content"):
             try:
@@ -397,7 +391,7 @@ Respond conversationally — tell them what you detected and then give the trans
                     desc_parts.append("[The image was analyzed but no clear labels were detected.]")
                 image_context = " ".join(desc_parts)
             except Exception:
-                image_context = "[The image analysis system is currently unavailable.]"
+                image_context = "[Image analysis is temporarily unavailable.]"
         is_auto = not query or not query.strip()
         if is_auto:
             prompt = f"""{image_context}
@@ -442,7 +436,7 @@ Explain what happened in a natural, conversational way. Be honest but not overly
                 return {"type": "error", "content": content, "sources": []}
         except Exception:
             pass
-        return {"type": "error", "content": f"Sorry, I wasn't able to edit that image. {error or 'Please try a different edit request.'}", "sources": []}
+        return {"type": "error", "content": "Could not edit that image. Try a different request.", "sources": []}
 
     def _handle_image_modification(self, query, image):
         try:
@@ -645,16 +639,16 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
                     except Exception:
                         content = ""
                     return {"type": "image_edit", "content": content, "image_data": result["image_data"], "image_type": "png", "sources": []}
-                return self._modification_error_response(query, "AI image editing failed. The image processing service may be temporarily unavailable.", approach)
+                return self._modification_error_response(query, "Image editing failed. Please try a different request.", approach)
 
             elif approach == "generate":
                 return self._handle_image_generation(decision.get("prompt", query), "")
 
             return self._modification_error_response(query, "Could not determine the appropriate editing approach.", approach)
         except json.JSONDecodeError:
-            return self._modification_error_response(query, "The image analysis system could not interpret your request.", "unknown")
-        except Exception as e:
-            return self._modification_error_response(query, str(e), "unknown")
+            return self._modification_error_response(query, "Could not interpret your request.", "unknown")
+        except Exception:
+            return self._modification_error_response(query, "Something went wrong while editing.", "unknown")
 
     def _handle_image_generation(self, prompt, context):
         try:
@@ -668,10 +662,10 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
                     "image_type": "png",
                     "sources": [],
                 }
-            error_msg = error or "Image generation failed. The service may be temporarily unavailable."
+            error_msg = error or "Could not generate the image. Try a different prompt."
             return {"type": "error", "content": error_msg, "sources": []}
         except Exception:
-            return {"type": "error", "content": "Image generation failed due to a technical issue.", "sources": []}
+            return {"type": "error", "content": "Could not generate the image. Try again.", "sources": []}
 
     def _handle_file(self, query, file_path, context, max_tokens=None):
         try:
@@ -711,4 +705,4 @@ Respond naturally based on the file content. If the user didn't ask a specific q
             response = self.core.llm.generate(prompt, max_tokens=max_tokens)
             return {"type": "chat", "content": response, "sources": []}
         except Exception as e:
-            return {"type": "error", "content": f"I couldn't process that file: {e}", "sources": []}
+            return {"type": "error", "content": "Could not process that file. Try a different format.", "sources": []}
