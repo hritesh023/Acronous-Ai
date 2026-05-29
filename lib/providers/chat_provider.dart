@@ -119,13 +119,12 @@ class ChatProvider extends ChangeNotifier {
         lastUrl = bestUrl;
         if (bestUrl.isNotEmpty) {
           _api.updateBaseUrl(bestUrl);
-          _isServerConnected = true;
           await _prefs.saveServerUrl(bestUrl);
-          await _api.wakeup();
+          await _api.wakeup(timeout: const Duration(seconds: 15));
           final ready = await _api.waitForReady(
             timeout: bestUrl.startsWith('https://')
-                ? const Duration(seconds: 60)
-                : const Duration(seconds: 20),
+                ? const Duration(seconds: 120)
+                : const Duration(seconds: 30),
           );
           if (!ready) {
             _startKeepAlive();
@@ -134,6 +133,7 @@ class ChatProvider extends ChangeNotifier {
             notifyListeners();
             return;
           }
+          _isServerConnected = true;
           _startKeepAlive();
           _isConnecting = false;
           _serverCheckDone = true;
@@ -157,10 +157,11 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void _startKeepAlive() {
-    Future.delayed(const Duration(seconds: 45), () async {
+    Future.delayed(const Duration(seconds: 20), () async {
       try {
-        await _api.wakeup();
-        _isServerConnected = true;
+        await _api.wakeup(timeout: const Duration(seconds: 15));
+        final healthy = await _api.healthCheck();
+        _isServerConnected = healthy['status'] == 'ok';
       } catch (_) {
         _isServerConnected = false;
       }
@@ -346,6 +347,7 @@ class ChatProvider extends ChangeNotifier {
       _newConversation();
     }
 
+    _error = null;
     _isLoading = true;
     _isTakingLong = false;
     notifyListeners();
@@ -361,11 +363,11 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     if (!_isServerConnected) {
-      await _discoverServer(retries: 1);
+      await _discoverServer(retries: 2);
       if (!_isServerConnected) {
         _isLoading = false;
+        setError('Server is not connected. Please check your connection and try again.');
         _prefs.saveConversations(_conversations).catchError((_) {});
-        notifyListeners();
         return;
       }
     }
@@ -378,6 +380,15 @@ class ChatProvider extends ChangeNotifier {
           resp['response'] as String? ?? '',
         );
         final respType = resp['type'] as String? ?? 'chat';
+        if (respType == 'error') {
+          final errMsg = resp['response'] as String? ?? resp['error'] as String? ?? '';
+          setError(errMsg.isNotEmpty ? errMsg : 'An error occurred. Please try again.');
+          _isTakingLong = false;
+          _isLoading = false;
+          _prefs.saveConversations(_conversations).catchError((_) {});
+          notifyListeners();
+          return;
+        }
         if (rawContent.isEmpty && imageData.isEmpty && attempt < 1) {
           await _api.wakeup();
           await Future.delayed(const Duration(seconds: 3));
@@ -409,12 +420,20 @@ class ChatProvider extends ChangeNotifier {
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
+        setError(
+          e is ApiException
+              ? '${e.message} (${e.statusCode})'
+              : 'Request failed. Please try again.',
+        );
         break;
       }
     }
 
     _isTakingLong = false;
     _isLoading = false;
+    if (_error == null) {
+      setError('No response received. Please try again.');
+    }
     _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
   }
@@ -845,6 +864,14 @@ class ChatProvider extends ChangeNotifier {
   void setError(String? error) {
     _error = error;
     notifyListeners();
+    if (error != null) {
+      Future.delayed(const Duration(seconds: 6), () {
+        if (_error == error && !_disposed) {
+          _error = null;
+          notifyListeners();
+        }
+      });
+    }
   }
 
   String? _error;

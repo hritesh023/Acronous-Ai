@@ -552,15 +552,15 @@ class ApiClient {
     return _get('/api/config');
   }
 
-  Future<Map<String, dynamic>> wakeup() async {
+  Future<Map<String, dynamic>> wakeup({Duration? timeout}) async {
     try {
-      return await _get('/v1/wakeup', timeout: const Duration(seconds: 5));
+      return await _get('/v1/wakeup', timeout: timeout ?? const Duration(seconds: 30));
     } catch (_) {
       return {'status': 'ok'};
     }
   }
 
-  Future<bool> waitForReady({Duration timeout = const Duration(seconds: 30)}) async {
+  Future<bool> waitForReady({Duration timeout = const Duration(seconds: 120)}) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       try {
