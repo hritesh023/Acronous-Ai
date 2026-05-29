@@ -19,7 +19,10 @@ class WebSearch:
                 self.ddg = DDGS()
             except Exception:
                 try:
-                    from duckduckgo_search import DDGS
+                    import warnings
+                    with warnings.catch_warnings():
+                        warnings.filterwarnings("ignore", category=RuntimeWarning)
+                        from duckduckgo_search import DDGS
                     self.ddg = DDGS()
                 except Exception:
                     self.ddg = None
@@ -47,22 +50,39 @@ class WebSearch:
 
     def _scrape_fallback(self, query, max_results):
         try:
-            url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
+            url = "https://lite.duckduckgo.com/lite/"
             headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Content-Type": "application/x-www-form-urlencoded",
             }
-            resp = requests.get(url, headers=headers, timeout=10)
+            data = {"q": query}
+            resp = requests.post(url, data=data, headers=headers, timeout=15)
             soup = BeautifulSoup(resp.text, "html.parser")
             results = []
-            for r in soup.select(".result")[:max_results]:
-                title_el = r.select_one(".result__title a")
-                snippet_el = r.select_one(".result__snippet")
-                if title_el:
+            for table in soup.select("table"):
+                for row in table.select("tr"):
+                    link = row.select_one("a")
+                    if not link:
+                        continue
+                    title = link.get_text(strip=True)
+                    href = link.get("href", "")
+                    if not title or not href or href.startswith("/"):
+                        continue
+                    snippet_td = link.find_parent("td")
+                    snippet = ""
+                    if snippet_td:
+                        snippet_td = snippet_td.find_next_sibling("td")
+                        if snippet_td:
+                            snippet = snippet_td.get_text(strip=True)
                     results.append({
-                        "title": title_el.get_text(strip=True),
-                        "url": title_el.get("href", ""),
-                        "snippet": snippet_el.get_text(strip=True) if snippet_el else ""
+                        "title": title,
+                        "url": href,
+                        "snippet": snippet,
                     })
+                    if len(results) >= max_results:
+                        break
+                if len(results) >= max_results:
+                    break
             return results
         except Exception:
             return []

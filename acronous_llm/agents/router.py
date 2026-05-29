@@ -646,19 +646,18 @@ Answer naturally and conversationally. Never say "As of my knowledge" or "based 
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).astimezone()
         year = now.year
-        current_roles = [
-            "current president", "current prime minister", "current chief minister",
+        if any(role in q for role in ["current president", "current prime minister", "current chief minister",
             "current governor", "current mayor", "current chancellor",
             "current ceo", "current minister", "current senator",
-            "president of", "prime minister of", "chief minister of",
+            "current ceo", "who is the current"]):
+            clean = q.replace("current ", "").strip()
+            return f"{clean} {year} incumbent"
+        if any(role in q for role in ["president of", "prime minister of", "chief minister of",
             "governor of", "mayor of", "head of state", "head of government",
             "who is the president", "who is the prime minister", "who is the chief minister",
             "who is the governor", "who is the mayor", "who is the ceo",
-            "who is the current", "who is the minister",
-        ]
-        for role in current_roles:
-            if role in q:
-                return f"{query} {year} incumbent"
+            "who is the minister"]):
+            return f"{query} {year} incumbent"
         return query
 
     def _is_current_affairs_query(self, query):
@@ -686,21 +685,25 @@ Answer naturally and conversationally. Never say "As of my knowledge" or "based 
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).astimezone()
         year = now.year
-        current_roles = [
-            "current president", "current prime minister", "current chief minister",
+        current_prefixes = ["current president", "current prime minister", "current chief minister",
             "current governor", "current mayor", "current chancellor",
             "current ceo", "current minister", "current senator",
-            "president of", "prime minister of", "chief minister of",
+            "who is the current"]
+        role_prefixes = ["president of", "prime minister of", "chief minister of",
             "governor of", "mayor of", "head of state", "head of government",
             "who is the president", "who is the prime minister", "who is the chief minister",
             "who is the governor", "who is the mayor", "who is the ceo",
-            "who is the current", "who is the minister",
-        ]
-        for role in current_roles:
-            if role in q:
-                return f"{year} {role} {year}"
+            "who is the minister"]
+        for prefix in current_prefixes:
+            if prefix in q:
+                clean = q.replace("current ", "").strip()
+                return f"{clean} incumbent {year}"
+        for prefix in role_prefixes:
+            if prefix in q:
+                role_name = prefix
+                return f"incumbent {role_name} {year}"
         if self._is_current_affairs_query(q):
-            return f"{query} {year} latest"
+            return f"{query} {year}"
         return query
 
     def _handle_search(self, query, context):
