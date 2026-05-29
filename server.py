@@ -36,11 +36,17 @@ app = FastAPI(title="Acronous AI API", version="1.0.0")
 
 def _keep_alive_loop():
     while True:
-        time.sleep(600)
+        time.sleep(300)
         try:
             import requests
-            port = os.getenv("PORT", "8000")
-            requests.get(f"http://127.0.0.1:{port}/v1/health", timeout=10)
+            public_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("API_BASE_URL") or ""
+            if public_url:
+                public_url = public_url.rstrip("/")
+                health_url = f"{public_url}/v1/health?keepalive=1"
+                requests.get(health_url, timeout=10)
+            else:
+                port = os.getenv("PORT", "8000")
+                requests.get(f"http://127.0.0.1:{port}/v1/health", timeout=10)
         except Exception:
             pass
 
