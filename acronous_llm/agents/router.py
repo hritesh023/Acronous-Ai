@@ -88,7 +88,10 @@ Category:"""
             elif route_type == "image_generation":
                 result = self._handle_image_generation(query, context)
             elif route_type == "web_search" or route_type == "factual" or route_type == "news":
-                result = self._handle_search(query, context, max_tokens)
+                if context and "[Current date and time:" in context:
+                    result = self._handle_time_query(query, context, max_tokens)
+                else:
+                    result = self._handle_search(query, context, max_tokens)
             elif route_type == "code_generation":
                 result = self._handle_code(query, context, max_tokens)
             elif route_type == "translation":
@@ -139,7 +142,10 @@ Category:"""
 
         route_type = route.get("type", "general_chat")
         if route_type in ("web_search", "factual", "news"):
-            result = self._handle_search(query, context, max_tokens)
+            if context and "[Current date and time:" in context:
+                result = self._handle_time_query(query, context, max_tokens)
+            else:
+                result = self._handle_search(query, context, max_tokens)
             content = result.get("content", "")
             chunk_size = 30
             for i in range(0, len(content), chunk_size):
@@ -201,6 +207,15 @@ Search queries:"""
         except Exception:
             pass
         return ""
+
+    def _handle_time_query(self, query, context, max_tokens=None):
+        prompt = f"""{context}
+
+The user asked: {query}
+
+Using the date, time, and location information provided above, answer their question conversationally and accurately. Be warm and natural. Never mention or repeat the internal markers like [Current date and time:] or [User location:]. Just give a natural, friendly answer."""
+        response = self.core.llm.generate(prompt, max_tokens=max_tokens)
+        return {"type": "chat", "content": (response.strip() if response else ""), "sources": []}
 
     def _handle_search(self, query, context, max_tokens=None):
         search_data = ""
