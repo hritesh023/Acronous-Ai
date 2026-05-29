@@ -136,7 +136,7 @@ class AcronousAgentEngine:
     def process(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
         time_context = self._timezone_context(timezone, location, query)
         ctx_parts = [p for p in [time_context, context] if p]
-        context = "\n".join(ctx_parts) if ctx_parts else None
+        context = "\n".join(ctx_parts) if ctx_parts else ""
         complexity = self.estimate_complexity(query)
         max_tokens = self._complexity_to_max_tokens(complexity)
         route = self.router.route(query)
@@ -152,7 +152,7 @@ class AcronousAgentEngine:
     def process_stream(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
         time_context = self._timezone_context(timezone, location, query)
         ctx_parts = [p for p in [time_context, context] if p]
-        context = "\n".join(ctx_parts) if ctx_parts else None
+        context = "\n".join(ctx_parts) if ctx_parts else ""
         complexity = self.estimate_complexity(query)
         max_tokens = self._complexity_to_max_tokens(complexity)
         route = self.router.route(query)
@@ -166,7 +166,7 @@ class AcronousAgentEngine:
         yield from self.router.execute_stream(query, route, session_id, messages=messages, context=context, max_tokens=max_tokens)
 
     def process_with_image(self, query, image, session_id="default", messages=None):
-        context = None
+        context = ""
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, image=image, messages=messages, context=context)
 
@@ -190,6 +190,6 @@ class AcronousAgentEngine:
         return self.router._handle_image_modification(query, image_path)
 
     def process_with_file(self, query, file_path, session_id="default", messages=None):
-        context = None
+        context = ""
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, file_path=file_path, messages=messages, context=context)
