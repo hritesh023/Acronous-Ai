@@ -61,6 +61,7 @@ Category:"""
         except Exception:
             pass
 
+        context = context or ""
         if messages and isinstance(messages, list):
             conv_lines = []
             for m in messages[-20:]:
@@ -122,6 +123,7 @@ Category:"""
             stored_context = self.core.memory.get_recent_context(session_id)
         except Exception:
             pass
+        context = context or ""
         if messages and isinstance(messages, list):
             conv_lines = []
             for m in messages[-20:]:
