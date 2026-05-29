@@ -94,7 +94,7 @@ Category:"""
             else:
                 result = self._handle_chat(query, context, max_tokens)
         except Exception:
-            result = {"type": "chat", "content": "", "sources": []}
+            result = {"type": "error", "content": "The AI service is currently unavailable. Please try again.", "sources": []}
 
         if result and result.get("content"):
             try:
@@ -104,7 +104,9 @@ Category:"""
 
         if not result or not result.get("content"):
             try:
-                result = self._handle_search(query, context, max_tokens)
+                fallback = self._handle_search(query, context, max_tokens)
+                if fallback and fallback.get("content"):
+                    result = fallback
             except Exception:
                 pass
 

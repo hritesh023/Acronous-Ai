@@ -250,7 +250,7 @@ async def chat(req: ChatRequest, fastapi_request: Request):
             image_data = result.get("image_data", "") or ""
             image_type = result.get("image_type", "") or ""
             if not content and resp_type == "error":
-                resp_type = "chat"
+                content = "The AI service encountered an issue. Please try again."
             return ChatResponse(
                 response=content,
                 session_id=req.session_id,
