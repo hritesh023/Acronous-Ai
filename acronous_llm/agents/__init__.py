@@ -165,8 +165,8 @@ class AcronousAgentEngine:
             return
         yield from self.router.execute_stream(query, route, session_id, messages=messages, context=context, max_tokens=max_tokens)
 
-    def process_with_image(self, query, image, session_id="default", messages=None):
-        context = ""
+    def process_with_image(self, query, image, session_id="default", messages=None, timezone="", location=""):
+        context = self._timezone_context(timezone, location, query)
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, image=image, messages=messages, context=context)
 

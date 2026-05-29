@@ -80,9 +80,9 @@ Category:"""
         try:
             if image is not None:
                 if self._is_modification_request(query, image):
-                    result = self._handle_image_modification(query, image)
+                    result = self._handle_image_modification(query, image, context)
                 else:
-                    result = self._handle_image(query, image)
+                    result = self._handle_image(query, image, context)
             elif file_path is not None:
                 result = self._handle_file(query, file_path, context, max_tokens)
             elif route_type == "image_generation":
@@ -371,7 +371,7 @@ Respond conversationally — tell them what you detected and then give the trans
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "translation", "content": response, "sources": []}
 
-    def _handle_image(self, query, image):
+    def _handle_image(self, query, image, context=""):
         analysis = None
         objects = None
         image_context = ""
@@ -398,17 +398,18 @@ Respond conversationally — tell them what you detected and then give the trans
                 image_context = " ".join(desc_parts)
             except Exception:
                 image_context = "[Image analysis is temporarily unavailable.]"
+        conv = f"\nConversation history:\n{context}\n" if context else ""
         is_auto = not query or not query.strip()
         if is_auto:
-            prompt = f"""{image_context}
+            prompt = f"""{image_context}{conv}
 
 The user captured this image with no specific request. Describe what you see and provide your insights naturally. Never mention that you're reading from analysis data — just describe the image conversationally."""
         else:
-            prompt = f"""{image_context}
+            prompt = f"""{image_context}{conv}
 
 User query about image: {query}
 
-Respond based on the image content above. Never mention that you're reading from analysis data — just describe naturally."""
+Respond based on the image content and conversation history above. Never mention that you're reading from analysis data — just describe naturally."""
         response = self.core.llm.generate(prompt)
         return {"type": "image_analysis", "content": response, "analysis": analysis, "objects": objects}
 
@@ -444,7 +445,7 @@ Explain what happened in a natural, conversational way. Be honest but not overly
             pass
         return {"type": "error", "content": "Could not edit that image. Try a different request.", "sources": []}
 
-    def _handle_image_modification(self, query, image):
+    def _handle_image_modification(self, query, image, context=""):
         try:
             from PIL import Image, ImageEnhance, ImageFilter, ImageOps
             import io
@@ -474,10 +475,11 @@ Explain what happened in a natural, conversational way. Be honest but not overly
 
             img_width, img_height = pil_image.size if hasattr(pil_image, 'size') else (512, 512)
 
-            decision_prompt = f"""You are an expert image editing AI. Analyze the user's request and the image, then decide the BEST editing approach.
+            conv = f"\nConversation history:\n{context}\n" if context else ""
+            decision_prompt = f"""You are an expert image editing AI. Analyze the user's request, conversation history, and the image, then decide the BEST editing approach.
 
 User request: "{query}"
-
+{conv}
 Image dimensions: {img_width}x{img_height}px
 
 Available editing approaches:

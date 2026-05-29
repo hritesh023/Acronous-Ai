@@ -120,3 +120,20 @@ class ImageGenerator:
 
     def inpaint(self, image, mask, prompt, **kwargs):
         return self.generate(prompt, **kwargs)
+
+    def img2img(self, image_b64, prompt, strength=0.7, mask_description=None):
+        try:
+            import base64
+            import io as io_mod
+            img_data = base64.b64decode(image_b64)
+            img = Image.open(io_mod.BytesIO(img_data))
+            img.thumbnail((512, 512), Image.LANCZOS)
+            enhanced = prompt
+            if mask_description:
+                enhanced = f"{prompt} (focus on: {mask_description})"
+            img_bytes, error = self.generate(enhanced)
+            if img_bytes:
+                return {"image_data": base64.b64encode(img_bytes).decode("utf-8"), "image_type": "png"}
+            return None
+        except Exception:
+            return None
