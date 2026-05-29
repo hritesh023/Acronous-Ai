@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:html' as html;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -184,6 +185,8 @@ class ChatMessageWidget extends StatelessWidget {
                       children: [
                         if (message.imageData.isNotEmpty)
                           _buildGeneratedImage(context, message.imageData, cs),
+                        if (message.fileData.isNotEmpty)
+                          _buildFileDownload(context, message, cs),
                         if (message.content.isNotEmpty)
                           MarkdownRenderer(content: message.content),
                       ],
@@ -324,6 +327,100 @@ class ChatMessageWidget extends StatelessWidget {
     } catch (_) {
       return const SizedBox.shrink();
     }
+  }
+
+  Widget _buildFileDownload(BuildContext context, ChatMessage msg, ColorScheme cs) {
+    final icon = _fileIcon(msg.fileType);
+    final label = msg.fileName.isNotEmpty ? msg.fileName : 'Download ${msg.fileType.toUpperCase()}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GestureDetector(
+        onTap: () => _saveOrOpenFile(context, msg),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: cs.primaryContainer.withValues(alpha: 0.4),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: cs.primary.withValues(alpha: 0.2)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 22, color: cs.primary),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: cs.primary,
+                    fontWeight: FontWeight.w500,
+                    fontSize: AppDimens.fontSizeSM,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.download, size: 18, color: cs.primary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  IconData _fileIcon(String type) {
+    switch (type) {
+      case 'pdf': return Icons.picture_as_pdf;
+      case 'csv': return Icons.table_chart;
+      case 'svg': return Icons.image;
+      case 'json': return Icons.data_object;
+      case 'html': return Icons.code;
+      case 'md': return Icons.description;
+      default: return Icons.insert_drive_file;
+    }
+  }
+
+  void _saveOrOpenFile(BuildContext context, ChatMessage msg) {
+    try {
+      final bytes = base64Decode(msg.fileData);
+      if (kIsWeb) {
+        _downloadOnWeb(bytes, msg.fileName);
+      } else {
+        _saveToDisk(context, bytes, msg.fileName);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open file'), behavior: SnackBarBehavior.floating),
+      );
+    }
+  }
+
+  void _saveToDisk(BuildContext context, Uint8List bytes, String name) {
+    try {
+      final file = File('${Directory.systemTemp.path}/$name');
+      file.writeAsBytesSync(bytes);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Saved: $name'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save file'), behavior: SnackBarBehavior.floating),
+      );
+    }
+  }
+
+  void _downloadOnWeb(Uint8List bytes, String name) {
+    final blob = base64Encode(bytes);
+    final dataUri = 'data:application/octet-stream;base64,$blob';
+    // Use a platform channel or anchor tag approach
+    final anchor = html.AnchorElement(href: dataUri)
+      ..target = '_blank'
+      ..download = name;
+    anchor.click();
   }
 
   Widget _imagePlaceholder(ColorScheme cs) {

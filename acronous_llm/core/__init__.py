@@ -8,6 +8,7 @@ from acronous_llm.core.voice import VoiceEngine
 from acronous_llm.core.memory import MemorySystem
 from acronous_llm.core.image_generator import ImageGenerator
 from acronous_llm.core.diagram_generator import DiagramGenerator
+from acronous_llm.core.file_generator import FileGenerator
 
 class AcronousCoreEngine:
     def __init__(self, config: AcronousConfig):
@@ -21,3 +22,4 @@ class AcronousCoreEngine:
         self.memory = MemorySystem(config)
         self.image_gen = ImageGenerator(config, llm=self.llm)
         self.diagram_gen = DiagramGenerator(config)
+        self.file_gen = FileGenerator(config, llm=self.llm)

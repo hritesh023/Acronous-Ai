@@ -27,7 +27,8 @@ class QueryRouter:
 
 Categories:
 - web_search: ANY question seeking factual information, current events, news, politics, government officials, weather, time, date, prices, sports scores, definitions, explanations, who is, what is, where is, when did, how does — any information that requires up-to-date or external knowledge
-- image_generation: user asks to draw, paint, generate, create, or make an image/picture/photo/art/diagram
+- image_generation: user asks to draw, paint, sketch, generate, create, or make an image/picture/photo/art/diagram
+- file_generation: user asks to create, generate, or make a file in a specific format — pdf, csv, svg, json, html, md, text/txt, spreadsheet, document, report, chart, diagram, icon, logo, invoice, resume, letter, certificate, or any downloadable document
 - code_generation: user asks to write code, a function, program, algorithm, or debugging help
 - translation: user explicitly says "translate" or asks how to say something in another language
 - image_analysis: user uploaded or wants to analyze an image/photo
@@ -43,7 +44,7 @@ Category:"""
                 system_prompt="You classify user requests into categories. Return only the category name."
             )
             result = result.strip().lower().strip('"').strip("'").strip()
-            valid = {"image_generation", "web_search", "code_generation", "translation", "image_analysis", "general_chat"}
+            valid = {"image_generation", "file_generation", "web_search", "code_generation", "translation", "image_analysis", "general_chat"}
             if result in valid:
                 return result
             return "web_search"
@@ -87,6 +88,8 @@ Category:"""
                 result = self._handle_file(query, file_path, context, max_tokens)
             elif route_type == "image_generation":
                 result = self._handle_image_generation(query, context)
+            elif route_type == "file_generation":
+                result = self._handle_file_generation(query, context)
             elif route_type == "web_search" or route_type == "factual" or route_type == "news":
                 if context and "[Current date and time:" in context:
                     result = self._handle_time_query(query, context, max_tokens)
@@ -674,6 +677,53 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
             return {"type": "error", "content": error_msg, "sources": []}
         except Exception:
             return {"type": "error", "content": "Could not generate the image. Try again.", "sources": []}
+
+    def _handle_file_generation(self, query, context):
+        try:
+            conv = f"\nConversation history:\n{context}\n" if context else ""
+            prompt = f"""{conv}The user wants to generate a file. Determine what type of file they want and create it.
+
+User request: {query}
+
+Respond with ONLY valid JSON - no markdown, no code fences:
+{{"file_type": "pdf|csv|svg|json|html|md|txt", "filename": "suggested filename with extension", "content": "the full file content here"}}
+
+Rules:
+- For CSV: return comma-separated values with header row
+- For PDF: return the text content that should appear in the document
+- For SVG: return valid SVG markup inside an <svg> tag
+- For JSON: return valid JSON
+- For HTML: return a complete HTML document
+- For MD: return markdown content
+- For TXT: return plain text
+
+The content you provide will be written directly into the file, so make sure it's complete and properly formatted."""
+            resp = self.core.llm.generate(prompt, system_prompt="You generate files. Respond with valid JSON only.")
+            resp = resp.strip()
+            if resp.startswith("```"):
+                resp = resp.split("\n", 1)[-1]
+                if "```" in resp:
+                    resp = resp.split("```")[0]
+            decision = json.loads(resp)
+            file_type = decision.get("file_type", "txt")
+            filename = decision.get("filename", f"file.{file_type}")
+            content = decision.get("content", query)
+            result = self.core.file_gen.generate(content, file_type, filename)
+            if result and result.get("file_data"):
+                return {
+                    "type": "file_gen",
+                    "content": f"Here is your {file_type.upper()} file: {result['file_name']}",
+                    "file_data": result["file_data"],
+                    "file_name": result["file_name"],
+                    "file_type": result["file_type"],
+                    "mime": result.get("mime", "text/plain"),
+                    "sources": [],
+                }
+            return {"type": "error", "content": "Could not generate that file. Try a different request.", "sources": []}
+        except json.JSONDecodeError:
+            return {"type": "error", "content": "Could not interpret your request. Try being more specific about the file type.", "sources": []}
+        except Exception:
+            return {"type": "error", "content": "Could not generate the file. Try again.", "sources": []}
 
     def _handle_file(self, query, file_path, context, max_tokens=None):
         try:

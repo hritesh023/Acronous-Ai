@@ -161,6 +161,9 @@ class ChatResponse(BaseModel):
     type: str = "chat"
     image_data: str = ""
     image_type: str = ""
+    file_data: str = ""
+    file_name: str = ""
+    file_type: str = ""
     complexity: int = 0
     complexity_label: str = "simple"
 
@@ -256,6 +259,9 @@ async def chat(req: ChatRequest, fastapi_request: Request):
             resp_type = result.get("type", "chat")
             image_data = result.get("image_data", "") or ""
             image_type = result.get("image_type", "") or ""
+            file_data = result.get("file_data", "") or ""
+            file_name = result.get("file_name", "") or ""
+            file_type = result.get("file_type", "") or ""
             if not content and resp_type == "error":
                 content = "The AI service encountered an issue. Please try again."
             return ChatResponse(
@@ -264,6 +270,9 @@ async def chat(req: ChatRequest, fastapi_request: Request):
                 type=resp_type,
                 image_data=image_data,
                 image_type=image_type,
+                file_data=file_data,
+                file_name=file_name,
+                file_type=file_type,
                 complexity=result.get("complexity", 0),
                 complexity_label=result.get("complexity_label", "simple"),
             )
@@ -364,17 +373,26 @@ async def chat_with_image(
             resp_type = result.get("type", "chat")
             image_data = result.get("image_data", "") or ""
             image_type = result.get("image_type", "") or ""
+            file_data = result.get("file_data", "") or ""
+            file_name = result.get("file_name", "") or ""
+            file_type = result.get("file_type", "") or ""
         else:
             response_text = ""
             resp_type = "error"
             image_data = ""
             image_type = ""
+            file_data = ""
+            file_name = ""
+            file_type = ""
         return ChatResponse(
             response=response_text,
             session_id=session_id,
             type=resp_type,
             image_data=image_data,
             image_type=image_type,
+            file_data=file_data,
+            file_name=file_name,
+            file_type=file_type,
         )
     except Exception as e:
         logger.error(f"Error processing image chat: {type(e).__name__}: {e}", exc_info=True)
@@ -406,12 +424,18 @@ async def chat_with_file(
         resp_type = result.get("type", "chat")
         image_data = result.get("image_data", "")
         image_type = result.get("image_type", "")
+        file_data = result.get("file_data", "") or ""
+        file_name = result.get("file_name", "") or ""
+        file_type = result.get("file_type", "") or ""
         return ChatResponse(
             response=response_text,
             session_id=session_id,
             type=resp_type,
             image_data=image_data,
             image_type=image_type,
+            file_data=file_data,
+            file_name=file_name,
+            file_type=file_type,
         )
     except Exception as e:
         logger.error(f"Error processing file chat: {type(e).__name__}: {e}", exc_info=True)
@@ -515,6 +539,9 @@ async def edit_image(
         resp_type = result.get("type", "chat")
         image_data = result.get("image_data", "") or ""
         image_type = result.get("image_type", "") or ""
+        file_data = result.get("file_data", "") or ""
+        file_name = result.get("file_name", "") or ""
+        file_type = result.get("file_type", "") or ""
 
         return ChatResponse(
             response=response_text,
@@ -522,6 +549,9 @@ async def edit_image(
             type=resp_type,
             image_data=image_data,
             image_type=image_type,
+            file_data=file_data,
+            file_name=file_name,
+            file_type=file_type,
         )
     except Exception as e:
         logger.error(f"Error editing image: {type(e).__name__}: {e}", exc_info=True)

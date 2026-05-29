@@ -59,6 +59,9 @@ class ChatResponse {
   final String? imageBase64;
   final String? videoUrl;
   final String? audioUrl;
+  final String? fileData;
+  final String? fileName;
+  final String? fileType;
   final int complexity;
   final String complexityLabel;
 
@@ -72,6 +75,9 @@ class ChatResponse {
     this.imageBase64,
     this.videoUrl,
     this.audioUrl,
+    this.fileData,
+    this.fileName,
+    this.fileType,
     this.complexity = 0,
     this.complexityLabel = 'simple',
   });
@@ -96,6 +102,9 @@ class ChatResponse {
         (json['image_base64'] as String?) ?? (json['image_data'] as String?),
     videoUrl: json['video_url'] as String?,
     audioUrl: json['audio_url'] as String?,
+    fileData: json['file_data'] as String?,
+    fileName: json['file_name'] as String?,
+    fileType: json['file_type'] as String?,
     complexity: json['complexity'] as int? ?? 0,
     complexityLabel: json['complexity_label'] as String? ?? 'simple',
   );

@@ -347,6 +347,10 @@ class ChatProvider extends ChangeNotifier {
       _newConversation();
     }
 
+    if (_isLoading) {
+      cancelGeneration();
+    }
+
     _isLoading = true;
     _isTakingLong = false;
     notifyListeners();
@@ -375,6 +379,9 @@ class ChatProvider extends ChangeNotifier {
       try {
         final resp = await _callApi(userMsg, text);
         final imageData = resp['image_data'] as String? ?? '';
+        final fileData = resp['file_data'] as String? ?? '';
+        final fileName = resp['file_name'] as String? ?? '';
+        final fileType = resp['file_type'] as String? ?? '';
         final rawContent = _sanitizeAssistantText(
           resp['response'] as String? ?? '',
         );
@@ -388,17 +395,20 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        if (rawContent.isEmpty && imageData.isEmpty && attempt < 1) {
+        if (rawContent.isEmpty && imageData.isEmpty && fileData.isEmpty && attempt < 1) {
           await _api.wakeup();
           await Future.delayed(const Duration(seconds: 3));
           continue;
         }
-        if (rawContent.isNotEmpty || imageData.isNotEmpty) {
+        if (rawContent.isNotEmpty || imageData.isNotEmpty || fileData.isNotEmpty) {
           _currentConversation!.messages.add(
             ChatMessage(
               role: 'assistant',
               content: rawContent,
               imageData: imageData,
+              fileData: fileData,
+              fileName: fileName,
+              fileType: fileType,
             ),
           );
         }
@@ -529,7 +539,14 @@ class ChatProvider extends ChangeNotifier {
       timezone: timezone.isNotEmpty ? timezone : null,
       location: location,
     );
-    return {'response': resp.content, 'image_data': '', 'type': resp.type};
+    return {
+      'response': resp.content,
+      'image_data': resp.imageBase64 ?? '',
+      'type': resp.type,
+      'file_data': resp.fileData ?? '',
+      'file_name': resp.fileName ?? '',
+      'file_type': resp.fileType ?? '',
+    };
   }
 
   Future<void> pickImageForAnalysis(BuildContext context) async {

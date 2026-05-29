@@ -56,6 +56,9 @@ class ChatMessage {
   final List<MessageAttachment> attachments;
   final String id;
   final String imageData;
+  final String fileData;
+  final String fileName;
+  final String fileType;
 
   ChatMessage({
     required this.role,
@@ -64,6 +67,9 @@ class ChatMessage {
     List<MessageAttachment>? attachments,
     String? id,
     this.imageData = '',
+    this.fileData = '',
+    this.fileName = '',
+    this.fileType = '',
   }) : timestamp = timestamp ?? DateTime.now(),
        attachments = attachments ?? [],
        id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
@@ -75,6 +81,9 @@ class ChatMessage {
         'attachments': attachments.map((a) => a.toJson()).toList(),
         'id': id,
         'imageData': imageData,
+        'fileData': fileData,
+        'fileName': fileName,
+        'fileType': fileType,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -88,6 +97,9 @@ class ChatMessage {
             [],
         id: json['id'] as String?,
         imageData: json['imageData'] as String? ?? '',
+        fileData: json['fileData'] as String? ?? '',
+        fileName: json['fileName'] as String? ?? '',
+        fileType: json['fileType'] as String? ?? '',
       );
 }
 
