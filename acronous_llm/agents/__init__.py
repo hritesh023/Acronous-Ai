@@ -59,6 +59,7 @@ class AcronousAgentEngine:
         if timezone:
             from datetime import timedelta, timezone as tz_mod
             user_now = None
+            tz_label = ""
             try:
                 try:
                     from zoneinfo import ZoneInfo
@@ -72,29 +73,37 @@ class AcronousAgentEngine:
                         user_now = datetime.now(user_tz)
                         tz_label = user_now.strftime('%Z')
                     except (ImportError, KeyError):
-                        user_now = None
+                        pass
             except Exception:
-                user_now = None
+                pass
+
             if user_now is None:
                 try:
-                    offset_str = timezone.replace("UTC", "").strip()
-                    sign = 1 if offset_str.startswith("+") else -1
-                    parts = offset_str.lstrip("+-").split(":")
-                    hours = int(parts[0])
-                    minutes = int(parts[1]) if len(parts) > 1 else 0
-                    offset = timedelta(hours=sign * hours, minutes=sign * minutes)
-                    user_tz = tz_mod(offset)
-                    user_now = datetime.now(user_tz)
-                    tz_label = user_now.strftime('%z')
+                    upper = timezone.upper().strip()
+                    if upper.startswith("UTC") or upper.startswith("GMT"):
+                        offset_str = upper[3:].strip()
+                        if offset_str:
+                            sign = 1 if offset_str.startswith("+") else -1
+                            parts = offset_str.lstrip("+-").split(":")
+                            hours = int(parts[0])
+                            minutes = int(parts[1]) if len(parts) > 1 else 0
+                            offset = timedelta(hours=sign * hours, minutes=sign * minutes)
+                            user_tz = tz_mod(offset)
+                            user_now = datetime.now(user_tz)
+                            tz_label = user_now.strftime('%z')
                 except Exception:
                     pass
-            if user_now is not None:
-                utc_now = datetime.now(tz_mod.utc)
-                time_parts.append(
-                    f"[Current date and time: {user_now.strftime('%A, %B %d, %Y at %I:%M %p')} {tz_label}]\n"
-                    f"[Current UTC time: {utc_now.strftime('%A, %B %d, %Y at %I:%M %p UTC')}]"
-                )
-        if not any("[Current date and time:" in p for p in time_parts):
+
+            if user_now is None:
+                user_now = datetime.now(tz_base.utc).astimezone()
+                tz_label = user_now.strftime('%Z')
+
+            utc_now = datetime.now(tz_base.utc)
+            time_parts.append(
+                f"[Current date and time: {user_now.strftime('%A, %B %d, %Y at %I:%M %p')} {tz_label}]\n"
+                f"[Current UTC time: {utc_now.strftime('%A, %B %d, %Y at %I:%M %p UTC')}]"
+            )
+        else:
             now = datetime.now(tz_base.utc).astimezone()
             time_parts.append(
                 f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]\n"
