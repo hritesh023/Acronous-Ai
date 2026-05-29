@@ -1,5 +1,6 @@
 import json
 import re
+import base64
 
 
 class QueryRouter:
@@ -642,20 +643,18 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
 
     def _handle_image_generation(self, prompt, context):
         try:
-            result = self.core.image_gen.generate(prompt)
-            if result and isinstance(result, dict):
-                if result.get("image_data"):
-                    content = result.get("content", "")
-                    return {
-                        "type": "image_gen",
-                        "content": content or f"Generated: {prompt}",
-                        "image_data": result["image_data"],
-                        "image_type": result.get("image_type", "png"),
-                        "sources": [],
-                    }
-                if result.get("type") == "error":
-                    return result
-            return {"type": "error", "content": "Image generation failed. The service may be temporarily unavailable.", "sources": []}
+            img_bytes, error = self.core.image_gen.generate(prompt)
+            if img_bytes:
+                b64 = base64.b64encode(img_bytes).decode("utf-8")
+                return {
+                    "type": "image_gen",
+                    "content": f"Generated: {prompt}",
+                    "image_data": b64,
+                    "image_type": "png",
+                    "sources": [],
+                }
+            error_msg = error or "Image generation failed. The service may be temporarily unavailable."
+            return {"type": "error", "content": error_msg, "sources": []}
         except Exception:
             return {"type": "error", "content": "Image generation failed due to a technical issue.", "sources": []}
 
