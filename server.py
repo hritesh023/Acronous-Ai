@@ -287,7 +287,7 @@ async def chat_stream(req: ChatRequest):
     def _produce():
         try:
             chunks = []
-            for chunk in agent_engine.process_stream(req.message, req.session_id, timezone=req.timezone):
+            for chunk in agent_engine.process_stream(req.message, req.session_id, timezone=req.timezone, location=req.location):
                 chunks.append(str(chunk))
             q.put(_sanitize_public_text("".join(chunks)))
         except Exception as e:

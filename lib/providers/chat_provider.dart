@@ -32,7 +32,7 @@ class ChatProvider extends ChangeNotifier {
 
   static const _serverNotFound = '';
   static final RegExp _privateInfoPattern = RegExp(
-    r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b|\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space)\b.{0,120}\b(powers me|is my provider|backend|model|runs me|hosts me)\b|\b(api key|secret|system prompt|internal configuration|backend technology|technical architecture|infrastructure details)\b|\b(as an ai (assistant|model|language model)|i am a (helpful|useful) (ai|assistant)|i am an ai)\b.{0,100}\b(created by|developed by|built by|made by)\b",
+    r"(powered by|hosted by|served by|hosted on|runs on)\s+\w+|\b(api[ _]?key|system prompt|internal (configuration|instructions)|backend (details?|technology)|infrastructure details?|technical (architecture|details))\b|(as an ai\b.{0,50}(created by|developed by|built by|made by))",
     caseSensitive: false,
     dotAll: true,
   );
@@ -43,7 +43,11 @@ class ChatProvider extends ChangeNotifier {
     final cleaned = trimmed
         .replaceAll(RegExp(r'\[Current date and time:[^\]]*\]'), '')
         .replaceAll(RegExp(r'\[Web-fetched [^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[Web-fetched current [^\]]*\]'), '')
         .replaceAll(RegExp(r'\[User location:[^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[Live time data:[^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[Live location data:[^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[Internal[^\]]*\]'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
     if (cleaned.isEmpty) {
@@ -416,10 +420,9 @@ class ChatProvider extends ChangeNotifier {
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
-        final errMsg = (e is ApiException) ? e.message : '';
-        if (errMsg.isNotEmpty) {
+        if (e is ApiException) {
           _currentConversation!.messages.add(
-            ChatMessage(role: 'assistant', content: errMsg),
+            ChatMessage(role: 'assistant', content: 'Something went wrong. Please try again.'),
           );
         }
         break;
@@ -539,7 +542,7 @@ class ChatProvider extends ChangeNotifier {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${AppStrings.analysisError}: $e'),
+            content: const Text('Failed to load image. Please try again.'),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),
@@ -589,7 +592,7 @@ class ChatProvider extends ChangeNotifier {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Camera error: $e'),
+              content: const Text('Could not access camera. Please try again.'),
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),
@@ -673,7 +676,7 @@ class ChatProvider extends ChangeNotifier {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${AppStrings.analysisError}: $e'),
+            content: const Text('Something went wrong. Please try again.'),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(10),

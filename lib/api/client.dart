@@ -220,17 +220,16 @@ class ApiClient {
       final status = response.statusCode;
       throw ApiException(
         status,
-        'Server error ($status): ${body.substring(0, body.length.clamp(0, 200))}',
+        'Something went wrong. Please try again.',
         <String, dynamic>{'response': body},
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final msg =
-          json['detail'] as String? ??
-          json['message'] as String? ??
-          json['error'] as String? ??
-          'HTTP ${response.statusCode}';
-      throw ApiException(response.statusCode, msg, json);
+      throw ApiException(
+        response.statusCode,
+        'Something went wrong. Please try again.',
+        json,
+      );
     }
     return json;
   }

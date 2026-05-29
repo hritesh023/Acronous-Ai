@@ -120,8 +120,8 @@ class AcronousAgentEngine:
             result["complexity_label"] = self._complexity_bucket(complexity)
         return result
 
-    def process_stream(self, query, session_id="default", context=None, messages=None, timezone=""):
-        time_context = self._timezone_context(timezone)
+    def process_stream(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
+        time_context = self._timezone_context(timezone, location)
         if context:
             context = f"{time_context}\n{context}"
         else:
