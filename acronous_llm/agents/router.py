@@ -8,22 +8,10 @@ class QueryRouter:
         self.neural = neural_engine
         self.core = core_engine
 
-    INTENT_MAP = {
-        "general_chat": "general_chat",
-        "web_search": "web_search",
-        "image_analysis": "general_chat",
-        "image_generation": "image_generation",
-        "voice_command": "general_chat",
-        "code_generation": "code_generation",
-        "translation": "translation",
-        "data_analysis": "web_search",
-        "planning_task": "general_chat",
-    }
-
     def route(self, query):
         query_lower = query.lower().strip()
         embedding = self.core.embedder.embed(query)
-        route_type = self._determine_type_with_neural(query, embedding)
+        route_type = self._determine_type_with_llm(query)
         features = {
             "type": route_type,
             "needs_search": route_type in ("web_search", "factual", "news"),
@@ -34,15 +22,33 @@ class QueryRouter:
         }
         return features
 
-    def _determine_type_with_neural(self, query, embedding):
-        if not query or not query.strip():
-            return "general_chat"
+    def _determine_type_with_llm(self, query):
+        prompt = f"""Classify this user request into exactly one category. Return ONLY the category name, nothing else.
+
+Categories:
+- web_search: ANY question seeking factual information, current events, news, politics, government officials, weather, time, date, prices, sports scores, definitions, explanations, who is, what is, where is, when did, how does — any information that requires up-to-date or external knowledge
+- image_generation: user asks to draw, paint, generate, create, or make an image/picture/photo/art/diagram
+- code_generation: user asks to write code, a function, program, algorithm, or debugging help
+- translation: user explicitly says "translate" or asks how to say something in another language
+- image_analysis: user uploaded or wants to analyze an image/photo
+- general_chat: ONLY simple greetings, casual conversation, opinions, jokes, or creative writing — NOT any question seeking information or facts
+
+IMPORTANT: When in doubt, choose web_search. Any question about a person, place, event, thing, concept, or fact MUST be web_search. Only choose general_chat if the user is clearly just greeting, thanking, or making small talk with no information-seeking intent.
+
+User request: {query}
+Category:"""
         try:
-            intent_id = self.neural.predict_intent(embedding)
-            intent_name = self.neural.classifier.get_intent_name(intent_id)
-            return self.INTENT_MAP.get(intent_name, "general_chat")
+            result = self.core.llm.generate(
+                prompt,
+                system_prompt="You classify user requests into categories. Return only the category name."
+            )
+            result = result.strip().lower().strip('"').strip("'").strip()
+            valid = {"image_generation", "web_search", "code_generation", "translation", "image_analysis", "general_chat"}
+            if result in valid:
+                return result
+            return "web_search"
         except Exception:
-            return "general_chat"
+            return "web_search"
 
     def execute(self, query, route, session_id="default", image=None, messages=None, file_path=None, context=None, max_tokens=None):
         try:
