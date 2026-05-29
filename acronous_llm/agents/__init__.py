@@ -98,16 +98,13 @@ class AcronousAgentEngine:
                 user_now = datetime.now(tz_base.utc).astimezone()
                 tz_label = user_now.strftime('%Z')
 
-            utc_now = datetime.now(tz_base.utc)
             time_parts.append(
-                f"[Current date and time: {user_now.strftime('%A, %B %d, %Y at %I:%M %p')} {tz_label}]\n"
-                f"[Current UTC time: {utc_now.strftime('%A, %B %d, %Y at %I:%M %p UTC')}]"
+                f"[Current date and time: {user_now.strftime('%A, %B %d, %Y at %I:%M %p')} {tz_label}]"
             )
         else:
             now = datetime.now(tz_base.utc).astimezone()
             time_parts.append(
-                f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]\n"
-                f"[Current UTC time: {datetime.now(tz_base.utc).strftime('%A, %B %d, %Y at %I:%M %p UTC')}]"
+                f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
             )
         return "\n".join(time_parts)
 

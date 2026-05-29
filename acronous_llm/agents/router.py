@@ -373,7 +373,9 @@ Category:"""
                 if route_type in ("web_search", "factual") or is_current:
                     search_results = []
                     try:
-                        alt = query + " 2026"
+                        from datetime import datetime, timezone
+                        _now_yr = datetime.now(timezone.utc).astimezone().year
+                        alt = query + f" {_now_yr}"
                         search_results = self.core.search.search_with_content(alt, max_results=5)
                         snippets = "\n\n".join([
                             f"{r['title']}: {r['snippet']}\n{r.get('content', '')[:300]}"
@@ -518,7 +520,8 @@ Respond naturally conversationally. Never say "As of my knowledge" or "based on 
                 results = self.core.search.search_with_content(refined, max_results=5)
                 search_results = [r for r in results if r.get("snippet")]
                 if not search_results:
-                    alt_q = query + " 2026 latest"
+                    _yr = datetime.now(timezone.utc).astimezone().year
+                    alt_q = query + f" {_yr} latest"
                     results = self.core.search.search_with_content(alt_q, max_results=5)
                     search_results = [r for r in results if r.get("snippet")]
                 if search_results:
@@ -720,7 +723,9 @@ Answer naturally and conversationally. Never say "As of my knowledge" or "based 
                         for r in search_results if r.get("snippet")
                     ])
             if not snippets:
-                alt_query = query + " latest news 2026"
+                from datetime import datetime, timezone
+                _yr = datetime.now(timezone.utc).astimezone().year
+                alt_query = query + f" latest news {_yr}"
                 search_results = self.core.search.search_with_content(alt_query, max_results=5)
                 snippets = "\n\n".join([
                     f"{r['title']}: {r['snippet']}\n{r.get('content', '')[:500]}"
