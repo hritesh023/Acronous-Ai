@@ -115,7 +115,6 @@ class AcronousAgentEngine:
         else:
             context = time_context
         complexity = self.estimate_complexity(query)
-        query = self.router.auto_correct(query)
         route = self.router.route(query)
         if route.get("needs_planning"):
             result = self.planner.plan_and_execute(query, session_id, context)
@@ -132,7 +131,6 @@ class AcronousAgentEngine:
             context = f"{time_context}\n{context}"
         else:
             context = time_context
-        query = self.router.auto_correct(query)
         route = self.router.route(query)
         if route.get("needs_planning"):
             result = self.planner.plan_and_execute(query, session_id, context)
@@ -145,7 +143,6 @@ class AcronousAgentEngine:
 
     def process_with_image(self, query, image, session_id="default", messages=None):
         context = self._build_time_context()
-        query = self.router.auto_correct(query)
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, image=image, messages=messages, context=context)
 
@@ -171,6 +168,5 @@ class AcronousAgentEngine:
 
     def process_with_file(self, query, file_path, session_id="default", messages=None):
         context = self._build_time_context()
-        query = self.router.auto_correct(query)
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, file_path=file_path, messages=messages, context=context)

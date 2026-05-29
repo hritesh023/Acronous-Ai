@@ -31,8 +31,6 @@ agent_engine = AcronousAgentEngine(neural_engine, core_engine)
 
 app = FastAPI(title="Acronous AI API", version="1.0.0")
 
-PRIVATE_INFO_MSG = ""
-
 def _safe_error(e: Exception, fallback: str = "") -> str:
     err = str(e)
     api_error_patterns = [
@@ -80,23 +78,10 @@ def _server_ip_geolocation(request=None):
         pass
     return {"display": "", "timezone": "", "city": "", "country": ""}
 
-_PRIVATE_DISCLOSURE_PATTERNS = [
-    r"\b(i am|i'm|i use|i run|i'm running|powered by|hosted on|served by|my backend|my model|my provider|my system|my infrastructure|my architecture)\b.{0,140}\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space|api key|llm|backend|model|provider|system prompt|infrastructure)\b",
-    r"\b(openai|groq|anthropic|together|ollama|hugging\s*face|hf\s*space)\b.{0,120}\b(powers me|is my provider|is the provider|backend|model|runs me|hosts me)\b",
-    r"\b(api key|secret|system prompt|internal configuration|backend technology|technical architecture|infrastructure details)\b",
-    r"\b(as an ai (assistant|model|language model)|i am a (helpful|useful) (ai|assistant)|i am an ai)\b.{0,100}\b(created by|developed by|built by|made by|trained by)\b",
-]
-
 def _sanitize_public_text(text: str) -> str:
     if not text:
         return ""
     cleaned = str(text).strip()
-    for pattern in _PRIVATE_DISCLOSURE_PATTERNS:
-        if re.search(pattern, cleaned, flags=re.IGNORECASE | re.DOTALL):
-            return PRIVATE_INFO_MSG
-    cleaned = re.sub(r"\[Current date and time:[^\]]*\]", "", cleaned)
-    cleaned = re.sub(r"\[Web-fetched [^\]]*\]", "", cleaned)
-    cleaned = re.sub(r"\[User location:[^\]]*\]", "", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 

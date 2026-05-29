@@ -28,8 +28,8 @@ class AcronousConfig:
         self.EMBED_MODEL = os.getenv("ACRONOUS_EMBED_MODEL", "all-MiniLM-L6-v2")
         self.VISION_MODEL = os.getenv("ACRONOUS_VISION_MODEL", "microsoft/resnet-50")
         self.STT_MODEL = os.getenv("ACRONOUS_STT_MODEL", "base")
-        self.SEARCH_PROVIDER = os.getenv("ACRONOUS_SEARCH", "duckduckgo")
-        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+        self.SEARCH_PROVIDER = os.getenv("ACRONOUS_SEARCH", "auto")
+        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY", os.getenv("ACRONOUS_SERPAPI_KEY", ""))
 
         self.MAX_HISTORY = 50
         self.CLUSTER_COUNT = 8
