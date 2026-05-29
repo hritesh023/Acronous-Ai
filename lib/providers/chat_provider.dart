@@ -30,7 +30,6 @@ class ChatProvider extends ChangeNotifier {
   bool get serverCheckDone => _serverCheckDone;
   bool get isConnecting => _isConnecting;
 
-  static const _serverNotFound = '';
   static final RegExp _privateInfoPattern = RegExp(
     r"(powered by|hosted by|served by|hosted on|runs on)\s+\w+|\b(api[ _]?key|system prompt|internal (configuration|instructions)|backend (details?|technology)|infrastructure details?|technical (architecture|details))\b|(as an ai\b.{0,50}(created by|developed by|built by|made by))",
     caseSensitive: false,
@@ -162,18 +161,24 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void _startKeepAlive() {
-    Future.delayed(const Duration(minutes: 2), () async {
+    Future.delayed(const Duration(seconds: 45), () async {
       try {
         await _api.wakeup();
+        _isServerConnected = true;
       } catch (_) {
         _isServerConnected = false;
-        _discoverServer(retries: 1);
       }
-      if (_keepAliveActive) _startKeepAlive();
+      if (!_disposed) _startKeepAlive();
     });
   }
 
-  final bool _keepAliveActive = true;
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   List<Conversation> get conversations => _conversations;
   Conversation? get currentConversation => _currentConversation;
@@ -362,9 +367,6 @@ class ChatProvider extends ChangeNotifier {
     if (!_isServerConnected) {
       await _discoverServer(retries: 1);
       if (!_isServerConnected) {
-        _currentConversation!.messages.add(
-          ChatMessage(role: 'assistant', content: _serverNotFound),
-        );
         _isLoading = false;
         _prefs.saveConversations(_conversations).catchError((_) {});
         notifyListeners();
@@ -372,7 +374,7 @@ class ChatProvider extends ChangeNotifier {
       }
     }
 
-    for (var attempt = 0; attempt < 3; attempt++) {
+    for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final resp = await _callApi(userMsg, text);
         final imageData = resp['image_data'] as String? ?? '';
@@ -380,51 +382,37 @@ class ChatProvider extends ChangeNotifier {
           resp['response'] as String? ?? '',
         );
         final respType = resp['type'] as String? ?? 'chat';
-        if (rawContent.isEmpty && imageData.isEmpty) {
-          if (attempt < 2) {
-            await _api.wakeup();
-            await Future.delayed(Duration(seconds: (attempt + 1) * 2));
-            continue;
-          }
-          _isLoading = false;
-          _prefs.saveConversations(_conversations).catchError((_) {});
-          notifyListeners();
-          return;
+        if (rawContent.isEmpty && imageData.isEmpty && attempt < 1) {
+          await _api.wakeup();
+          await Future.delayed(const Duration(seconds: 3));
+          continue;
         }
-        if (respType == 'error' && rawContent.isNotEmpty) {
+        if (rawContent.isNotEmpty || imageData.isNotEmpty) {
+          _currentConversation!.messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: rawContent,
+              imageData: imageData,
+            ),
+          );
         }
-        _currentConversation!.messages.add(
-          ChatMessage(
-            role: 'assistant',
-            content: rawContent,
-            imageData: imageData,
-          ),
-        );
         _isTakingLong = false;
         _isLoading = false;
         _prefs.saveConversations(_conversations).catchError((_) {});
         notifyListeners();
         return;
       } catch (e) {
-        final isAuthError = e is ApiException && (e.statusCode == 401 || e.statusCode == 403);
-        if (attempt < 2 && !isAuthError) {
-          if (_isTakingLong != true) {
-            _isTakingLong = true;
-            notifyListeners();
-          }
+        if (attempt < 1) {
+          _isTakingLong = true;
+          notifyListeners();
           await _discoverServer(retries: 1);
           if (_isServerConnected) {
-            await Future.delayed(Duration(seconds: (attempt + 1) * 2));
+            await Future.delayed(const Duration(seconds: 3));
           }
           continue;
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
-        if (e is ApiException) {
-          _currentConversation!.messages.add(
-            ChatMessage(role: 'assistant', content: 'Something went wrong. Please try again.'),
-          );
-        }
         break;
       }
     }

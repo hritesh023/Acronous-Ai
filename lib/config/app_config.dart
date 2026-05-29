@@ -21,9 +21,6 @@ class AppConfig {
   }
 
   late final String apiBaseUrl;
-  late final Duration apiChatTimeout;
-  late final Duration apiImageTimeout;
-  late final Duration apiFileTimeout;
   late final Duration apiImageGenTimeout;
   late final String apiChatPath;
   late final String apiImageChatPath;
@@ -65,9 +62,6 @@ class AppConfig {
         defaultValue: remoteServerUrl,
       ),
     );
-    apiChatTimeout = Duration(seconds: _envInt('API_CHAT_TIMEOUT', 0));
-    apiImageTimeout = Duration(seconds: _envInt('API_IMAGE_TIMEOUT', 0));
-    apiFileTimeout = Duration(seconds: _envInt('API_FILE_TIMEOUT', 0));
     apiImageGenTimeout = Duration(seconds: _envInt('API_IMAGE_GEN_TIMEOUT', 0));
     apiChatPath = '/v1/chat';
     apiImageChatPath = '/v1/chat/image';

@@ -220,14 +220,18 @@ class ApiClient {
       final status = response.statusCode;
       throw ApiException(
         status,
-        'Something went wrong. Please try again.',
+        'Request failed: invalid response format',
         <String, dynamic>{'response': body},
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final errMsg = json['error'] as String? ??
+          json['detail'] as String? ??
+          json['message'] as String? ??
+          '';
       throw ApiException(
         response.statusCode,
-        'Something went wrong. Please try again.',
+        errMsg.isNotEmpty ? errMsg : 'Request failed ($response.statusCode)',
         json,
       );
     }
@@ -340,9 +344,7 @@ class ApiClient {
     if (location != null && location.isNotEmpty) {
       body['location'] = location;
     }
-    final actualTimeout = timeout ?? AppConfig.instance.apiChatTimeout;
-    final resp = await _post('/v1/chat', body,
-        timeout: actualTimeout > Duration.zero ? actualTimeout : null);
+    final resp = await _post('/v1/chat', body);
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',

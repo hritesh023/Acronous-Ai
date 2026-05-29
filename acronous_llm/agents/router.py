@@ -49,7 +49,7 @@ Category:"""
         except Exception:
             return "web_search"
 
-    def execute(self, query, route, session_id="default", image=None, messages=None, file_path=None, context=None):
+    def execute(self, query, route, session_id="default", image=None, messages=None, file_path=None, context=None, max_tokens=None):
         try:
             self.core.memory.add_message(session_id, "user", query, {"type": route.get("type", "chat")})
         except Exception:
@@ -87,17 +87,17 @@ Category:"""
                 else:
                     result = self._handle_image(query, image)
             elif file_path is not None:
-                result = self._handle_file(query, file_path, context)
+                result = self._handle_file(query, file_path, context, max_tokens)
             elif route_type == "image_generation":
                 result = self._handle_image_generation(query, context)
             elif route_type == "web_search" or route_type == "factual" or route_type == "news":
-                result = self._handle_search(query, context)
+                result = self._handle_search(query, context, max_tokens)
             elif route_type == "code_generation":
-                result = self._handle_code(query, context)
+                result = self._handle_code(query, context, max_tokens)
             elif route_type == "translation":
-                result = self._handle_translation(query)
+                result = self._handle_translation(query, max_tokens)
             else:
-                result = self._handle_chat(query, context)
+                result = self._handle_chat(query, context, max_tokens)
         except Exception:
             result = {"type": "chat", "content": "", "sources": []}
 
@@ -109,13 +109,13 @@ Category:"""
 
         if not result or not result.get("content"):
             try:
-                result = self._handle_search(query, context)
+                result = self._handle_search(query, context, max_tokens)
             except Exception:
                 pass
 
         return result
 
-    def execute_stream(self, query, route, session_id="default", messages=None, context=None):
+    def execute_stream(self, query, route, session_id="default", messages=None, context=None, max_tokens=None):
         try:
             self.core.memory.add_message(session_id, "user", query, {"type": route.get("type", "chat")})
         except Exception:
@@ -143,7 +143,7 @@ Category:"""
 
         route_type = route.get("type", "general_chat")
         if route_type in ("web_search", "factual", "news"):
-            result = self._handle_search(query, context)
+            result = self._handle_search(query, context, max_tokens)
             content = result.get("content", "")
             chunk_size = 30
             for i in range(0, len(content), chunk_size):
@@ -158,7 +158,7 @@ Category:"""
 User: {query}
 
 Answer using ONLY the web search results above and the current date/time provided. Do not use any pre-trained knowledge — the web search results are the only authoritative source. If the search results lack specific information, be honest that you could not find current data on this topic. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
-            yield from self.core.llm.generate_stream(prompt)
+            yield from self.core.llm.generate_stream(prompt, max_tokens=max_tokens)
 
     def _refine_search_query(self, query):
         try:
@@ -206,7 +206,7 @@ Search queries:"""
             pass
         return ""
 
-    def _handle_search(self, query, context):
+    def _handle_search(self, query, context, max_tokens=None):
         search_data = ""
         search_results = []
         try:
@@ -251,10 +251,10 @@ Answer using ONLY the web search results above. The current date/time is provide
 The user asked: {query}
 
 I searched the web but could not find any current information from multiple search sources. Do NOT use your pre-trained knowledge to answer. Be honest and tell the user that no current information was found from web search. Suggest trying a more specific query or different search terms. Never make up information or fall back to training data. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
-        response = self.core.llm.generate(prompt)
+        response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "factual", "content": response, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
-    def _handle_chat(self, query, context):
+    def _handle_chat(self, query, context, max_tokens=None):
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).astimezone()
         current_time_str = now.strftime('%A, %B %d, %Y at %I:%M %p %Z')
@@ -301,7 +301,7 @@ Answer naturally using any relevant web search results above. The current date/t
 User: "{query}"
 
 Respond naturally and conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
-        response = self.core.llm.generate(prompt)
+        response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         content = response.strip() if response else ""
         return {"type": "chat", "content": content, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
@@ -317,7 +317,7 @@ Respond naturally and conversationally. Never say "As of my knowledge" or "based
             return True
         return False
 
-    def _handle_code(self, query, context):
+    def _handle_code(self, query, context, max_tokens=None):
         prompt = f"""The user wants code for: {query}
 
 Provide a clear, natural response that includes:
@@ -326,16 +326,16 @@ Provide a clear, natural response that includes:
 3. Key things to note about using it
 
 Keep the tone helpful and conversational — like a senior developer pair-programming with them."""
-        response = self.core.llm.generate(prompt)
+        response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "code", "content": response, "sources": []}
 
-    def _handle_translation(self, query):
+    def _handle_translation(self, query, max_tokens=None):
         prompt = f"""Translate the following. First identify the source and target languages, then provide the translation in a natural way.
 
 Text: {query}
 
 Respond conversationally — tell them what you detected and then give the translation naturally."""
-        response = self.core.llm.generate(prompt)
+        response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "translation", "content": response, "sources": []}
 
     def _handle_image(self, query, image):
@@ -642,7 +642,7 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
         except Exception:
             return {"type": "error", "content": "Image generation failed due to a technical issue.", "sources": []}
 
-    def _handle_file(self, query, file_path, context):
+    def _handle_file(self, query, file_path, context, max_tokens=None):
         try:
             text = ""
             from pathlib import Path
@@ -677,7 +677,7 @@ The user shared a file ({path.name}) with the following content:
 User query: {query}
 
 Respond naturally based on the file content. If the user didn't ask a specific question, summarize the file contents."""
-            response = self.core.llm.generate(prompt)
+            response = self.core.llm.generate(prompt, max_tokens=max_tokens)
             return {"type": "chat", "content": response, "sources": []}
         except Exception as e:
             return {"type": "error", "content": f"I couldn't process that file: {e}", "sources": []}

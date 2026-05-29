@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import tempfile
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -30,6 +32,21 @@ core_engine = AcronousCoreEngine(config)
 agent_engine = AcronousAgentEngine(neural_engine, core_engine)
 
 app = FastAPI(title="Acronous AI API", version="1.0.0")
+
+
+def _keep_alive_loop():
+    while True:
+        time.sleep(600)
+        try:
+            import requests
+            port = os.getenv("PORT", "8000")
+            requests.get(f"http://127.0.0.1:{port}/v1/health", timeout=10)
+        except Exception:
+            pass
+
+
+_keep_alive_thread = threading.Thread(target=_keep_alive_loop, daemon=True)
+_keep_alive_thread.start()
 
 def _safe_error(e: Exception, fallback: str = "") -> str:
     err = str(e)
@@ -213,24 +230,19 @@ async def chat(req: ChatRequest, fastapi_request: Request):
             )
         except Exception as first_err:
             err_msg = str(first_err).lower()
-            is_auth = any(kw in err_msg for kw in _UNAUTH_KEYWORDS)
-            if not is_auth:
+            if not any(kw in err_msg for kw in _UNAUTH_KEYWORDS):
                 logger.info(f"First attempt failed ({first_err}), retrying once...")
                 try:
-                    result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry", timezone=user_timezone, location=location)
+                    result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id, timezone=user_timezone, location=location)
                 except Exception as retry_err:
                     logger.error(f"Retry also failed: {retry_err}")
-                    result = {"content": "", "type": "error"}
 
         if isinstance(result, dict) and result.get("type") == "error" and not result.get("content"):
             logger.info("Retrying chat after empty error result...")
             try:
-                result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id + "_retry2")
+                result = await asyncio.to_thread(agent_engine.process, req.message, req.session_id)
             except Exception:
                 pass
-
-        if isinstance(result, dict) and result.get("type") == "error" and not result.get("content"):
-            result = {"content": "I encountered a temporary issue processing your request. Please try again.", "type": "chat"}
 
         if result and isinstance(result, dict):
             content = _sanitize_public_text(result.get("content", "") or "")

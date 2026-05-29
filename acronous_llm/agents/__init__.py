@@ -108,6 +108,15 @@ class AcronousAgentEngine:
             )
         return "\n".join(time_parts)
 
+    def _complexity_to_max_tokens(self, score):
+        if score >= 8:
+            return 8192
+        if score >= 5:
+            return 4096
+        if score >= 3:
+            return 2048
+        return 1024
+
     def process(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
         time_context = self._timezone_context(timezone, location)
         if context:
@@ -115,11 +124,12 @@ class AcronousAgentEngine:
         else:
             context = time_context
         complexity = self.estimate_complexity(query)
+        max_tokens = self._complexity_to_max_tokens(complexity)
         route = self.router.route(query)
         if route.get("needs_planning"):
             result = self.planner.plan_and_execute(query, session_id, context)
         else:
-            result = self.router.execute(query, route, session_id, messages=messages, context=context)
+            result = self.router.execute(query, route, session_id, messages=messages, context=context, max_tokens=max_tokens)
         if isinstance(result, dict):
             result["complexity"] = complexity
             result["complexity_label"] = self._complexity_bucket(complexity)
@@ -131,6 +141,8 @@ class AcronousAgentEngine:
             context = f"{time_context}\n{context}"
         else:
             context = time_context
+        complexity = self.estimate_complexity(query)
+        max_tokens = self._complexity_to_max_tokens(complexity)
         route = self.router.route(query)
         if route.get("needs_planning"):
             result = self.planner.plan_and_execute(query, session_id, context)
@@ -139,7 +151,7 @@ class AcronousAgentEngine:
             for i in range(0, len(content), chunk_size):
                 yield content[i:i + chunk_size]
             return
-        yield from self.router.execute_stream(query, route, session_id, messages=messages, context=context)
+        yield from self.router.execute_stream(query, route, session_id, messages=messages, context=context, max_tokens=max_tokens)
 
     def process_with_image(self, query, image, session_id="default", messages=None):
         context = self._build_time_context()

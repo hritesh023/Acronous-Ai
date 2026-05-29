@@ -8,6 +8,8 @@
 //   wrangler deploy cloudflare-worker.js --name acronous-ai
 
 const BACKEND = 'acronous-ai.onrender.com';
+const PROXY_TIMEOUT = 600000; // 10 min — no hard time limit, adapts to complexity
+const WARMUP_TIMEOUT = 60000;  // 60s warmup timeout
 const API_PREFIXES = ['/v1/', '/api/', '/openapi', '/docs', '/redoc', '/health'];
 const STATIC_EXTENSIONS = ['.js', '.css', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.woff', '.woff2', '.json', '.wasm'];
 
@@ -45,7 +47,6 @@ async function proxyToBackend(request, url, pathname) {
   url.hostname = BACKEND;
   url.pathname = pathname;
 
-  // Read body once up-front so we can retry (Request body is a stream, consumed once)
   const body = request.method === 'GET' || request.method === 'HEAD'
     ? undefined
     : await request.clone().arrayBuffer();
@@ -54,7 +55,7 @@ async function proxyToBackend(request, url, pathname) {
     method: request.method,
     headers: request.headers,
     body,
-    signal: AbortSignal.timeout(300000),
+    signal: AbortSignal.timeout(PROXY_TIMEOUT),
   };
 
   // Retry once for cold starts (Render can take 30-50s on first request)
@@ -64,14 +65,11 @@ async function proxyToBackend(request, url, pathname) {
       return resp;
     } catch (e) {
       if (attempt === 0) {
-        // First failure — wake backend and retry
         wakeBackend();
-        await new Promise(r => setTimeout(r, 3000));
-        // ArrayBuffer can be reused across fetch calls
+        await new Promise(r => setTimeout(r, 5000));
         init.body = body;
         continue;
       }
-      // Second failure — return 503
       return new Response(
         JSON.stringify({
           error: 'Acronous AI is starting up. Please try again in a moment.',
@@ -195,7 +193,7 @@ async function handleWarmup(request, url) {
   url.pathname = '/v1/health';
   try {
     const resp = await fetch(url.toString(), {
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(WARMUP_TIMEOUT),
     });
     if (resp.ok) {
       return new Response(
@@ -203,7 +201,6 @@ async function handleWarmup(request, url) {
         { headers: { 'Content-Type': 'application/json' } },
       );
     }
-    // Service not ready yet, trigger another warmup
     wakeBackend();
     return new Response(
       JSON.stringify({ status: 'warming', message: 'Acronous AI is starting up' }),
@@ -225,9 +222,8 @@ async function wakeBackend() {
   warmingUp = true;
   const url = `https://${BACKEND}/v1/wakeup`;
   try {
-    await fetch(url, { signal: AbortSignal.timeout(10000) });
+    await fetch(url, { signal: AbortSignal.timeout(30000) });
   } catch (_) {
-    // Ignore — the wakeup call itself helps wake Render from sleep
   }
   warmingUp = false;
 }
