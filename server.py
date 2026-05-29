@@ -59,12 +59,12 @@ def _safe_error(e: Exception, fallback: str = "") -> str:
     ]
     err_lower = err.lower()
     if any(p in err_lower for p in api_error_patterns):
-        return fallback if fallback else ""
+        return fallback if fallback else "The AI service is temporarily unavailable. Please try again."
     if err and len(err) > 10:
-        return ""
+        return "An unexpected error occurred. Please try again."
     if fallback:
         return fallback
-    return ""
+    return "An unexpected error occurred. Please try again."
 
 def _server_ip_geolocation(request=None):
     try:
@@ -262,7 +262,7 @@ async def chat(req: ChatRequest, fastapi_request: Request):
             )
 
         return ChatResponse(
-            response=_sanitize_public_text(str(result) if result else ""),
+            response=_safe_error(RuntimeError("No response from server"), "The AI service did not return a response. Please try again."),
             session_id=req.session_id,
             type="error",
         )
@@ -556,7 +556,7 @@ async def api_chat(req: ApiChatRequest):
         return {
             "content": _sanitize_public_text(str(result))
             if result
-            else _safe_error(RuntimeError("No response from server")),
+            else _safe_error(RuntimeError("No response from server"), "The AI service did not return a response. Please try again."),
             "type": "error" if not result else "chat",
             "session_id": req.session_id,
         }

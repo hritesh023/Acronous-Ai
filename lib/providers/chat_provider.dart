@@ -347,7 +347,6 @@ class ChatProvider extends ChangeNotifier {
       _newConversation();
     }
 
-    _error = null;
     _isLoading = true;
     _isTakingLong = false;
     notifyListeners();
@@ -366,7 +365,7 @@ class ChatProvider extends ChangeNotifier {
       await _discoverServer(retries: 2);
       if (!_isServerConnected) {
         _isLoading = false;
-        setError('Server is not connected. Please check your connection and try again.');
+        _addAssistantMessage('Server is not connected. Please check your connection and try again.');
         _prefs.saveConversations(_conversations).catchError((_) {});
         return;
       }
@@ -382,7 +381,7 @@ class ChatProvider extends ChangeNotifier {
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
           final errMsg = resp['response'] as String? ?? resp['error'] as String? ?? '';
-          setError(errMsg.isNotEmpty ? errMsg : 'An error occurred. Please try again.');
+          _addAssistantMessage(errMsg.isNotEmpty ? errMsg : 'An error occurred. Please try again.');
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -420,18 +419,21 @@ class ChatProvider extends ChangeNotifier {
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
-        setError('Request failed. Please try again.');
+        _addAssistantMessage('Request failed. Please try again.');
         break;
       }
     }
 
     _isTakingLong = false;
     _isLoading = false;
-    if (_error == null) {
-      setError('No response received. Please try again.');
-    }
     _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
+  }
+
+  void _addAssistantMessage(String content) {
+    _currentConversation!.messages.add(
+      ChatMessage(role: 'assistant', content: content),
+    );
   }
 
   Future<void> sendPendingAnalysis() async {
@@ -857,21 +859,13 @@ class ChatProvider extends ChangeNotifier {
   List<ChatMessage> get currentMessages => _currentConversation?.messages ?? [];
   String? get currentConversationId => _currentConversation?.id;
 
+  String? _error;
+  String? get error => _error;
+
   void setError(String? error) {
     _error = error;
     notifyListeners();
-    if (error != null) {
-      Future.delayed(const Duration(seconds: 6), () {
-        if (_error == error && !_disposed) {
-          _error = null;
-          notifyListeners();
-        }
-      });
-    }
   }
-
-  String? _error;
-  String? get error => _error;
 
   void handleSendMessage(String query) => sendMessage(query);
 

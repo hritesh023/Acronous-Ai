@@ -114,8 +114,6 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                 ),
                 _buildInputArea(context),
-                if (widget.chatProvider.error != null)
-                  _buildErrorToast(widget.chatProvider.error!),
               ],
             ),
             if (_sidebarOpen)
@@ -317,35 +315,6 @@ class _ChatPageState extends State<ChatPage> {
         constraints: const BoxConstraints(maxWidth: 720),
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
         child: const ChatInput(key: ValueKey('chat_input')),
-      ),
-    );
-  }
-
-  Widget _buildErrorToast(String error) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-      child: Material(
-        color: const Color(0xFFEF4444),
-        borderRadius: BorderRadius.circular(12),
-        elevation: 8,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  error,
-                  style: const TextStyle(color: Colors.white, fontSize: 14),
-                ),
-              ),
-              GestureDetector(
-                onTap: () => widget.chatProvider.setError(null),
-                child: const Icon(Icons.close,
-                    size: 18, color: Colors.white),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
