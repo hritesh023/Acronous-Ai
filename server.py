@@ -211,11 +211,12 @@ async def chat(req: ChatRequest, fastapi_request: Request):
     location = req.location
     user_timezone = req.timezone
     geo = None
-    if not location and fastapi_request:
+    if fastapi_request:
         geo = _server_ip_geolocation(fastapi_request)
-        location = geo.get("display", "")
-        if not user_timezone and geo.get("timezone"):
+        if geo.get("timezone"):
             user_timezone = geo.get("timezone", "")
+        if geo.get("display"):
+            location = geo.get("display", "")
     try:
         result = None
         try:
@@ -275,16 +276,25 @@ async def chat(req: ChatRequest, fastapi_request: Request):
         )
 
 @app.post("/v1/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, fastapi_request: Request):
     import queue
     import threading
+
+    location = req.location
+    user_timezone = req.timezone
+    if fastapi_request:
+        geo = _server_ip_geolocation(fastapi_request)
+        if geo.get("timezone"):
+            user_timezone = geo.get("timezone", "")
+        if geo.get("display"):
+            location = geo.get("display", "")
 
     q = queue.Queue()
 
     def _produce():
         try:
             chunks = []
-            for chunk in agent_engine.process_stream(req.message, req.session_id, timezone=req.timezone, location=req.location):
+            for chunk in agent_engine.process_stream(req.message, req.session_id, timezone=user_timezone, location=location):
                 chunks.append(str(chunk))
             q.put(_sanitize_public_text("".join(chunks)))
         except Exception as e:
