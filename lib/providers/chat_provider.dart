@@ -41,11 +41,7 @@ class ChatProvider extends ChangeNotifier {
     if (trimmed.isEmpty) return '';
     final cleaned = trimmed
         .replaceAll(RegExp(r'\[Current date and time:[^\]]*\]'), '')
-        .replaceAll(RegExp(r'\[Web-fetched [^\]]*\]'), '')
-        .replaceAll(RegExp(r'\[Web-fetched current [^\]]*\]'), '')
         .replaceAll(RegExp(r'\[User location:[^\]]*\]'), '')
-        .replaceAll(RegExp(r'\[Live time data:[^\]]*\]'), '')
-        .replaceAll(RegExp(r'\[Live location data:[^\]]*\]'), '')
         .replaceAll(RegExp(r'\[Internal[^\]]*\]'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();

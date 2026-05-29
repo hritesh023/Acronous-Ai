@@ -17,10 +17,24 @@ class AcronousAgentEngine:
         self.router = QueryRouter(neural_engine, core_engine)
         self.planner = TaskPlanner(core_engine)
 
-    def _build_time_context(self):
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).astimezone()
-        return f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
+    def _is_time_query(self, query):
+        if not query:
+            return False
+        keywords = [
+            "time", "date", "what day", "what month", "what year",
+            "current time", "current date", "what's the time",
+            "what's the date", "tell me the time", "tell me the date",
+            "what is the time", "what is the date", "how old",
+            "when is", "when was", "what year is it",
+            "today", "tomorrow", "yesterday", "clock",
+            "morning", "afternoon", "evening", "night",
+            "what's today", "what day is it",
+        ]
+        lower = query.lower().strip()
+        for kw in keywords:
+            if kw in lower:
+                return True
+        return False
 
     def estimate_complexity(self, query):
         if not query or not query.strip():
@@ -51,7 +65,9 @@ class AcronousAgentEngine:
             return "moderate"
         return "simple"
 
-    def _timezone_context(self, timezone="", location=""):
+    def _timezone_context(self, timezone="", location="", query=""):
+        if not self._is_time_query(query):
+            return ""
         time_parts = []
         if location:
             time_parts.append(f"[User location: {location}]")
@@ -110,19 +126,17 @@ class AcronousAgentEngine:
 
     def _complexity_to_max_tokens(self, score):
         if score >= 8:
-            return 8192
-        if score >= 5:
             return 4096
-        if score >= 3:
+        if score >= 5:
             return 2048
-        return 1024
+        if score >= 3:
+            return 1024
+        return 512
 
     def process(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
-        time_context = self._timezone_context(timezone, location)
-        if context:
-            context = f"{time_context}\n{context}"
-        else:
-            context = time_context
+        time_context = self._timezone_context(timezone, location, query)
+        ctx_parts = [p for p in [time_context, context] if p]
+        context = "\n".join(ctx_parts) if ctx_parts else None
         complexity = self.estimate_complexity(query)
         max_tokens = self._complexity_to_max_tokens(complexity)
         route = self.router.route(query)
@@ -136,11 +150,9 @@ class AcronousAgentEngine:
         return result
 
     def process_stream(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
-        time_context = self._timezone_context(timezone, location)
-        if context:
-            context = f"{time_context}\n{context}"
-        else:
-            context = time_context
+        time_context = self._timezone_context(timezone, location, query)
+        ctx_parts = [p for p in [time_context, context] if p]
+        context = "\n".join(ctx_parts) if ctx_parts else None
         complexity = self.estimate_complexity(query)
         max_tokens = self._complexity_to_max_tokens(complexity)
         route = self.router.route(query)
@@ -154,17 +166,16 @@ class AcronousAgentEngine:
         yield from self.router.execute_stream(query, route, session_id, messages=messages, context=context, max_tokens=max_tokens)
 
     def process_with_image(self, query, image, session_id="default", messages=None):
-        context = self._build_time_context()
+        context = None
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, image=image, messages=messages, context=context)
 
     def generate_image(self, prompt, session_id="default", timezone="", location=""):
-        time_context = self._timezone_context(timezone, location)
-        context = time_context
+        context = ""
         try:
             mem_context = self.core.memory.get_recent_context(session_id)
             if mem_context:
-                context = f"{time_context}\n{mem_context}"
+                context = mem_context
         except Exception:
             pass
         return self.router._handle_image_generation(prompt, context)
@@ -179,6 +190,6 @@ class AcronousAgentEngine:
         return self.router._handle_image_modification(query, image_path)
 
     def process_with_file(self, query, file_path, session_id="default", messages=None):
-        context = self._build_time_context()
+        context = None
         route = self.router.route(query)
         return self.router.execute(query, route, session_id, file_path=file_path, messages=messages, context=context)

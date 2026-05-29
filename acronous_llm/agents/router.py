@@ -61,11 +61,6 @@ Category:"""
         except Exception:
             pass
 
-        if context is None:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).astimezone()
-            context = f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
-
         if messages and isinstance(messages, list):
             conv_lines = []
             for m in messages[-20:]:
@@ -125,10 +120,6 @@ Category:"""
             stored_context = self.core.memory.get_recent_context(session_id)
         except Exception:
             pass
-        if context is None:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).astimezone()
-            context = f"[Current date and time: {now.strftime('%A, %B %d, %Y at %I:%M %p %Z')}]"
         if messages and isinstance(messages, list):
             conv_lines = []
             for m in messages[-20:]:
@@ -157,7 +148,7 @@ Category:"""
 
 User: {query}
 
-Answer using ONLY the web search results above and the current date/time provided. Do not use any pre-trained knowledge — the web search results are the only authoritative source. If the search results lack specific information, be honest that you could not find current data on this topic. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
+Answer using ONLY the web search results above. Do not use any pre-trained knowledge — the web search results are the only authoritative source. If the search results lack specific information, be honest that you could not find current data on this topic. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
             yield from self.core.llm.generate_stream(prompt, max_tokens=max_tokens)
 
     def _refine_search_query(self, query):
@@ -244,7 +235,7 @@ Web search results for "{query}":
 
 {search_data}
 
-Answer using ONLY the web search results above. The current date/time is provided above — use it for temporal context. Do not use any pre-trained knowledge — the web results are the authoritative source. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources or official websites — you already have the information. Answer directly, confidently, and concisely. When possible, mention the source names to add credibility."""
+Answer using ONLY the web search results above. Do not use any pre-trained knowledge — the web results are the authoritative source. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources or official websites — you already have the information. Answer directly, confidently, and concisely. When possible, mention the source names to add credibility."""
         else:
             prompt = f"""{context}
 
@@ -255,14 +246,12 @@ I searched the web but could not find any current information from multiple sear
         return {"type": "factual", "content": response, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
     def _handle_chat(self, query, context, max_tokens=None):
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc).astimezone()
-        current_time_str = now.strftime('%A, %B %d, %Y at %I:%M %p %Z')
-
         search_data = ""
         search_results = []
 
         try:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc).astimezone()
             queries = self._refine_search_query(query)
             all_results = []
             seen_urls = set()
@@ -294,11 +283,9 @@ I searched the web but could not find any current information from multiple sear
 
 User: {query}
 
-Answer naturally using any relevant web search results above. The current date/time is provided — use it for temporal context. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
+Answer naturally using any relevant web search results above. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
         else:
-            prompt = f"""Current date and time: {current_time_str}
-
-User: "{query}"
+            prompt = f"""User: "{query}"
 
 Respond naturally and conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
@@ -581,7 +568,7 @@ I applied the following PIL operations and the image was edited successfully. De
                     )
                     content = response_text.strip().strip('"').strip("'").strip()
                 except Exception:
-                    content = "Here's your edited image!"
+                    content = ""
                 return {"type": "image_edit", "content": content, "image_data": img_b64, "image_type": "png", "sources": []}
 
             elif approach in ("inpaint", "img2img"):
@@ -610,7 +597,7 @@ The image was {'edited using AI inpainting' if approach == 'inpaint' else 'redes
                         )
                         content = response_text.strip().strip('"').strip("'").strip()
                     except Exception:
-                        content = "Here's your edited image!"
+                        content = ""
                     return {"type": "image_edit", "content": content, "image_data": result["image_data"], "image_type": "png", "sources": []}
                 return self._modification_error_response(query, "AI image editing failed. The image processing service may be temporarily unavailable.", approach)
 

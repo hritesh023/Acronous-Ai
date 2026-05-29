@@ -58,22 +58,6 @@ class ImageGenerator:
                         continue
         return None, last_error
 
-    def _generate_fallback_image(self, prompt, width, height):
-        try:
-            gradient = Image.new("RGB", (width, height))
-            for y in range(height):
-                t = y / height
-                r = int(20 + t * 35)
-                g = int(20 + t * 30)
-                b = int(50 + t * 45)
-                for x in range(width):
-                    gradient.putpixel((x, y), (r, g, b))
-            buf = io.BytesIO()
-            gradient.save(buf, format="PNG")
-            return buf.getvalue()
-        except Exception:
-            return None
-
     def _postprocess_image(self, image, image_type="realistic"):
         try:
             if image_type == "realistic":
