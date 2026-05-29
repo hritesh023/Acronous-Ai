@@ -245,7 +245,33 @@ I searched the web but could not find any current information from multiple sear
         response = self.core.llm.generate(prompt, max_tokens=max_tokens)
         return {"type": "factual", "content": response, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
+    def _is_simple_greeting(self, query):
+        if not query or not query.strip():
+            return False
+        lower = query.lower().strip()
+        single_word = {"hi", "hello", "hey", "greetings", "howdy", "sup", "yo", "hii", "heyy", "helloo"}
+        if lower.rstrip("!.,?") in single_word:
+            return True
+        greeting_phrases = [
+            "good morning", "good afternoon", "good evening",
+            "how are you", "how's it going", "how are you doing",
+            "what's up", "whats up", "nice to meet you",
+            "pleased to meet you", "good to see you",
+            "long time no see", "how have you been",
+        ]
+        for phrase in greeting_phrases:
+            if phrase in lower:
+                return True
+        return False
+
     def _handle_chat(self, query, context, max_tokens=None):
+        if self._is_simple_greeting(query):
+            prompt = f"""User: "{query}"
+
+Respond naturally with a warm, friendly greeting. Keep it concise and conversational."""
+            response = self.core.llm.generate(prompt, max_tokens=max_tokens)
+            return {"type": "chat", "content": (response.strip() if response else ""), "sources": []}
+
         search_data = ""
         search_results = []
 
@@ -283,7 +309,7 @@ I searched the web but could not find any current information from multiple sear
 
 User: {query}
 
-Answer naturally using any relevant web search results above. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
+Answer naturally using any relevant web search results above. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
         else:
             prompt = f"""User: "{query}"
 
