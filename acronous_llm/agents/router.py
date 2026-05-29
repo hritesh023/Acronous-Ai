@@ -459,15 +459,6 @@ Respond naturally and conversationally. Use the context above — the current da
         search_results = []
         old_model_info = self._get_current_info_for_old_model()
 
-        if self._is_time_query(query):
-            import re
-            loc_match = re.search(r'\[User location:\s*([^\]]*)\]', context)
-            loc_name = loc_match.group(1).strip() if loc_match else ""
-            time_match = re.search(r'\[Current date and time:\s*([^\]]*)\]', context)
-            time_str = time_match.group(1).strip() if time_match else current_time_str
-            loc_str = f" in {loc_name}" if loc_name else ""
-            return {"type": "chat", "content": f"It is currently {time_str}{loc_str}.", "sources": []}
-
         if self._should_search(query):
             try:
                 refined = self._refine_search_query(query)
