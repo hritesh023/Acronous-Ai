@@ -13,7 +13,7 @@ class QueryRouter:
         route_type = self._determine_type_with_llm(query)
         features = {
             "type": route_type,
-            "needs_search": route_type in ["web_search", "factual", "news"],
+            "needs_search": route_type in ("web_search", "factual", "news"),
             "needs_planning": self._needs_planning(query),
             "embedding": embedding,
             "has_question": "?" in query_lower,
@@ -25,12 +25,14 @@ class QueryRouter:
         prompt = f"""Classify this user request into exactly one category. Return ONLY the category name, nothing else.
 
 Categories:
+- web_search: ANY question seeking factual information, current events, news, politics, government officials, weather, time, date, prices, sports scores, definitions, explanations, who is, what is, where is, when did, how does — any information that requires up-to-date or external knowledge
 - image_generation: user asks to draw, paint, generate, create, or make an image/picture/photo/art/diagram
-- web_search: user asks about any factual information, current events, news, politics, government officials, weather, time, date, prices, sports scores, definitions, explanations, or any information that benefits from up-to-date data
 - code_generation: user asks to write code, a function, program, algorithm, or debugging help
 - translation: user explicitly says "translate" or asks how to say something in another language
 - image_analysis: user uploaded or wants to analyze an image/photo
-- general_chat: simple greetings, casual conversation, opinions, jokes, or creative writing ONLY — NOT questions about facts, events, officials, or information
+- general_chat: ONLY simple greetings, casual conversation, opinions, jokes, or creative writing — NOT any question seeking information or facts
+
+IMPORTANT: When in doubt, choose web_search. Any question about a person, place, event, thing, concept, or fact MUST be web_search. Only choose general_chat if the user is clearly just greeting, thanking, or making small talk with no information-seeking intent.
 
 User request: {query}
 Category:"""
@@ -42,8 +44,6 @@ Category:"""
             result = result.strip().lower().strip('"').strip("'").strip()
             valid = {"image_generation", "web_search", "code_generation", "translation", "image_analysis", "general_chat"}
             if result in valid:
-                if result == "general_chat":
-                    return "general_chat"
                 return result
             return "web_search"
         except Exception:
@@ -160,19 +160,48 @@ User: {query}
 Answer using ONLY the web search results above and the current date/time provided. Do not use any pre-trained knowledge — the web search results are the only authoritative source. If the search results lack specific information, be honest that you could not find current data on this topic. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
             yield from self.core.llm.generate_stream(prompt)
 
+    def _refine_search_query(self, query):
+        try:
+            prompt = f"""Rewrite this question into 2-3 concise search queries that would best find the answer on a search engine. Return each query on a separate line, nothing else.
+
+Original: {query}
+Search queries:"""
+            result = self.core.llm.generate(
+                prompt,
+                system_prompt="You generate effective search engine queries. Return one per line."
+            )
+            lines = [l.strip() for l in result.strip().split("\n") if l.strip() and len(l.strip()) > 5]
+            if lines:
+                return lines[:3]
+        except Exception:
+            pass
+        return [query]
+
     def _execute_web_search(self, query):
         try:
             from datetime import datetime, timezone
-            results = self.core.search.search_with_deep_content(query, max_results=3)
-            if not results:
+            queries = self._refine_search_query(query)
+            all_results = []
+            seen_urls = set()
+            for q in queries[:3]:
+                results = self.core.search.search_with_deep_content(q, max_results=3)
+                for r in results:
+                    url = r.get("url", "")
+                    if url and url not in seen_urls and r.get("snippet"):
+                        seen_urls.add(url)
+                        all_results.append(r)
+                if len(all_results) >= 3:
+                    break
+            if not all_results:
                 alt_query = f"{query} {datetime.now(timezone.utc).astimezone().year}"
                 results = self.core.search.search_with_deep_content(alt_query, max_results=3)
-            if results:
+                all_results = [r for r in results if r.get("snippet")]
+            if all_results:
                 snippets = "\n\n".join([
                     f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:500]}"
-                    for r in results if r.get("snippet")
+                    for r in all_results
                 ])
-                return f"Web search results:\n{snippets}"
+                return f"Web search results for '{query}':\n\n{snippets}"
         except Exception:
             pass
         return ""
@@ -182,12 +211,23 @@ Answer using ONLY the web search results above and the current date/time provide
         search_results = []
         try:
             from datetime import datetime, timezone
-            results = self.core.search.search_with_deep_content(query, max_results=5)
-            search_results = [r for r in results if r.get("snippet")]
-            if not search_results:
+            queries = self._refine_search_query(query)
+            all_results = []
+            seen_urls = set()
+            for q in queries[:3]:
+                results = self.core.search.search_with_deep_content(q, max_results=5)
+                for r in results:
+                    url = r.get("url", "")
+                    if url and url not in seen_urls and r.get("snippet"):
+                        seen_urls.add(url)
+                        all_results.append(r)
+                if len(all_results) >= 5:
+                    break
+            if not all_results:
                 alt_query = f"{query} {datetime.now(timezone.utc).astimezone().year}"
                 results = self.core.search.search_with_deep_content(alt_query, max_results=5)
-                search_results = [r for r in results if r.get("snippet")]
+                all_results = [r for r in results if r.get("snippet")]
+            search_results = all_results[:5]
             if search_results:
                 snippets = "\n\n".join([
                     f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:500]}"
@@ -204,13 +244,13 @@ Web search results for "{query}":
 
 {search_data}
 
-Answer using ONLY the web search results above. The current date/time is provided above — use it for temporal context. Do not use any pre-trained knowledge — the web results are the authoritative source. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources or official websites — you already have the information. Answer directly, confidently, and concisely. Cite sources by name where relevant."""
+Answer using ONLY the web search results above. The current date/time is provided above — use it for temporal context. Do not use any pre-trained knowledge — the web results are the authoritative source. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources or official websites — you already have the information. Answer directly, confidently, and concisely. When possible, mention the source names to add credibility."""
         else:
             prompt = f"""{context}
 
 The user asked: {query}
 
-I searched the web but could not find any current information about this from multiple search sources. Do NOT use your pre-trained knowledge to answer — if no web results were found, be honest and tell the user that no current information could be found from web search. Suggest they try a more specific query or different search terms. Never make up information or fall back to training data. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
+I searched the web but could not find any current information from multiple search sources. Do NOT use your pre-trained knowledge to answer. Be honest and tell the user that no current information was found from web search. Suggest trying a more specific query or different search terms. Never make up information or fall back to training data. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
         response = self.core.llm.generate(prompt)
         return {"type": "factual", "content": response, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 
@@ -223,8 +263,23 @@ I searched the web but could not find any current information about this from mu
         search_results = []
 
         try:
-            results = self.core.search.search_with_deep_content(query, max_results=3)
-            search_results = [r for r in results if r.get("snippet")]
+            queries = self._refine_search_query(query)
+            all_results = []
+            seen_urls = set()
+            for q in queries[:2]:
+                results = self.core.search.search_with_deep_content(q, max_results=3)
+                for r in results:
+                    url = r.get("url", "")
+                    if url and url not in seen_urls and r.get("snippet"):
+                        seen_urls.add(url)
+                        all_results.append(r)
+                if len(all_results) >= 3:
+                    break
+            if not all_results:
+                alt_q = f"{query} {now.year}"
+                results = self.core.search.search_with_deep_content(alt_q, max_results=3)
+                all_results = [r for r in results if r.get("snippet")]
+            search_results = all_results[:3]
             if search_results:
                 snippets = "\n\n".join([
                     f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:300]}"
@@ -239,7 +294,7 @@ I searched the web but could not find any current information about this from mu
 
 User: {query}
 
-Answer naturally using any relevant web search results above. The current date/time is provided — use it for temporal context. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally without making up facts. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
+Answer naturally using any relevant web search results above. The current date/time is provided — use it for temporal context. If the search results contain information relevant to the query, use them as the authoritative source. If they don't, just respond conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Answer directly and concisely."""
         else:
             prompt = f"""Current date and time: {current_time_str}
 

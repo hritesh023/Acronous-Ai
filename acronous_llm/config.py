@@ -20,7 +20,7 @@ class AcronousConfig:
         self.CLASSIFIER_PATH = self.MODELS_DIR / "classifier.pt"
         self.EMBEDDER_PATH = self.MODELS_DIR / "embedder.pt"
 
-        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "gpt-4o-mini")
+        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "llama-3.3-70b-versatile")
         self.LLM_BACKEND = os.getenv("ACRONOUS_LLM_BACKEND", "auto")
         self.LLM_PROVIDER = os.getenv("ACRONOUS_LLM_PROVIDER", "openai")
         self.LLM_API_KEY = os.getenv("ACRONOUS_LLM_API_KEY", "")

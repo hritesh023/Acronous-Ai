@@ -59,18 +59,33 @@ class WebSearch:
     def search_multi_source(self, query, max_results=5):
         all_results = []
         seen_urls = set()
-        for provider_method in [self._serpapi_search, self._duckduckgo_search, self._google_scrape, self._scrape_fallback]:
+        providers = [self._serpapi_search, self._duckduckgo_search, self._google_scrape, self._scrape_fallback]
+        for provider_method in providers:
             try:
-                batch = provider_method(query, max_results)
+                batch = provider_method(query, max_results + 2)
                 for r in batch:
                     url = r.get("url", "")
-                    if url and url not in seen_urls:
+                    snippet = r.get("snippet", "")
+                    if url and url not in seen_urls and snippet:
                         seen_urls.add(url)
                         all_results.append(r)
             except Exception:
                 pass
             if len(all_results) >= max_results * 2:
                 break
+        if not all_results:
+            for provider_method in providers:
+                try:
+                    batch = provider_method(query, max_results + 2)
+                    for r in batch:
+                        url = r.get("url", "")
+                        if url and url not in seen_urls:
+                            seen_urls.add(url)
+                            all_results.append(r)
+                    if all_results:
+                        break
+                except Exception:
+                    pass
         return all_results[:max_results * 2]
 
     def _serpapi_search(self, query, max_results):
@@ -175,12 +190,22 @@ class WebSearch:
             }
             resp = requests.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(resp.text, "html.parser")
-            for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+            for tag in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "form", "button"]):
                 tag.decompose()
-            for tag in soup.find_all(class_=re.compile(r"(sidebar|footer|nav|menu|comment|advertisement|ad-|social|share)")):
+            for tag in soup.find_all(class_=re.compile(r"(sidebar|footer|nav|menu|comment|advertisement|ad-|social|share|cookie|banner|modal|overlay)")):
                 tag.decompose()
+            for selector in ["main", "article", "[role=main]", ".content", ".post", ".entry", ".article-body"]:
+                section = soup.select_one(selector)
+                if section:
+                    text = section.get_text(separator=" ", strip=True)
+                    if len(text) > 200:
+                        text = re.sub(r'\s+', ' ', text)
+                        return text[:max_chars]
             text = soup.get_text(separator=" ", strip=True)
             text = re.sub(r'\s+', ' ', text)
+            lines = [l.strip() for l in text.split(". ") if len(l.strip()) > 30]
+            if lines:
+                text = ". ".join(lines)
             return text[:max_chars]
         except Exception:
             return ""
@@ -193,9 +218,20 @@ class WebSearch:
 
     def search_with_deep_content(self, query, max_results=3):
         results = self.search_multi_source(query, max_results)
+        enriched = []
         for r in results[:max_results]:
             r["content"] = self.fetch_page_content(r["url"], max_chars=6000)
-        return results[:max_results]
+            enriched.append(r)
+            if len(enriched) >= max_results:
+                break
+        if not enriched:
+            results = self.search(query, max_results + 2)
+            for r in results[:max_results]:
+                r["content"] = self.fetch_page_content(r["url"], max_chars=6000)
+                enriched.append(r)
+                if len(enriched) >= max_results:
+                    break
+        return enriched[:max_results]
 
     def fetch_current_time(self):
         try:
