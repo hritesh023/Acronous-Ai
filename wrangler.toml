@@ -9,7 +9,7 @@ ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 # After deploying Flutter web to Cloudflare Pages, paste its URL here:
-PAGES_ORIGIN = "https://acronous.com"
+PAGES_ORIGIN = "https://5c0d972a.acronous-ai.pages.dev"
 
 # ── Optional KV namespace for conversations ──────────────────────────────
 # [[kv_namespaces]]
