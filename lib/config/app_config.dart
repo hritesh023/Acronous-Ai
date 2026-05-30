@@ -6,7 +6,7 @@ class AppConfig {
   static final AppConfig instance = AppConfig._();
 
   static const String remoteServerUrl =
-      'https://acronous-ai.onrender.com';
+      'https://acronous.com';
 
   bool get isWeb {
     try {
@@ -84,8 +84,8 @@ class AppConfig {
     speechPartialResults = true;
 
     ttsLanguage = _env('TTS_LANGUAGE', 'en-US');
-    ttsDefaultSpeed = _envDouble('TTS_DEFAULT_SPEED', 0.5);
-    ttsDefaultPitch = _envDouble('TTS_DEFAULT_PITCH', 1.0);
+    ttsDefaultSpeed = _envDouble('TTS_DEFAULT_SPEED', 1.0);
+    ttsDefaultPitch = _envDouble('TTS_DEFAULT_PITCH', 0.9);
 
     allowedFileExtensions = [
       'txt', 'pdf', 'doc', 'docx', 'odt', 'rtf',

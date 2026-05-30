@@ -127,6 +127,15 @@ class ChatProvider extends ChangeNotifier {
                 : const Duration(seconds: 30),
           );
           if (!ready) {
+            final healthy = await _api.healthCheck();
+            if (healthy['status'] == 'ok') {
+              _isServerConnected = true;
+              _startKeepAlive();
+              _isConnecting = false;
+              _serverCheckDone = true;
+              notifyListeners();
+              return;
+            }
             _startKeepAlive();
             _isConnecting = false;
             _serverCheckDone = true;
@@ -365,17 +374,10 @@ class ChatProvider extends ChangeNotifier {
     if (attachments == null) _pendingAttachments.clear();
     notifyListeners();
 
-    if (!_isServerConnected) {
-      await _discoverServer(retries: 2);
-      if (!_isServerConnected) {
-        _isLoading = false;
-        _addAssistantMessage('Server is not connected. Please check your connection and try again.');
-        _prefs.saveConversations(_conversations).catchError((_) {});
-        return;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (!_isServerConnected && attempt > 0) {
+        await _discoverServer(retries: 1);
       }
-    }
-
-    for (var attempt = 0; attempt < 2; attempt++) {
       try {
         final resp = await _callApi(userMsg, text);
         final imageData = resp['image_data'] as String? ?? '';

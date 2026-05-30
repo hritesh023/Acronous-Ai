@@ -5,8 +5,6 @@ import logging
 import os
 import re
 import tempfile
-import threading
-import time
 import uuid
 from pathlib import Path
 
@@ -33,26 +31,6 @@ agent_engine = AcronousAgentEngine(neural_engine, core_engine)
 
 app = FastAPI(title="Acronous AI API", version="1.0.0")
 
-
-def _keep_alive_loop():
-    while True:
-        time.sleep(300)
-        try:
-            import requests
-            public_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("API_BASE_URL") or ""
-            if public_url:
-                public_url = public_url.rstrip("/")
-                health_url = f"{public_url}/v1/health?keepalive=1"
-                requests.get(health_url, timeout=10)
-            else:
-                port = os.getenv("PORT", "8000")
-                requests.get(f"http://127.0.0.1:{port}/v1/health", timeout=10)
-        except Exception:
-            pass
-
-
-_keep_alive_thread = threading.Thread(target=_keep_alive_loop, daemon=True)
-_keep_alive_thread.start()
 
 def _safe_error(e: Exception, fallback: str = "") -> str:
     err = str(e)

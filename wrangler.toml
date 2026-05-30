@@ -1,7 +1,17 @@
 name = "acronous-ai"
-compatibility_date = "2026-05-28"
+compatibility_date = "2026-05-30"
+pages_build_output_dir = "build/web"
+# ── Environment variables (non-secret) ───────────────────────────────────
+[vars]
+OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+ENABLE_WEB = "true"
+ENABLE_VISION = "true"
+ENABLE_VOICE = "true"
+# After deploying Flutter web to Cloudflare Pages, paste its URL here:
+PAGES_ORIGIN = "https://acronous.com"
 
-routes = [
-  { pattern = "acronous.com/*", zone_id = "b6a4d55add4ffb7af2fbcccc8c4805ad" },
-  { pattern = "www.acronous.com/*", zone_id = "b6a4d55add4ffb7af2fbcccc8c4805ad" },
-]
+# ── Optional KV namespace for conversations ──────────────────────────────
+# [[kv_namespaces]]
+# binding = "acronous_kv"
+# id = "your-kv-namespace-id-here"
