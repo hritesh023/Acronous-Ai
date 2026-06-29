@@ -1,6 +1,7 @@
 name = "acronous-ai"
 compatibility_date = "2026-05-30"
-pages_build_output_dir = "build/web"
+main = "cloudflare-worker.js"
+
 # ── Environment variables (non-secret) ───────────────────────────────────
 [vars]
 OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"

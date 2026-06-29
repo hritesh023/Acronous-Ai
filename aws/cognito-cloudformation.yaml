@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Cognito User Pool for Acronous AI authentication
+
+Parameters:
+  AppName:
+    Type: String
+    Default: AcronousAi
+
+Resources:
+  AcronousUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${AppName}UserPool
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+        - Name: name
+          Required: false
+          Mutable: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 1
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+          RequireUppercase: false
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      EmailConfiguration:
+        EmailSendingAccount: COGNITO_DEFAULT
+      LambdaConfig:
+        PreSignUp: !GetAtt AutoConfirmLambda.Arn
+
+  AcronousUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub ${AppName}AppClient
+      UserPoolId: !Ref AcronousUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_ADMIN_USER_PASSWORD_AUTH
+      PreventUserExistenceErrors: ENABLED
+
+  AcronousUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      Domain: acronous-ai-auth
+      UserPoolId: !Ref AcronousUserPool
+
+  # ── Pre Sign-up Lambda (auto-confirms every user) ────────────────────────
+  AutoConfirmLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  AutoConfirmLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${AppName}-AutoConfirm
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Role: !GetAtt AutoConfirmLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def lambda_handler(event, context):
+              event["response"]["autoConfirmUser"] = True
+              event["response"]["autoVerifyEmail"] = True
+              event["response"]["autoVerifyPhone"] = True
+              return event
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AutoConfirmLambda
+      Action: lambda:InvokeFunction
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt AcronousUserPool.Arn
+
+Outputs:
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref AcronousUserPool
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolId
+
+  UserPoolClientId:
+    Description: Cognito App Client ID
+    Value: !Ref AcronousUserPoolClient
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolClientId
+
+  UserPoolArn:
+    Description: Cognito User Pool ARN
+    Value: !GetAtt AcronousUserPool.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolArn
+
+  UserPoolProviderUrl:
+    Description: Cognito User Pool issuer URL
+    Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${AcronousUserPool}
+    Export:
+      Name: !Sub ${AWS::StackName}-UserPoolProviderUrl

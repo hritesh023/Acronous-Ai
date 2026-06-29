@@ -6,7 +6,6 @@ import 'providers/chat_provider.dart';
 import 'pages/auth_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
-import 'services/supabase_service.dart';
 import 'services/overlay_service.dart';
 import 'theme/app_theme.dart';
 import 'widgets/background_assistant.dart';
@@ -16,7 +15,6 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppConfig.instance.load();
-  await SupabaseService.instance.initialize();
   runApp(
     MultiProvider(
       providers: [

@@ -19,14 +19,15 @@
 // Deploy:
 //   wrangler deploy cloudflare-worker.js --name acronous-ai
 
-const OPENROUTER_API_KEY = globalThis.OPENROUTER_API_KEY || '';
-const OPENROUTER_MODEL = globalThis.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct';
-const OPENROUTER_BASE_URL = globalThis.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
-const PAGES_ORIGIN = globalThis.PAGES_ORIGIN || '';
-const ENABLE_WEB = (globalThis.ENABLE_WEB || 'true') === 'true';
-const ENABLE_VISION = (globalThis.ENABLE_VISION || 'true') === 'true';
-const ENABLE_VOICE = (globalThis.ENABLE_VOICE || 'true') === 'true';
-const WHISPER_API_KEY = globalThis.WHISPER_API_KEY || '';
+// ── Config (injected via env parameter by Cloudflare) ───────────────────
+let OPENROUTER_API_KEY = '';
+let OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct';
+let OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+let PAGES_ORIGIN = '';
+let ENABLE_WEB = true;
+let ENABLE_VISION = true;
+let ENABLE_VOICE = true;
+let WHISPER_API_KEY = '';
 
 const DEFAULT_SYSTEM_PROMPT = `You are Acronous AI, an intelligent and helpful assistant. You provide accurate, thoughtful, and well-structured responses.
 
@@ -1012,7 +1013,19 @@ function matchPath(path) {
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
+    // Load config from env (secrets + vars)
+    OPENROUTER_API_KEY = env.OPENROUTER_API_KEY || '';
+    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct';
+    OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    PAGES_ORIGIN = env.PAGES_ORIGIN || '';
+    ENABLE_WEB = (env.ENABLE_WEB || 'true') === 'true';
+    ENABLE_VISION = (env.ENABLE_VISION || 'true') === 'true';
+    ENABLE_VOICE = (env.ENABLE_VOICE || 'true') === 'true';
+    WHISPER_API_KEY = env.WHISPER_API_KEY || '';
+    // Make KV binding available globally
+    if (env.acronous_kv) globalThis.acronous_kv = env.acronous_kv;
+
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const method = request.method;

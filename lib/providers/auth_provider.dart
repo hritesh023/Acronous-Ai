@@ -1,47 +1,36 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../services/supabase_service.dart';
+import '../services/aws_cognito_service.dart';
 
 enum AuthStatus { uninitialized, authenticated, unauthenticated, loading }
 
 class AuthProvider extends ChangeNotifier {
-  final SupabaseService _supabase;
-  User? _user;
+  final AwsCognitoService _cognito;
+  String? _userEmail;
+  String? _userId;
   AuthStatus _status = AuthStatus.uninitialized;
   String? _error;
-  StreamSubscription<AuthState>? _authSubscription;
 
-  AuthProvider({SupabaseService? supabase})
-      : _supabase = supabase ?? SupabaseService.instance {
+  AuthProvider({AwsCognitoService? cognito})
+      : _cognito = cognito ?? AwsCognitoService.instance {
     _init();
   }
 
-  User? get user => _user;
+  String? get userEmail => _userEmail;
+  String? get userId => _userId;
   AuthStatus get status => _status;
   String? get error => _error;
 
-  @override
-  void dispose() {
-    _authSubscription?.cancel();
-    super.dispose();
-  }
-
-  void _init() {
-    final session = _supabase.currentSession;
-    _user = session?.user;
-    _status = _user != null ? AuthStatus.authenticated : AuthStatus.unauthenticated;
-    notifyListeners();
-
-    _authSubscription = _supabase.auth.onAuthStateChange.listen(_onAuthChange);
-  }
-
-  void _onAuthChange(AuthState state) {
-    _user = state.session?.user;
-    _status = _user != null
-        ? AuthStatus.authenticated
-        : AuthStatus.unauthenticated;
+  Future<void> _init() async {
+    _cognito.initialize();
+    final signedIn = await _cognito.isSignedIn();
+    if (signedIn) {
+      _userEmail = _cognito.userEmail;
+      _userId = _cognito.userId;
+      _status = AuthStatus.authenticated;
+    } else {
+      _status = AuthStatus.unauthenticated;
+    }
     notifyListeners();
   }
 
@@ -51,20 +40,21 @@ class AuthProvider extends ChangeNotifier {
       _error = null;
       notifyListeners();
 
-      final response = await _supabase.signInWithEmail(
+      final session = await _cognito.signIn(
         email: email.trim(),
         password: password,
       );
 
-      _user = response.user;
-      _status = AuthStatus.authenticated;
-      notifyListeners();
-    } on AuthException catch (e) {
-      _error = e.message;
-      _status = AuthStatus.unauthenticated;
+      if (session != null) {
+        _userEmail = _cognito.userEmail;
+        _userId = _cognito.userId;
+        _status = AuthStatus.authenticated;
+      } else {
+        _status = AuthStatus.unauthenticated;
+      }
       notifyListeners();
     } catch (e) {
-      _error = 'Sign in failed. Please try again.';
+      _error = e.toString().replaceFirst('Exception: ', '');
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     }
@@ -76,39 +66,30 @@ class AuthProvider extends ChangeNotifier {
       _error = null;
       notifyListeners();
 
-      final response = await _supabase.signUpWithEmail(
+      final session = await _cognito.signUp(
         email: email.trim(),
         password: password,
       );
 
-      if (response.session != null) {
-        _user = response.user;
+      if (session != null) {
+        _userEmail = _cognito.userEmail;
+        _userId = _cognito.userId;
         _status = AuthStatus.authenticated;
       } else {
         _status = AuthStatus.unauthenticated;
       }
       notifyListeners();
-
-      if (response.user != null) {
-        await _supabase.upsertProfile(
-          userId: response.user!.id,
-          email: email.trim(),
-        );
-      }
-    } on AuthException catch (e) {
-      _error = e.message;
-      _status = AuthStatus.unauthenticated;
-      notifyListeners();
     } catch (e) {
-      _error = 'Sign up failed. Please try again.';
+      _error = e.toString().replaceFirst('Exception: ', '');
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     }
   }
 
   Future<void> signOut() async {
-    await _supabase.signOut();
-    _user = null;
+    await _cognito.signOut();
+    _userEmail = null;
+    _userId = null;
     _status = AuthStatus.unauthenticated;
     notifyListeners();
   }

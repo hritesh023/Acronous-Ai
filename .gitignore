@@ -83,6 +83,7 @@ startup_log.txt
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
 
 # Symbolication
 app.*.symbols

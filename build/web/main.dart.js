@@ -8043,7 +8043,7 @@ var $async$aG5=A.m(function(a,b){if(a===1)return A.n(b,r)
 for(;;)switch(s){case 0:if($.a1==null)A.aIQ()
 $.a1.toString
 q=$.lo()
-p=A.LG("API_BASE_URL","https://acronous-ai.onrender.com")
+p=A.LG("API_BASE_URL","https://acronous-ai.hriteshkumarpatro.workers.dev")
 q.a!==$&&A.az()
 q.a=p
 p=A.bQ(0,0,A.up("API_CHAT_TIMEOUT",0))
