@@ -1,0 +1,30 @@
+# Sub-projects (each has its own git repo)
+/Acronous Ai/
+/Equyvo/
+/Navigwiz/
+
+node_modules/
+dist/
+build/
+.web_build/
+.wrangler/
+.capacitor/
+android/
+ios/
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
+flutter_*.png
+*.g.dart
+*.freezed.dart
+coverage/
+__pycache__/
+*.pyc
+.python-version
+.idea/
+.vscode/
+*.iml
+*.lock
+.pub-cache/

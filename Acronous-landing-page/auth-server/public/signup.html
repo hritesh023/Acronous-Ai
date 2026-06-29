@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up - Acronous</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="card">
+    <div class="logo"><img src="/logo.png" alt="Acronous"></div>
+    <h1>Create your account</h1>
+    <p class="subtitle">One account for all Acronous apps</p>
+    <div id="error" class="error"></div>
+    <form id="signupForm">
+      <div class="form-group">
+        <label for="name">Full Name</label>
+        <input id="name" type="text" placeholder="John Doe" autocomplete="name">
+      </div>
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input id="email" type="email" placeholder="you@example.com" required autocomplete="email">
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" type="password" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password">
+      </div>
+      <button type="submit" class="btn" id="submitBtn">Create Account</button>
+    </form>
+    <p class="footer-text">
+      Already have an account? <a href="/login">Sign In</a>
+    </p>
+  </div>
+  <script>
+    const form = document.getElementById('signupForm');
+    const name = document.getElementById('name');
+    const email = document.getElementById('email');
+    const password = document.getElementById('password');
+    const error = document.getElementById('error');
+    const btn = document.getElementById('submitBtn');
+    const params = new URLSearchParams(location.search);
+    const redirect = params.get('redirect') || '/dashboard';
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.classList.remove('show');
+      btn.disabled = true;
+      btn.innerHTML = '<div class="spinner"></div> Creating account...';
+      try {
+        const res = await fetch('/api/auth/signup-redirect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.value, password: password.value, name: name.value, redirect }),
+        });
+        if (res.redirected) {
+          window.location.href = res.url;
+        } else {
+          const data = await res.json();
+          throw new Error(data.error || 'Sign up failed');
+        }
+      } catch (err) {
+        error.textContent = err.message;
+        error.classList.add('show');
+        btn.disabled = false;
+        btn.textContent = 'Create Account';
+      }
+    });
+  </script>
+</body>
+</html>

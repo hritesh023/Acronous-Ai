@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Acronous</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .apps-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+    @media (min-width: 600px) {
+      .apps-grid { grid-template-columns: 1fr 1fr; }
+    }
+    .app-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      text-decoration: none;
+      color: var(--text);
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .app-card:hover {
+      border-color: var(--primary);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 20px var(--primary-glow);
+    }
+    .app-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: white;
+      flex-shrink: 0;
+    }
+    .app-icon.ai { background: linear-gradient(135deg, #6366f1, #06b6d4); }
+    .app-icon.eq { background: linear-gradient(135deg, #ec4899, #a855f7); }
+    .app-icon.nw { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+    .app-info h3 { font-size: 1rem; margin-bottom: 0.2rem; }
+    .app-info p { font-size: 0.8rem; color: var(--text-muted); }
+    .user-info {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .user-details span { display: block; }
+    .user-details .name { font-weight: 600; }
+    .user-details .email { font-size: 0.85rem; color: var(--text-muted); }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+    .btn-outline:hover { border-color: var(--error); color: var(--error); }
+  </style>
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="card" style="max-width: 540px;">
+    <div class="logo"><img src="/logo.png" alt="Acronous"></div>
+    <h1>Acronous Apps</h1>
+    <div class="user-info">
+      <div class="user-details">
+        <span class="name" id="userName">Loading...</span>
+        <span class="email" id="userEmail"></span>
+      </div>
+      <button class="btn-outline" id="logoutBtn">Sign Out</button>
+    </div>
+    <p class="subtitle" style="text-align:left; margin-bottom:0;">Choose an app to launch</p>
+    <div class="apps-grid">
+      <a class="app-card" href="https://ai.acronous.com">
+        <div class="app-icon ai">AI</div>
+        <div class="app-info">
+          <h3>Acronous AI</h3>
+          <p>AI-powered chat & assistance</p>
+        </div>
+      </a>
+      <a class="app-card" href="https://equyvo.acronous.com">
+        <div class="app-icon eq">Eq</div>
+        <div class="app-info">
+          <h3>Equyvo</h3>
+          <p>Social content & discovery</p>
+        </div>
+      </a>
+      <a class="app-card" href="https://navigwiz.acronous.com" style="grid-column: 1/-1;">
+        <div class="app-icon nw">Nw</div>
+        <div class="app-info">
+          <h3>Navigwiz</h3>
+          <p>AI-powered browser & workspace</p>
+        </div>
+      </a>
+    </div>
+  </div>
+  <script>
+    async function loadUser() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (data.user) {
+          document.getElementById('userName').textContent = data.user.name;
+          document.getElementById('userEmail').textContent = data.user.email;
+        }
+      } catch {
+        window.location.href = '/login';
+      }
+    }
+    loadUser();
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      window.location.href = '/login';
+    });
+  </script>
+</body>
+</html>

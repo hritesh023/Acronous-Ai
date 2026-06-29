@@ -1,0 +1,4 @@
+name = "acronous-landing"
+compatibility_date = "2026-05-30"
+main = "_worker.js"
+assets = { directory = ".", not_found_handling = "single-page-application" }
