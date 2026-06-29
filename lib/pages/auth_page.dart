@@ -82,6 +82,14 @@ class _AuthPageState extends State<AuthPage>
       });
     }
 
+    if (authProv.status == auth.AuthStatus.unauthenticated) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          authProv.redirectToLogin();
+        }
+      });
+    }
+
     return Scaffold(
       body: SafeArea(
         child: FadeTransition(

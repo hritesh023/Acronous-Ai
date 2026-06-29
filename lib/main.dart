@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import 'config/app_config.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
-import 'pages/auth_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 import 'services/overlay_service.dart';
@@ -67,13 +66,17 @@ class _SplashScreenState extends State<SplashScreen> {
     _navigated = true;
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     if (!mounted) return;
+
+    if (status == AuthStatus.unauthenticated) {
+      context.read<AuthProvider>().redirectToLogin();
+      return;
+    }
+
     final chatP = context.read<ChatProvider>();
     final authP = context.read<AuthProvider>();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
-        builder: (_) => status == AuthStatus.authenticated
-            ? ChatPage(chatProvider: chatP, authProvider: authP)
-            : const AuthPage(),
+        builder: (_) => ChatPage(chatProvider: chatP, authProvider: authP),
       ),
     );
   }

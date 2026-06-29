@@ -56,11 +56,7 @@ class AwsCognitoService {
     try {
       final result = await _userPool!.signUp(email, password);
       _cognitoUser = result.user;
-      if (result.session != null) {
-        _session = result.session;
-        await _persistSession();
-      }
-      return _session;
+      return null;
     } catch (e) {
       throw Exception('Sign up failed: $e');
     }

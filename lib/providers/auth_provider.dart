@@ -1,18 +1,19 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import '../services/aws_cognito_service.dart';
+import '../services/central_auth_service.dart';
 
 enum AuthStatus { uninitialized, authenticated, unauthenticated, loading }
 
 class AuthProvider extends ChangeNotifier {
-  final AwsCognitoService _cognito;
+  final CentralAuthService _authService;
+
   String? _userEmail;
   String? _userId;
   AuthStatus _status = AuthStatus.uninitialized;
   String? _error;
 
-  AuthProvider({AwsCognitoService? cognito})
-      : _cognito = cognito ?? AwsCognitoService.instance {
+  AuthProvider({CentralAuthService? authService})
+      : _authService = authService ?? CentralAuthService.instance {
     _init();
   }
 
@@ -22,11 +23,11 @@ class AuthProvider extends ChangeNotifier {
   String? get error => _error;
 
   Future<void> _init() async {
-    _cognito.initialize();
-    final signedIn = await _cognito.isSignedIn();
-    if (signedIn) {
-      _userEmail = _cognito.userEmail;
-      _userId = _cognito.userId;
+    await _authService.initialize();
+    final authenticated = await _authService.checkAuth();
+    if (authenticated) {
+      _userEmail = _authService.userEmail;
+      _userId = _authService.userId;
       _status = AuthStatus.authenticated;
     } else {
       _status = AuthStatus.unauthenticated;
@@ -40,14 +41,11 @@ class AuthProvider extends ChangeNotifier {
       _error = null;
       notifyListeners();
 
-      final session = await _cognito.signIn(
-        email: email.trim(),
-        password: password,
-      );
+      final success = await _authService.signIn(email, password);
 
-      if (session != null) {
-        _userEmail = _cognito.userEmail;
-        _userId = _cognito.userId;
+      if (success) {
+        _userEmail = _authService.userEmail;
+        _userId = _authService.userId;
         _status = AuthStatus.authenticated;
       } else {
         _status = AuthStatus.unauthenticated;
@@ -66,14 +64,11 @@ class AuthProvider extends ChangeNotifier {
       _error = null;
       notifyListeners();
 
-      final session = await _cognito.signUp(
-        email: email.trim(),
-        password: password,
-      );
+      final success = await _authService.signUp(email, password);
 
-      if (session != null) {
-        _userEmail = _cognito.userEmail;
-        _userId = _cognito.userId;
+      if (success) {
+        _userEmail = _authService.userEmail;
+        _userId = _authService.userId;
         _status = AuthStatus.authenticated;
       } else {
         _status = AuthStatus.unauthenticated;
@@ -87,11 +82,15 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> signOut() async {
-    await _cognito.signOut();
+    await _authService.signOut();
     _userEmail = null;
     _userId = null;
     _status = AuthStatus.unauthenticated;
     notifyListeners();
+  }
+
+  void redirectToLogin() {
+    _authService.redirectToLogin();
   }
 
   void clearError() {
