@@ -129,7 +129,7 @@ app.post('/api/auth/signup', async (req, res) => {
     return res.json({ success: true, token, user: { id: newUser.id, email: newUser.email, name: newUser.name } });
   } catch (e) {
     console.error('Signup error:', e);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -163,11 +163,12 @@ app.post('/api/auth/signup-redirect', async (req, res) => {
     const token = generateToken(newUser);
     setAuthCookie(res, token);
 
-    const redirect = req.body.redirect || '/dashboard';
-    return res.redirect(`${redirect}${redirect.includes('?') ? '&' : '?'}token=${token}`);
+    const redirect = req.body.redirect || '/';
+    const target = `${redirect}${redirect.includes('?') ? '&' : '?'}token=${token}`;
+    return res.json({ success: true, redirectUrl: target, token });
   } catch (e) {
     console.error('Signup error:', e);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -195,7 +196,7 @@ app.post('/api/auth/login', async (req, res) => {
     return res.json({ success: true, token, user: { id: user.id, email: user.email, name: user.name } });
   } catch (e) {
     console.error('Login error:', e);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -220,11 +221,12 @@ app.post('/api/auth/login-redirect', async (req, res) => {
     const token = generateToken(user);
     setAuthCookie(res, token);
 
-    const redirect = req.body.redirect || '/dashboard';
-    return res.redirect(`${redirect}${redirect.includes('?') ? '&' : '?'}token=${token}`);
+    const redirect = req.body.redirect || '/';
+    const target = `${redirect}${redirect.includes('?') ? '&' : '?'}token=${token}`;
+    return res.json({ success: true, redirectUrl: target, token });
   } catch (e) {
     console.error('Login error:', e);
-    return res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 });
 
@@ -233,12 +235,20 @@ app.post('/api/auth/logout', (req, res) => {
   return res.json({ success: true });
 });
 
+app.get('/', (req, res) => {
+  const token = req.cookies?.[TOKEN_NAME];
+  if (token && verifyToken(token)) {
+    return res.redirect('/dashboard');
+  }
+  res.redirect('/login');
+});
+
 app.get('/login', (req, res) => {
   const token = req.cookies?.[TOKEN_NAME];
   if (token) {
     const decoded = verifyToken(token);
     if (decoded) {
-      const redirect = req.query.redirect || '/dashboard';
+      const redirect = req.query.redirect || '/';
       return res.redirect(redirect);
     }
   }
@@ -250,7 +260,7 @@ app.get('/signup', (req, res) => {
   if (token) {
     const decoded = verifyToken(token);
     if (decoded) {
-      const redirect = req.query.redirect || '/dashboard';
+      const redirect = req.query.redirect || '/';
       return res.redirect(redirect);
     }
   }

@@ -2,3 +2,7 @@ name = "acronous-landing"
 compatibility_date = "2026-05-30"
 main = "_worker.js"
 assets = { directory = ".", not_found_handling = "single-page-application" }
+
+kv_namespaces = [
+  { binding = "AUTH_USERS", id = "eb112976703e4447af69c13dd5f8824c" }
+]

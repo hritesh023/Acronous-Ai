@@ -14,8 +14,8 @@ const SITES = {
   'navigwiz.acronous.com': path.join(ROOT, '..', 'Navigwiz', 'build', 'web'),
 };
 
-// Subdomains that proxy to the auth server
-const AUTH_HOSTS = new Set(['auth.acronous.com']);
+// Auth routes that should be proxied to the auth server on ANY hostname
+const AUTH_ROUTES = ['/api/auth/', '/login', '/signup', '/dashboard', '/logout', '/health'];
 
 // Always redirect these hosts to acronous.com
 const REDIRECT_HOSTS = new Set([
@@ -89,8 +89,13 @@ function proxyToAuth(req, res) {
 http.createServer((req, res) => {
   const host = req.headers.host?.split(':')[0] || 'acronous.com';
 
-  // ── Proxy to auth server ──────────────────────────────────────────
-  if (AUTH_HOSTS.has(host)) {
+  // ── Auth routes — proxy to auth server for ANY hostname ────────────
+  // (same behavior as Cloudflare Worker in production)
+  const reqPath = req.url.split('?')[0];
+  const isAuthRoute = AUTH_ROUTES.some(route =>
+    reqPath === route || reqPath.startsWith(route)
+  );
+  if (isAuthRoute) {
     return proxyToAuth(req, res);
   }
 

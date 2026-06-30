@@ -9,63 +9,83 @@
 <body>
   <div class="bg-glow"></div>
   <div class="card">
-    <div class="logo"><img src="/logo.png" alt="Acronous"></div>
+    <div class="logo">
+      <svg viewBox="0 0 80 80" fill="none">
+        <rect width="80" height="80" rx="18" fill="#0a0a0f" stroke="#22223a" stroke-width="1"/>
+        <text x="40" y="50" text-anchor="middle" font-size="34" font-weight="800" fill="#6366f1" font-family="sans-serif">A</text>
+      </svg>
+    </div>
     <h1>Create your account</h1>
-    <p class="subtitle">One account for all Acronous apps</p>
+    <p class="subtitle">One account for all Acronous products</p>
     <div id="error" class="error"></div>
-    <form id="signupForm">
+    <form id="signupForm" novalidate>
       <div class="form-group">
         <label for="name">Full Name</label>
-        <input id="name" type="text" placeholder="John Doe" autocomplete="name">
+        <input id="name" type="text" placeholder="John Doe" autocomplete="name" autocapitalize="words">
       </div>
       <div class="form-group">
         <label for="email">Email</label>
-        <input id="email" type="email" placeholder="you@example.com" required autocomplete="email">
+        <input id="email" type="email" placeholder="you@example.com" required autocomplete="email" autocapitalize="off" spellcheck="false">
       </div>
       <div class="form-group">
         <label for="password">Password</label>
-        <input id="password" type="password" placeholder="At least 6 characters" required minlength="6" autocomplete="new-password">
+        <input id="password" type="password" placeholder="&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;&#xb7;" required minlength="6" autocomplete="new-password">
       </div>
       <button type="submit" class="btn" id="submitBtn">Create Account</button>
     </form>
     <p class="footer-text">
-      Already have an account? <a href="/login">Sign In</a>
+      Already have an account? <a href="/login" id="loginLink">Sign in</a>
     </p>
   </div>
   <script>
-    const form = document.getElementById('signupForm');
-    const name = document.getElementById('name');
-    const email = document.getElementById('email');
-    const password = document.getElementById('password');
-    const error = document.getElementById('error');
-    const btn = document.getElementById('submitBtn');
-    const params = new URLSearchParams(location.search);
-    const redirect = params.get('redirect') || '/dashboard';
+    (function() {
+      const form = document.getElementById('signupForm');
+      const name = document.getElementById('name');
+      const email = document.getElementById('email');
+      const password = document.getElementById('password');
+      const error = document.getElementById('error');
+      const btn = document.getElementById('submitBtn');
+      const params = new URLSearchParams(location.search);
+      const redirect = params.get('redirect') || '/';
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      error.classList.remove('show');
-      btn.disabled = true;
-      btn.innerHTML = '<div class="spinner"></div> Creating account...';
-      try {
-        const res = await fetch('/api/auth/signup-redirect', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.value, password: password.value, name: name.value, redirect }),
-        });
-        if (res.redirected) {
-          window.location.href = res.url;
-        } else {
-          const data = await res.json();
-          throw new Error(data.error || 'Sign up failed');
-        }
-      } catch (err) {
-        error.textContent = err.message;
-        error.classList.add('show');
-        btn.disabled = false;
-        btn.textContent = 'Create Account';
+      const loginLink = document.getElementById('loginLink');
+      if (redirect !== '/') {
+        loginLink.href = '/login?redirect=' + encodeURIComponent(redirect);
       }
-    });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        error.classList.remove('show');
+        btn.disabled = true;
+        btn.innerHTML = '<div class="spinner"></div> Creating account...';
+        try {
+          const res = await fetch('/api/auth/signup-redirect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: email.value.trim(),
+              password: password.value,
+              name: name.value.trim() || email.value.split('@')[0],
+              redirect,
+            }),
+          });
+          const data = await res.json();
+          if (data.redirectUrl) {
+            window.location.href = data.redirectUrl;
+          } else {
+            error.textContent = data.error || 'Sign up failed';
+            error.classList.add('show');
+            btn.disabled = false;
+            btn.textContent = 'Create Account';
+          }
+        } catch (err) {
+          error.textContent = 'Connection error. Please try again.';
+          error.classList.add('show');
+          btn.disabled = false;
+          btn.textContent = 'Create Account';
+        }
+      });
+    })();
   </script>
 </body>
 </html>
