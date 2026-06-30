@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'config/app_config.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
+import 'pages/auth_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 import 'services/overlay_service.dart';
@@ -68,7 +70,13 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
 
     if (status == AuthStatus.unauthenticated) {
-      context.read<AuthProvider>().redirectToLogin();
+      if (kIsWeb) {
+        context.read<AuthProvider>().redirectToLogin();
+        return;
+      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const AuthPage()),
+      );
       return;
     }
 

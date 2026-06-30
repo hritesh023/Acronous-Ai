@@ -165,14 +165,17 @@ class ApiClient {
     }
   }
 
-  static Future<String> detectBaseUrl({String? configuredUrl, String? savedUrl}) async {
+  static Future<String> detectBaseUrl({
+    String? configuredUrl,
+    String? savedUrl,
+  }) async {
     final currentOrigin = _normalizeBaseUrl(_currentOrigin);
     final candidates = <String>[
       'http://127.0.0.1:8000',
       'http://localhost:8000',
       if (currentOrigin.isNotEmpty) currentOrigin,
-      if (savedUrl != null) savedUrl,
-      if (configuredUrl != null) configuredUrl,
+      ?savedUrl,
+      ?configuredUrl,
     ];
     final checked = <String>{};
 
@@ -234,7 +237,8 @@ class ApiClient {
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      final errMsg = json['error'] as String? ??
+      final errMsg =
+          json['error'] as String? ??
           json['detail'] as String? ??
           json['message'] as String? ??
           '';
@@ -563,17 +567,25 @@ class ApiClient {
 
   Future<Map<String, dynamic>> wakeup({Duration? timeout}) async {
     try {
-      return await _get('/v1/wakeup', timeout: timeout ?? const Duration(seconds: 30));
+      return await _get(
+        '/v1/wakeup',
+        timeout: timeout ?? const Duration(seconds: 30),
+      );
     } catch (_) {
       return {'status': 'ok'};
     }
   }
 
-  Future<bool> waitForReady({Duration timeout = const Duration(seconds: 120)}) async {
+  Future<bool> waitForReady({
+    Duration timeout = const Duration(seconds: 120),
+  }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       try {
-        final resp = await _get('/v1/ready', timeout: const Duration(seconds: 5));
+        final resp = await _get(
+          '/v1/ready',
+          timeout: const Duration(seconds: 5),
+        );
         if (resp['status'] == 'ok') return true;
       } catch (_) {}
       await Future.delayed(const Duration(seconds: 3));

@@ -35,6 +35,9 @@ Resources:
         EmailSendingAccount: COGNITO_DEFAULT
       LambdaConfig:
         PreSignUp: !GetAtt AutoConfirmLambda.Arn
+      Tags:
+        - Key: awsApplication
+          Value: arn:aws:resource-groups:eu-north-1:365528424228:group/Acronous_ai/0dvgasm7yvgstcm59pokw3cc0x
 
   AcronousUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -45,8 +48,12 @@ Resources:
       ExplicitAuthFlows:
         - ALLOW_USER_SRP_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_PASSWORD_AUTH
         - ALLOW_ADMIN_USER_PASSWORD_AUTH
       PreventUserExistenceErrors: ENABLED
+      Tags:
+        - Key: awsApplication
+          Value: arn:aws:resource-groups:eu-north-1:365528424228:group/Acronous_ai/0dvgasm7yvgstcm59pokw3cc0x
 
   AcronousUserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
@@ -67,6 +74,9 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - Key: awsApplication
+          Value: arn:aws:resource-groups:eu-north-1:365528424228:group/Acronous_ai/0dvgasm7yvgstcm59pokw3cc0x
 
   AutoConfirmLambda:
     Type: AWS::Lambda::Function
@@ -83,6 +93,9 @@ Resources:
               event["response"]["autoVerifyEmail"] = True
               event["response"]["autoVerifyPhone"] = True
               return event
+      Tags:
+        - Key: awsApplication
+          Value: arn:aws:resource-groups:eu-north-1:365528424228:group/Acronous_ai/0dvgasm7yvgstcm59pokw3cc0x
 
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission

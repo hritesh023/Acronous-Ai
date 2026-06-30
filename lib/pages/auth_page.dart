@@ -19,6 +19,7 @@ class _AuthPageState extends State<AuthPage>
   final _formKey = GlobalKey<FormState>();
   bool _isSignUp = false;
   bool _obscurePassword = true;
+  bool _navigated = false;
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
 
@@ -34,6 +35,25 @@ class _AuthPageState extends State<AuthPage>
       curve: Curves.easeIn,
     );
     _fadeController.forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkAlreadyAuthenticated());
+  }
+
+  void _checkAlreadyAuthenticated() {
+    if (_navigated || !mounted) return;
+    final authProv = context.read<auth.AuthProvider>();
+    if (authProv.status == auth.AuthStatus.authenticated) {
+      _navigated = true;
+      final chat = context.read<ChatProvider>();
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => ChatPage(
+            chatProvider: chat,
+            authProvider: authProv,
+          ),
+        ),
+        (_) => false,
+      );
+    }
   }
 
   @override
@@ -44,7 +64,7 @@ class _AuthPageState extends State<AuthPage>
     super.dispose();
   }
 
-  void _submit() {
+  Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
     final authProv = context.read<auth.AuthProvider>();
@@ -52,9 +72,24 @@ class _AuthPageState extends State<AuthPage>
     final password = _passwordController.text;
 
     if (_isSignUp) {
-      authProv.signUpWithEmail(email, password);
+      await authProv.signUpWithEmail(email, password);
     } else {
-      authProv.signInWithEmail(email, password);
+      await authProv.signInWithEmail(email, password);
+    }
+
+    if (_navigated || !mounted) return;
+    if (authProv.status == auth.AuthStatus.authenticated) {
+      _navigated = true;
+      final chat = context.read<ChatProvider>();
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => ChatPage(
+            chatProvider: chat,
+            authProvider: authProv,
+          ),
+        ),
+        (_) => false,
+      );
     }
   }
 
@@ -62,34 +97,6 @@ class _AuthPageState extends State<AuthPage>
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final size = MediaQuery.of(context).size;
-    final authProv = context.watch<auth.AuthProvider>();
-
-    if (authProv.status == auth.AuthStatus.authenticated) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          final chat = context.read<ChatProvider>();
-          final aProv = context.read<auth.AuthProvider>();
-          Navigator.of(context).pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => ChatPage(
-                chatProvider: chat,
-                authProvider: aProv,
-              ),
-            ),
-            (_) => false,
-          );
-        }
-      });
-    }
-
-    if (authProv.status == auth.AuthStatus.unauthenticated) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          authProv.redirectToLogin();
-        }
-      });
-    }
-
     return Scaffold(
       body: SafeArea(
         child: FadeTransition(

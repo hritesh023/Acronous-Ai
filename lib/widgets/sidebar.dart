@@ -484,11 +484,11 @@ class _SidebarWidgetState extends State<SidebarWidget> {
       ),
       child: Column(
         children: [
-          if (widget.authProvider.user != null)
+          if (widget.authProvider.userEmail != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
               child: Text(
-                widget.authProvider.user!.email ?? '',
+                widget.authProvider.userEmail ?? '',
                 style: const TextStyle(fontSize: 12, color: Color(0xFF505070)),
                 overflow: TextOverflow.ellipsis,
               ),

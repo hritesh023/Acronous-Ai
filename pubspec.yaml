@@ -22,7 +22,7 @@ dependencies:
   camera: ^0.11.1
   path_provider: ^2.1.0
   intl: ^0.20.2
-  amazon_cognito_identity_dart_2: ^3.6.4
+  app_links: ^7.0.0
 
 dev_dependencies:
   flutter_test:

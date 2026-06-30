@@ -24,13 +24,21 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> _init() async {
     await _authService.initialize();
-    final authenticated = await _authService.checkAuth();
-    if (authenticated) {
+    // If token was just extracted from redirect URL, trust it directly
+    // without a cross-origin API call (avoids CORS preflight failure).
+    if (_authService.tokenFromUrl && _authService.token != null) {
       _userEmail = _authService.userEmail;
       _userId = _authService.userId;
       _status = AuthStatus.authenticated;
     } else {
-      _status = AuthStatus.unauthenticated;
+      final authenticated = await _authService.checkAuth();
+      if (authenticated) {
+        _userEmail = _authService.userEmail;
+        _userId = _authService.userId;
+        _status = AuthStatus.authenticated;
+      } else {
+        _status = AuthStatus.unauthenticated;
+      }
     }
     notifyListeners();
   }
@@ -48,6 +56,7 @@ class AuthProvider extends ChangeNotifier {
         _userId = _authService.userId;
         _status = AuthStatus.authenticated;
       } else {
+        _error = _authService.lastError;
         _status = AuthStatus.unauthenticated;
       }
       notifyListeners();
@@ -71,6 +80,7 @@ class AuthProvider extends ChangeNotifier {
         _userId = _authService.userId;
         _status = AuthStatus.authenticated;
       } else {
+        _error = _authService.lastError;
         _status = AuthStatus.unauthenticated;
       }
       notifyListeners();

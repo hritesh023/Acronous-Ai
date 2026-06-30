@@ -6,8 +6,9 @@ class AppConfig {
   static final AppConfig instance = AppConfig._();
 
   // Change this to your deployed Cloudflare Worker URL
+  // Uses ai.acronous.com so the Flutter app's API calls go through the Worker
   static const String remoteServerUrl =
-      'https://acronous-ai.hriteshkumarpatro.workers.dev';
+      'https://ai.acronous.com';
 
   bool get isWeb {
     try {
@@ -54,11 +55,6 @@ class AppConfig {
   late final String cameraAnalysisPrompt;
 
   late final String settingsRoute;
-
-  // Cognito config
-  late final String cognitoUserPoolId;
-  late final String cognitoClientId;
-  late final String cognitoRegion;
 
   void load() {
     apiBaseUrl = _env(
@@ -113,19 +109,6 @@ class AppConfig {
 
     settingsRoute = '/settings';
 
-    // Cognito — read from env vars or compile-time defines
-    cognitoUserPoolId = _env(
-      'COGNITO_USER_POOL_ID',
-      const String.fromEnvironment('COGNITO_USER_POOL_ID', defaultValue: ''),
-    );
-    cognitoClientId = _env(
-      'COGNITO_CLIENT_ID',
-      const String.fromEnvironment('COGNITO_CLIENT_ID', defaultValue: ''),
-    );
-    cognitoRegion = _env(
-      'COGNITO_REGION',
-      const String.fromEnvironment('COGNITO_REGION', defaultValue: 'eu-north-1'),
-    );
   }
 
   static String _env(String key, String fallback) {
