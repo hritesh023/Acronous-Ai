@@ -2646,7 +2646,7 @@ export default {
       if (path === '/v1/ready') return readyHandler();
       if (path === '/v1/health/llm') return healthLLMHandler();
       if (path === '/v1/wakeup') return wakeupHandler();
-      if (path === '/health') return healthHandler();
+      if (path === '/health' || path === '/api/health') return healthHandler();
 
       // ── Chat ────────────────────────────────────────────────────────
       if (path === '/v1/chat/stream' && method === 'POST') return chatStreamHandler(request);
