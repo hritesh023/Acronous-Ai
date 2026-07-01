@@ -324,20 +324,14 @@ class ChatMessageWidget extends StatelessWidget {
                     Positioned(
                       bottom: 4,
                       right: 6,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.35),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                        child: Text(
-                          'Acronous AI',
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.6),
-                            fontSize: 8,
-                            fontWeight: FontWeight.w400,
-                            letterSpacing: 0.3,
-                          ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(3),
+                        child: Image.asset(
+                          'assets/logo.png',
+                          width: 28,
+                          height: 28,
+                          color: Colors.white.withValues(alpha: 0.5),
+                          colorBlendMode: BlendMode.srcIn,
                         ),
                       ),
                     ),
