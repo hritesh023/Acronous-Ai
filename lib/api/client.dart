@@ -357,7 +357,7 @@ class ApiClient {
     if (location != null && location.isNotEmpty) {
       body['location'] = location;
     }
-    final resp = await _post('/v1/chat', body);
+    final resp = await _post('/v1/chat', body, timeout: timeout);
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
@@ -406,21 +406,26 @@ class ApiClient {
     required Uint8List imageBytes,
     required String fileName,
     String? sessionId,
+    String? timezone,
+    String? location,
     Duration? timeout,
   }) async {
     final fields = <String, String>{'message': message};
     if (sessionId != null) fields['session_id'] = sessionId;
+    if (timezone != null && timezone.isNotEmpty) fields['timezone'] = timezone;
+    if (location != null && location.isNotEmpty) fields['location'] = location;
     final resp = await _multipartPost(
       '/v1/chat/image',
       fields,
       imageBytes,
       fileName,
-      timeout: timeout,
+      timeout: timeout ?? const Duration(seconds: 90),
     );
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
       type: resp['type'] as String? ?? 'chat',
+      imageBase64: resp['image_data'] as String?,
     );
   }
 
@@ -429,10 +434,14 @@ class ApiClient {
     required String fileName,
     String message = '',
     String? sessionId,
+    String? timezone,
+    String? location,
     Duration? timeout,
   }) async {
     final fields = <String, String>{'message': message};
     if (sessionId != null) fields['session_id'] = sessionId;
+    if (timezone != null && timezone.isNotEmpty) fields['timezone'] = timezone;
+    if (location != null && location.isNotEmpty) fields['location'] = location;
     final resp = await _multipartPost(
       '/v1/chat/file',
       fields,
@@ -473,6 +482,24 @@ class ApiClient {
     return _post('/api/image/qr-code', body);
   }
 
+  Future<Map<String, dynamic>> editImage({
+    required Uint8List imageBytes,
+    required String fileName,
+    required String prompt,
+    String? sessionId,
+    Duration? timeout,
+  }) async {
+    final fields = <String, String>{'message': prompt};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    return _multipartPost(
+      '/v1/image/edit',
+      fields,
+      imageBytes,
+      fileName,
+      timeout: timeout,
+    );
+  }
+
   Future<Map<String, dynamic>> redesignImage(
     File file,
     String prompt, {
@@ -481,6 +508,21 @@ class ApiClient {
     return _uploadFile('/api/image/redesign', file, {
       'prompt': prompt,
     }, timeout: timeout);
+  }
+
+  Future<Map<String, dynamic>> redesignImageBytes({
+    required Uint8List imageBytes,
+    required String fileName,
+    required String prompt,
+    Duration? timeout,
+  }) async {
+    return _multipartPost(
+      '/api/image/redesign',
+      {'prompt': prompt},
+      imageBytes,
+      fileName,
+      timeout: timeout,
+    );
   }
 
   Future<ChatResponse> analyzeImage(
@@ -510,6 +552,26 @@ class ApiClient {
     return ChatResponse.fromJson(
       jsonDecode(response.body) as Map<String, dynamic>,
     );
+  }
+
+  Future<ChatResponse> analyzeImageBytes({
+    required Uint8List imageBytes,
+    required String fileName,
+    String? sessionId,
+    String? analysisType,
+    Duration? timeout,
+  }) async {
+    final fields = <String, String>{};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    if (analysisType != null) fields['analysis_type'] = analysisType;
+    final resp = await _multipartPost(
+      '/api/image/analyze',
+      fields,
+      imageBytes,
+      fileName,
+      timeout: timeout,
+    );
+    return ChatResponse.fromJson(resp);
   }
 
   Future<Map<String, dynamic>> webSearch(
@@ -667,6 +729,18 @@ class ApiClient {
     List<Map<String, dynamic>> conversations,
   ) async {
     return _post('/api/conversations/sync', {'conversations': conversations});
+  }
+
+  Future<Map<String, dynamic>> generateFile({
+    required String content,
+    required String format,
+    String? filename,
+  }) async {
+    return _post('/api/tools/generate-file', {
+      'content': content,
+      'format': format,
+      if (filename != null) 'filename': filename,
+    });
   }
 
   Future<Map<String, dynamic>> updateLLMConfig({

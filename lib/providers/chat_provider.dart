@@ -40,8 +40,6 @@ class ChatProvider extends ChangeNotifier {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return '';
     final cleaned = trimmed
-        .replaceAll(RegExp(r'\[Current date and time:[^\]]*\]'), '')
-        .replaceAll(RegExp(r'\[User location:[^\]]*\]'), '')
         .replaceAll(RegExp(r'\[Internal[^\]]*\]'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
@@ -293,36 +291,73 @@ class ChatProvider extends ChangeNotifier {
   String _cachedCountry = '';
 
   Future<void> _fetchLocationInfo() async {
-    try {
-      final resp = await http
-          .get(Uri.parse('http://ip-api.com/json/'))
-          .timeout(const Duration(seconds: 5));
-      if (resp.statusCode == 200) {
-        final data = jsonDecode(resp.body) as Map<String, dynamic>;
-        if (data['status'] == 'success') {
-          _cachedCity = (data['city'] as String?) ?? '';
-          _cachedCountry = (data['country'] as String?) ?? '';
-          final tz = (data['timezone'] as String?) ?? '';
-          final city = _cachedCity;
-          final country = _cachedCountry;
-          if (city.isNotEmpty && country.isNotEmpty) {
-            _cachedLocation = '$city, $country';
-          } else if (city.isNotEmpty) {
-            _cachedLocation = city;
-          } else if (country.isNotEmpty) {
-            _cachedLocation = country;
-          }
-          if (tz.isNotEmpty) {
-            _cachedTimezoneName = tz;
-          }
-        }
-      }
-    } catch (_) {}
+    final geoServices = [
+      _fetchFromIpApi,
+      _fetchFromFreeIp,
+    ];
+    for (final service in geoServices) {
+      try {
+        final success = await service();
+        if (success) break;
+      } catch (_) {}
+    }
+    if (_cachedTimezoneName.isEmpty) {
+      _cachedTimezoneName = _deviceTimezone;
+    }
+  }
+
+  Future<bool> _fetchFromIpApi() async {
+    final resp = await http
+        .get(Uri.parse('http://ip-api.com/json/'))
+        .timeout(const Duration(seconds: 8));
+    if (resp.statusCode != 200) return false;
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (data['status'] != 'success') return false;
+    _updateLocationData(
+      city: data['city'] as String? ?? '',
+      country: data['country'] as String? ?? '',
+      timezone: data['timezone'] as String? ?? '',
+    );
+    return true;
+  }
+
+  Future<bool> _fetchFromFreeIp() async {
+    final resp = await http
+        .get(Uri.parse('https://freeipapi.com/api/json'))
+        .timeout(const Duration(seconds: 8));
+    if (resp.statusCode != 200) return false;
+    final data = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (data['status'] != 'success') return false;
+    _updateLocationData(
+      city: data['cityName'] as String? ?? data['city'] as String? ?? '',
+      country: data['countryName'] as String? ?? data['country'] as String? ?? '',
+      timezone: data['timeZone'] as String? ?? data['timezone'] as String? ?? '',
+    );
+    return true;
+  }
+
+  void _updateLocationData({
+    required String city,
+    required String country,
+    required String timezone,
+  }) {
+    _cachedCity = city;
+    _cachedCountry = country;
+    if (city.isNotEmpty && country.isNotEmpty) {
+      _cachedLocation = '$city, $country';
+    } else if (city.isNotEmpty) {
+      _cachedLocation = city;
+    } else if (country.isNotEmpty) {
+      _cachedLocation = country;
+    }
+    if (timezone.isNotEmpty) {
+      _cachedTimezoneName = timezone;
+    }
   }
 
   String _cachedTimezoneName = '';
 
-  String get _userTimezone {
+  String get _deviceTimezone {
     try {
       final offset = DateTime.now().timeZoneOffset;
       final totalMinutes = offset.inMinutes;
@@ -335,15 +370,6 @@ class ChatProvider extends ChangeNotifier {
       return '';
     }
   }
-
-  static const String autoDetectPrompt =
-      'Analyze this image and auto-detect its type. '
-      'If it contains a QR code or barcode, decode its contents. '
-      'If it contains text in another language, translate it. '
-      'If it appears to be a medical image, analyze for diseases or anomalies. '
-      'If it contains encoded or hidden data, decode it. '
-      'If it is a document or screenshot, extract and summarize the content. '
-      'Otherwise, provide a detailed analysis of what you see.';
 
   Future<void> sendMessage(
     String text, {
@@ -453,42 +479,276 @@ class ChatProvider extends ChangeNotifier {
     final attachments = List<MessageAttachment>.from(_pendingAttachments);
     _pendingAttachments.clear();
     notifyListeners();
-    await sendMessage(autoDetectPrompt, attachments: attachments);
+    await sendMessage('', attachments: attachments);
   }
 
   bool _isImageGenRequest(String text) {
     final t = text.trim().toLowerCase();
     if (t.length < 4) return false;
-    final prefixes = ['draw ', 'paint ', 'sketch ', 'generate ', 'create '];
+
+    // Direct action prefixes (strong signal)
+    final prefixes = ['draw ', 'paint ', 'sketch ', 'render ', 'imagine '];
     for (final p in prefixes) {
       if (t.startsWith(p)) return true;
     }
+
+    // Core image generation patterns
     final patterns = [
-      'generate an image',
-      'generate a picture',
-      'generate a photo',
-      'create an image',
-      'create a picture',
-      'create a photo',
-      'make an image',
-      'make a picture',
-      'make a photo',
-      'generate image of',
-      'generate picture of',
-      'create image of',
-      'create picture of',
-      'image of a',
-      'image of an',
-      'picture of a',
-      'picture of an',
-      'draw me a',
-      'draw me an',
-      'paint me a',
+      'generate an image', 'generate a picture', 'generate a photo',
+      'create an image', 'create a picture', 'create a photo',
+      'make an image', 'make a picture', 'make a photo',
+      'generate image of', 'generate picture of',
+      'create image of', 'create picture of',
+      'image of a', 'image of an', 'image of the',
+      'picture of a', 'picture of an', 'picture of the',
+      'photo of a', 'photo of an', 'photo of the',
+      'draw me a', 'draw me an', 'draw me',
+      'paint me a', 'paint me an', 'paint me',
+      'make me a', 'make me an',
+      'create me a', 'create me an',
+      'generate me a', 'generate me an',
+      'show me a picture', 'show me an image',
+      // Image format with visual context
+      'png of a', 'png of an', 'png of the',
+      'jpg of a', 'jpeg of a', 'jpg of an', 'jpeg of an',
+      'gif of a', 'gif of an',
+      'webp of a', 'bmp of a',
+      'generate a', 'generate an',
+      'generate png', 'generate jpg', 'generate jpeg', 'generate gif',
+      'create png', 'create jpg', 'create jpeg', 'create gif',
+      'make png', 'make jpg', 'make jpeg', 'make gif',
     ];
     for (final pat in patterns) {
       if (t.contains(pat)) return true;
     }
+
+    // Image file extensions with visual context
+    final imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'];
+    if (imageExts.any((ext) => t.contains(ext))) {
+      final visualWords = [
+        'image', 'picture', 'photo', 'draw', 'paint', 'sketch',
+        'illustration', 'artwork', 'design', 'graphic',
+        'of a', 'of an', 'of the', 'sunset', 'landscape', 'portrait',
+        'cartoon', 'art', 'render', 'visualize', 'logo', 'icon',
+        'banner', 'wallpaper', 'background', 'poster',
+        'meme', 'comic', 'character', 'scene', 'view',
+      ];
+      if (visualWords.any((w) => t.contains(w))) return true;
+    }
+
+    // Starting with visual noun phrases
+    if (t.startsWith('a picture') || t.startsWith('a photo') ||
+        t.startsWith('an image') || t.startsWith('a drawing') ||
+        t.startsWith('a painting') || t.startsWith('a sketch') ||
+        t.startsWith('a cartoon') || t.startsWith('a logo') ||
+        t.startsWith('a poster') || t.startsWith('a banner')) {
+      return true;
+    }
+
+    // Design patterns
+    final designPatterns = [
+      'design a', 'design an', 'design me',
+      'create a logo', 'create a banner', 'create a poster',
+      'make a logo', 'make a banner', 'make a poster',
+      'generate a logo', 'generate a banner', 'generate a poster',
+      'create a wallpaper', 'make a wallpaper',
+      'create a character', 'design a character',
+      'create a meme', 'make a meme',
+    ];
+    for (final pat in designPatterns) {
+      if (t.contains(pat)) return true;
+    }
+
+    // ── Extended natural-language patterns ─────────────────────────────
+
+    // "I want/need" + visual noun (with and without "of")
+    final wantNeedPatterns = [
+      'i want a picture', 'i want a photo', 'i want an image',
+      'i want a drawing', 'i want a painting', 'i want a sketch',
+      'i need a picture', 'i need a photo', 'i need an image',
+      'i need a drawing', 'i need a painting', 'i need a sketch',
+      'want a picture', 'want a photo', 'want an image',
+      'need a picture', 'need a photo', 'need an image',
+      // Grammatical variants with "a" instead of "an"
+      'i want a image', 'i need a image',
+      'want a image', 'need a image',
+    ];
+    for (final pat in wantNeedPatterns) {
+      if (t.contains(pat)) return true;
+    }
+
+    // "Can you" patterns
+    final canYouPatterns = [
+      'can you draw', 'can you paint', 'can you sketch', 'can you render',
+      'can you create', 'can you generate', 'can you make',
+      'can you design', 'can you imagine',
+      'can you show me', 'can you make me',
+    ];
+    for (final pat in canYouPatterns) {
+      if (t.contains(pat)) return true;
+    }
+
+    // "Please" patterns
+    final pleasePatterns = [
+      'please draw', 'please paint', 'please sketch',
+      'please create', 'please generate', 'please make',
+    ];
+    for (final pat in pleasePatterns) {
+      if (t.contains(pat)) return true;
+    }
+
+    // Broad visual noun + "of" anywhere
+    final visualOfPatterns = [
+      'photo of', 'picture of', 'image of',
+      'drawing of', 'painting of', 'sketch of',
+    ];
+    for (final pat in visualOfPatterns) {
+      if (t.contains(pat)) return true;
+    }
+
+    // Action + article patterns (covers "draw a cat", "create a landscape", etc.)
+    // Includes grammatical variants with "a" instead of "an" before vowels
+    final actionArticle = [
+      'draw a', 'draw an', 'paint a', 'paint an',
+      'sketch a', 'sketch an', 'render a', 'render an',
+      'create a picture', 'create a photo', 'create an image',
+      'create a image', 'create a drawing', 'create a painting',
+      'make a picture', 'make a photo', 'make an image',
+      'make a image', 'make a drawing', 'make a painting',
+      'generate a picture', 'generate a photo', 'generate an image',
+      'generate a image',
+    ];
+    for (final pat in actionArticle) {
+      if (t.contains(pat)) return true;
+    }
+
+    // ── Broad combined-intent safety net ───────────────────────────────
+    // If text has both a creation verb and a visual noun, it's image gen
+    final creationVerbs = ['draw', 'paint', 'sketch', 'render', 'imagine',
+                           'generate', 'create', 'make'];
+    final visualNouns = ['image', 'picture', 'photo', 'drawing', 'painting',
+                         'sketch', 'illustration', 'artwork', 'art',
+                         'logo', 'banner', 'poster', 'wallpaper', 'meme',
+                         'icon', 'portrait', 'landscape', 'scene', 'sunset',
+                         'cartoon', 'character', 'graphic'];
+    bool hasVerb = false;
+    for (final v in creationVerbs) {
+      if (RegExp(r'\b' + v + r'\b').hasMatch(t)) { hasVerb = true; break; }
+    }
+    if (hasVerb) {
+      for (final n in visualNouns) {
+        if (t.contains(n)) return true;
+      }
+    }
+
     return false;
+  }
+
+  String? _detectFileGenFormat(String text) {
+    final t = text.trim().toLowerCase();
+
+    // Expanded action words for better detection
+    final hasAction = [
+      'create', 'make', 'generate', 'build', 'write', 'convert', 'export',
+      'save', 'download', 'need', 'want', 'give', 'produce', 'prepare',
+      'compile', 'draft', 'compose', 'form', 'develop', 'construct',
+      'fashion', 'put together', 'set up', 'produce a', 'make a',
+      'create a', 'generate a', 'write a', 'need a', 'want a',
+      'i need', 'i want', 'can you create', 'can you make', 'can you generate',
+      'can you write', 'please create', 'please make', 'please generate',
+    ].any((w) => t.contains(w));
+
+    // Also detect if text starts with file-creation intent like "a pdf" or "pdf of"
+    final startsWithFormat = RegExp(r'^(a|an|the)?\s*(pdf|docx?|xlsx?|csv|txt|md|html|json|xml|svg|png|jpg|jpeg|gif|bmp|webp)\b').hasMatch(t);
+
+    if (!hasAction && !startsWithFormat) return null;
+
+    // Check for image format keywords first — these should go to image generation, not file generation
+    final imageFormats = ['jpg', 'jpeg', 'gif', 'bmp', 'webp', 'png'];
+    for (final fmt in imageFormats) {
+      if (t.contains(fmt)) {
+        // Check if it's a visual creation request (e.g., "create a png of a cat")
+        final visualIndicators = [
+          'image', 'picture', 'photo', 'draw', 'paint', 'sketch',
+          'of a', 'of an', 'of the', 'illustration', 'artwork',
+          'design', 'graphic', 'render', 'visualize', 'logo',
+          'icon', 'banner', 'wallpaper', 'background',
+          'sunset', 'landscape', 'portrait', 'cartoon', 'art',
+        ];
+        final isVisualRequest = visualIndicators.any((w) => t.contains(w));
+
+        // Short phrases like "create a png" -> image gen (user wants to generate a picture)
+        final wordCount = t.trim().split(RegExp(r'\s+')).length;
+        final isShortRequest = wordCount <= 6;
+
+        if (isVisualRequest || isShortRequest) {
+          return null; // Route to image generation
+        }
+        return 'png'; // "convert data to png" type -> file gen
+      }
+    }
+
+    // Check for document format keywords
+    if (t.contains('pdf') || t.contains('document')) return 'pdf';
+
+    // Word document detection - expanded patterns
+    if (t.contains('word') || t.contains('docx') || t.contains('.doc')) return 'docx';
+
+    // Excel/spreadsheet detection - expanded patterns
+    if (t.contains('excel') || t.contains('xlsx') || t.contains('xls') ||
+        t.contains('spreadsheet') || t.contains(' sheet') ||
+        t.contains('tabular') || t.contains('table')) return 'xlsx';
+
+    if (t.contains('csv') || t.contains('comma separated') ||
+        t.contains('comma-separated')) return 'csv';
+
+    if (t.contains('html') || t.contains('web page') || t.contains('website')) return 'html';
+
+    if (t.contains('markdown') || t.contains('.md') || t.contains('md file')) return 'md';
+
+    if (t.contains('svg') || t.contains('vector')) return 'svg';
+
+    if (t.contains('presentation') || t.contains('slide') ||
+        t.contains('powerpoint') || t.contains('pptx') ||
+        t.contains('slides')) return 'pdf';
+
+    if (t.contains('resume') || t.contains('cv') ||
+        t.contains('cover letter') || t.contains('report') ||
+        t.contains('invoice') || t.contains('receipt')) return 'docx';
+
+    if (t.contains('json') || t.contains('json file')) return 'json';
+    if (t.contains('xml') || t.contains('xml file')) return 'xml';
+    if (t.contains('text file') || t.contains('txt file')) return 'txt';
+
+    return null;
+  }
+
+  String _stripMarkdownFences(String text) {
+    final trimmed = text.trim();
+    // Remove leading AI explanations like "Here is your PDF:", "Sure, here's the content:", etc.
+    String cleaned = trimmed.replaceFirst(RegExp(r"^(here\s+is|here'?s|i'?ve?\s+(created|generated|made|prepared|produced)|below\s+is|the\s+following\s+is|sure[!.,]+\s*here'?s?|certainly[!.,]+\s*here'?s?|of\s+course[!.,]+\s*here'?s?)[^]*?(?=```|<\w|[A-Z]|\d)", caseSensitive: false), '').trim();
+
+    if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
+      final firstNewline = cleaned.indexOf('\n');
+      if (firstNewline > 3 && firstNewline < cleaned.length - 4) {
+        cleaned = cleaned.substring(firstNewline + 1, cleaned.length - 3).trim();
+      } else {
+        cleaned = cleaned.substring(3, cleaned.length - 3).trim();
+      }
+    } else if (cleaned.startsWith('```')) {
+      final firstNewline = cleaned.indexOf('\n');
+      if (firstNewline > 3) {
+        cleaned = cleaned.substring(firstNewline + 1).trim();
+      } else {
+        cleaned = cleaned.substring(3).trim();
+      }
+    }
+    if (cleaned.endsWith('```')) {
+      cleaned = cleaned.substring(0, cleaned.length - 3).trim();
+    }
+    // Remove trailing AI wrap-up
+    cleaned = cleaned.replaceFirst(RegExp(r'(i\s+hope|feel\s+free|let\s+me\s+know|if\s+you\s+need|please\s+let|do\s+not\s+hesitate).*$', caseSensitive: false, dotAll: true), '').trim();
+    return cleaned;
   }
 
   Future<Map<String, dynamic>> _callApi(
@@ -500,16 +760,57 @@ class ChatProvider extends ChangeNotifier {
     );
     final sessionId = _currentConversation?.id;
 
+    final timezone = _cachedTimezoneName.isNotEmpty
+        ? _cachedTimezoneName
+        : _deviceTimezone;
+    final location = _cachedLocation.isNotEmpty ? _cachedLocation : null;
+
     if (hasImage) {
       final imgAttach = userMsg.attachments.firstWhere(
         (a) => a.type == AttachmentType.image,
       );
       final bytes = await FileService.readAttachmentBytes(imgAttach);
+      final t = text.toLowerCase();
+      final editKeywords = [
+        'edit', 'modify', 'change', 'redesign',
+        'add ', 'remove', 'replace', 'make ', 'make it', 'turn it',
+        'convert', 'transform', 'update', 'alter', 'adjust',
+        'recreate', 'reimagine', 'give it', 'put ',
+        'insert', 'delete', 'erase',
+        'recolor', 'recolour', 'resize', 'crop', 'rotate',
+        'enhance', 'improve', 'better',
+        'enhancement', 'improvement',
+        'create', 'turn this', 'turn into', 'into ', 'as a', 'like a',
+        'style', 'cartoon', 'painting', 'anime', 'sketch', 'drawing'
+      ];
+      final isEditRequest = text.trim().length > 3 && editKeywords.any((kw) => t.contains(kw));
+      if (isEditRequest) {
+        try {
+          final editResp = await _api.editImage(
+            imageBytes: bytes,
+            fileName: imgAttach.name,
+            prompt: text,
+            sessionId: sessionId,
+          );
+          final response = editResp['response'] as String? ?? '';
+          final imageData = editResp['image_data'] as String? ?? '';
+          if (imageData.isNotEmpty) {
+            return {
+              'response': response,
+              'image_data': imageData,
+              'type': editResp['type'] as String? ?? 'chat',
+            };
+          }
+        } catch (_) {}
+      }
       final resp = await _api.chatWithImage(
         message: text,
         imageBytes: bytes,
         fileName: imgAttach.name,
         sessionId: sessionId,
+        timezone: timezone.isNotEmpty ? timezone : null,
+        location: location,
+        timeout: const Duration(seconds: 90),
       );
       return {'response': resp.content, 'image_data': '', 'type': resp.type};
     } else if (userMsg.attachments.isNotEmpty) {
@@ -520,26 +821,108 @@ class ChatProvider extends ChangeNotifier {
         fileName: attach.name,
         message: text,
         sessionId: sessionId,
+        timezone: timezone.isNotEmpty ? timezone : null,
+        location: location,
       );
       return {'response': resp.content, 'image_data': '', 'type': resp.type};
     }
+    // Check for file generation requests (PDF, Word, Excel, etc.) before image gen
+    final fileFormat = _detectFileGenFormat(text);
+    if (fileFormat != null) {
+      if (fileFormat == 'png') {
+        // PNG is an image format — route to image generation instead
+        final imgResp = await _api.generateImage(prompt: text, sessionId: sessionId);
+        return {
+          'response': (imgResp['response'] as String?) ?? (imgResp['content'] as String?) ?? '',
+          'image_data': (imgResp['image_data'] as String?) ?? (imgResp['imageBase64'] as String?) ?? '',
+          'type': (imgResp['type'] as String?) ?? 'image_gen',
+        };
+      }
+
+      // For non-image file formats (PDF, DOCX, XLSX, CSV, etc.)
+      String lastError = '';
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          final isComplex = text.length > 80;
+          String instruction;
+          // Format-specific instructions ensure proper content generation
+          final formatInstructions = {
+            'pdf': 'Generate structured HTML content that will be converted to a PDF document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <pre>, <code>, <strong>, <em>, <br> to structure the content clearly. The HTML will be automatically converted to a proper downloadable PDF file. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text, do NOT use sample data. Include the COMPLETE content the user asked for. Return ONLY the HTML content, no explanations, no greetings, no markdown fences.',
+            'docx': 'Generate HTML content for a Microsoft Word document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <strong>, <em>, <br> to structure the content. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text, do NOT use sample data. Include the COMPLETE content the user asked for. Return ONLY the HTML content, no explanations, no greetings, no markdown fences.',
+            'xlsx': 'Generate CSV content (comma-separated values) for an Excel spreadsheet. The first row should be column headers. Each subsequent row is a data row with ACTUAL values — do NOT leave cells empty, do NOT use placeholder data. Use proper CSV escaping (double-quote fields containing commas or newlines). CRITICAL: You MUST include EVERY specific data point and row the user requested — include the COMPLETE dataset with all the values asked for. Return ONLY the CSV content, no explanations, no markdown fences.',
+            'csv': 'Generate CSV content (comma-separated values). The first row should be column headers. Each subsequent row is a data row with ACTUAL values — do NOT leave cells empty, do NOT use placeholder data. Use proper CSV escaping. CRITICAL: You MUST include EVERY specific data point the user requested — include the COMPLETE dataset. Return ONLY the CSV content, no explanations, no markdown fences.',
+            'md': 'Generate Markdown content. Use proper markdown formatting with headings, lists, tables, code blocks, and emphasis as appropriate. CRITICAL: You MUST include ALL the specific content the user requested — do NOT omit any sections or details. Return ONLY the markdown content, no explanations, no markdown fences.',
+            'html': 'Generate a complete HTML web page. Include DOCTYPE, html, head, and body tags with proper CSS styling. CRITICAL: You MUST include ALL the specific content and context the user requested — every detail must be in the page. Return ONLY the HTML code, no explanations, no markdown fences.',
+            'json': 'Generate JSON content. Ensure it is valid JSON format. CRITICAL: You MUST include ALL the specific data the user requested — every field, value, and nested structure. Return ONLY the JSON content, no explanations, no markdown fences.',
+            'xml': 'Generate XML content. Ensure it is well-formed XML with proper tags. CRITICAL: You MUST include ALL the specific data the user requested — every element and attribute. Return ONLY the XML content, no explanations, no markdown fences.',
+            'svg': 'Generate SVG image content as raw SVG XML. Include proper viewBox and namespace attributes. CRITICAL: You MUST include ALL the specific visual elements the user requested. Return ONLY the SVG XML, no explanations, no markdown fences.',
+            'txt': 'Generate plain text content. Format the text clearly with sections and proper line breaks. CRITICAL: You MUST include ALL the specific information the user requested — every detail, point, and section complete. Return ONLY the text content, no explanations, no markdown fences.',
+          };
+          final fmtInstruction = formatInstructions[fileFormat] ?? 'Generate the complete content for a ${fileFormat.toUpperCase()} file. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text. Include the COMPLETE content. Return ONLY the raw file content, no explanations, no markdown fences.';
+          if (isComplex) {
+            instruction = 'The user wants: $text\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Carefully read the user\'s request above and include EVERY specific detail, data point, and section they asked for. The content must be COMPREHENSIVE and COMPLETE — do not summarize, do not use placeholders, do not omit anything. Generate the ACTUAL full content with ALL the information specified. If the user provides specific text to include, include it VERBATIM.';
+          } else {
+            instruction = 'The user requested: "$text"\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Include the COMPLETE content the user requested — every detail, every data point. Do NOT omit or summarize anything.';
+          }
+          final chatResp = await _api.chat(
+            message: instruction,
+            sessionId: sessionId,
+            timezone: timezone.isNotEmpty ? timezone : null,
+            location: location,
+            timeout: const Duration(seconds: 60),
+          );
+          final rawContent = _stripMarkdownFences(chatResp.content);
+          if (rawContent.isNotEmpty) {
+            final fileResp = await _api.generateFile(
+              content: rawContent,
+              format: fileFormat,
+              filename: 'document.$fileFormat',
+            );
+            final fileContent = fileResp['content'] as String? ?? '';
+            final fileName = fileResp['filename'] as String? ?? 'document.$fileFormat';
+            final fileType = fileResp['format'] as String? ?? fileFormat;
+            return {
+              'response': 'Here is your ${fileFormat.toUpperCase()} file: $fileName',
+              'image_data': '',
+              'type': 'chat',
+              'file_data': fileContent,
+              'file_name': fileName,
+              'file_type': fileType,
+            };
+          }
+          lastError = 'AI returned empty content';
+        } catch (e) {
+          lastError = e.toString();
+          if (attempt < 1) {
+            await Future.delayed(const Duration(seconds: 2));
+          }
+        }
+      }
+      // File generation failed after retries — return clear error, don't fall through
+      return {
+        'response': 'I tried to create the ${fileFormat.toUpperCase()} file but encountered an error. Please try again with more specific content details, or ask me to describe the content in text instead.',
+        'image_data': '',
+        'type': 'chat',
+      };
+    }
     if (_isImageGenRequest(text)) {
-      final imgResp = await _api.generateImage(prompt: text, sessionId: sessionId);
+      final imgResp = await _api.generateImage(
+        prompt: text,
+        sessionId: sessionId,
+        timeout: const Duration(seconds: 45),
+      );
       return {
         'response': (imgResp['response'] as String?) ?? (imgResp['content'] as String?) ?? '',
         'image_data': (imgResp['image_data'] as String?) ?? (imgResp['imageBase64'] as String?) ?? '',
         'type': (imgResp['type'] as String?) ?? 'image_gen',
       };
     }
-    final timezone = _cachedTimezoneName.isNotEmpty
-        ? _cachedTimezoneName
-        : _userTimezone;
-    final location = _cachedLocation.isNotEmpty ? _cachedLocation : null;
     final resp = await _api.chat(
       message: text,
       sessionId: sessionId,
       timezone: timezone.isNotEmpty ? timezone : null,
       location: location,
+      timeout: const Duration(seconds: 60),
     );
     return {
       'response': resp.content,

@@ -371,10 +371,16 @@ class ChatMessageWidget extends StatelessWidget {
   IconData _fileIcon(String type) {
     switch (type) {
       case 'pdf': return Icons.picture_as_pdf;
+      case 'docx':
+      case 'doc': return Icons.description;
+      case 'xlsx':
+      case 'xls': return Icons.table_chart;
       case 'csv': return Icons.table_chart;
       case 'svg': return Icons.image;
+      case 'png': return Icons.image;
       case 'json': return Icons.data_object;
-      case 'html': return Icons.code;
+      case 'html':
+      case 'htm': return Icons.code;
       case 'md': return Icons.description;
       default: return Icons.insert_drive_file;
     }
@@ -414,9 +420,28 @@ class ChatMessageWidget extends StatelessWidget {
   }
 
   void _downloadOnWeb(Uint8List bytes, String name) {
+    final ext = name.split('.').last.toLowerCase();
+    final mimeTypes = <String, String>{
+      'pdf': 'application/pdf',
+      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'doc': 'application/msword',
+      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'csv': 'text/csv',
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'gif': 'image/gif',
+      'svg': 'image/svg+xml',
+      'html': 'text/html',
+      'htm': 'text/html',
+      'json': 'application/json',
+      'xml': 'application/xml',
+      'md': 'text/markdown',
+      'txt': 'text/plain',
+    };
+    final mime = mimeTypes[ext] ?? 'application/octet-stream';
     final blob = base64Encode(bytes);
-    final dataUri = 'data:application/octet-stream;base64,$blob';
-    // Use a platform channel or anchor tag approach
+    final dataUri = 'data:$mime;base64,$blob';
     final anchor = html.AnchorElement(href: dataUri)
       ..target = '_blank'
       ..download = name;

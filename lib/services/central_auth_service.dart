@@ -26,7 +26,15 @@ class CentralAuthService {
   String? get userName => _userName;
   bool get tokenFromUrl => _tokenFromUrl;
 
-  String get _authUrl => 'https://auth.acronous.com';
+  String get _authUrl {
+    try {
+      final uri = Uri.parse(html.window.location.href);
+      final origin = '${uri.scheme}://${uri.host}${uri.port == 80 || uri.port == 443 || uri.port <= 0 ? '' : ':${uri.port}'}';
+      return origin;
+    } catch (_) {
+      return 'https://ai.acronous.com';
+    }
+  }
 
   Map<String, dynamic>? _decodeJwtPayload(String token) {
     try {
@@ -213,4 +221,6 @@ class CentralAuthService {
     final currentUrl = html.window.location.href;
     html.window.location.href = '$_authUrl/login?redirect=${Uri.encodeComponent(currentUrl)}';
   }
+
+  String get authUrl => _authUrl;
 }

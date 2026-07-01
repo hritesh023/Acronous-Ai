@@ -35,11 +35,40 @@ export default {
       try {
         const targetUrl = `${AUTH_ORIGIN}${path}${url.search}`;
         const headers = new Headers(request.headers);
+
+        // Forward cookies for cross-subdomain auth
+        const cookie = request.headers.get('Cookie');
+        if (cookie) {
+          headers.set('Cookie', cookie);
+        }
+
         const body = (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null;
-        const proxyReq = new Request(targetUrl, { method: request.method, headers, body, redirect: 'follow' });
+        const proxyReq = new Request(targetUrl, {
+          method: request.method,
+          headers,
+          body,
+          redirect: 'manual',
+        });
         const resp = await fetch(proxyReq);
+
+        // If the auth server responds with a redirect, pass it through to the browser
+        if (resp.status >= 300 && resp.status < 400) {
+          const location = resp.headers.get('Location');
+          if (location) {
+            return Response.redirect(location, resp.status);
+          }
+        }
+
         const respHeaders = new Headers(resp.headers);
+
+        // Forward Set-Cookie headers for cross-subdomain auth
+        const setCookie = resp.headers.get('Set-Cookie');
+        if (setCookie) {
+          respHeaders.set('Set-Cookie', setCookie);
+        }
+
         respHeaders.set('Access-Control-Allow-Origin', '*');
+        respHeaders.set('Access-Control-Allow-Credentials', 'true');
         return new Response(resp.body, { status: resp.status, headers: respHeaders });
       } catch {
         return new Response(
