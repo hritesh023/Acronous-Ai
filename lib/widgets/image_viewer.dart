@@ -1,5 +1,4 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:html' as html;
 
 import 'package:flutter/material.dart';

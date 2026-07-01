@@ -1,10 +1,8 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'config/app_config.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
-import 'pages/auth_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 import 'services/overlay_service.dart';

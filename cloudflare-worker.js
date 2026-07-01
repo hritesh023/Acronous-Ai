@@ -1160,6 +1160,57 @@ function wakeupHandler() {
   return jsonResponse({ status: 'ok' });
 }
 
+// ── Complexity analysis ───────────────────────────────────────────────────
+
+const SIMPLE_PATTERNS = [
+  /^(hi|hello|hey|yo|sup|howdy)\b/i,
+  /^(good\s+)?(morning|afternoon|evening|night)\b/i,
+  /^(bye|goodbye|see\s+(ya|you)|later)\b/i,
+  /^(yes|no|ok|okay|thanks|thank\s+you|ty)\b/i,
+  /^(what's?\s+up|how\s+(are\s+you|r\s+u|goes\s+it))\b/i,
+  /^(who\s+(are\s+you|made\s+you))\b/i,
+  /\b(say|repeat|echo)\b.{0,30}$/i,
+];
+
+const COMPLEX_PATTERNS = [
+  /explain\b.*\bin detail\b|\bdetailed\s+explanation\b|\bdeep\s+dive\b|\bcomprehensive\b/i,
+  /\b(compare\s+and\s+contrast|differences?\s+between|similarities?\s+between)\b/i,
+  /\b(analyze|analysis|evaluate|assessment)\b/i,
+  /\b(code|program|function|algorithm|implement|implementation)\b/i,
+  /\b(architecture|system\s+design|design\s+pattern)\b/i,
+  /\b(write\s+a|create\s+a|build\s+a|develop\s+a)\s+(program|function|script|app|api|service)\b/i,
+  /\b(debug|refactor|optimize|performance)\b.*\b(code|app|function|query|system)\b/i,
+  /\b(mathematical|proof|theorem|derive|equation|formula)\b/i,
+  /\b(essay|article|report|documentation|tutorial)\b/i,
+  /\b(research|thesis|dissertation|academic|scholarly)\b/i,
+  /\b(migration|migrate|deploy|deployment|ci\/cd|pipeline)\b/i,
+  /\b(security|vulnerability|exploit|encryption|authentication)\b/i,
+  /\b(microservices?|kubernetes|docker|container|orchestration)\b/i,
+  /\b(machine\s+learning|deep\s+learning|neural|nlp|transformer|llm)\b/i,
+  /^.{200,}$/s,
+];
+
+function classifyComplexity(message) {
+  if (!message || typeof message !== 'string') return { label: 'simple', score: 0 };
+
+  const text = message.trim();
+  const wordCount = text.split(/\s+/).length;
+
+  if (wordCount <= 3 && SIMPLE_PATTERNS.some(p => p.test(text))) {
+    return { label: 'simple', score: 1 };
+  }
+
+  if (COMPLEX_PATTERNS.some(p => p.test(text)) || wordCount > 50) {
+    return { label: 'complex', score: 3 };
+  }
+
+  if (wordCount > 15 || text.includes('?') && wordCount > 8) {
+    return { label: 'medium', score: 2 };
+  }
+
+  return { label: 'simple', score: 1 };
+}
+
 // ── Chat (POST /v1/chat) ──────────────────────────────────────────────────
 
 async function chatHandler(request) {
@@ -1184,7 +1235,15 @@ async function chatHandler(request) {
     }
 
     const messages = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
-    const resp = await callOpenRouter(messages);
+
+    const complexity = classifyComplexity(message);
+    const opts = complexity.label === 'simple'
+      ? { max_tokens: 256, temperature: 0.5 }
+      : complexity.label === 'complex'
+        ? { max_tokens: 1536, temperature: 0.8 }
+        : { max_tokens: 768, temperature: 0.7 };
+
+    const resp = await callOpenRouter(messages, opts);
     const data = await resp.json();
     const content = sanitizeText(data?.choices?.[0]?.message?.content || '');
 
@@ -1205,8 +1264,8 @@ async function chatHandler(request) {
       file_data: '',
       file_name: '',
       file_type: '',
-      complexity: 0,
-      complexity_label: 'simple',
+      complexity: complexity.score,
+      complexity_label: complexity.label,
     });
   } catch (e) {
     return jsonResponse({
@@ -1236,7 +1295,15 @@ async function chatStreamHandler(request) {
     }
 
     const messages = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
-    const resp = await callOpenRouter(messages, { stream: true });
+
+    const complexity = classifyComplexity(message);
+    const opts = complexity.label === 'simple'
+      ? { stream: true, max_tokens: 256, temperature: 0.5 }
+      : complexity.label === 'complex'
+        ? { stream: true, max_tokens: 1536, temperature: 0.8 }
+        : { stream: true, max_tokens: 768, temperature: 0.7 };
+
+    const resp = await callOpenRouter(messages, opts);
 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
