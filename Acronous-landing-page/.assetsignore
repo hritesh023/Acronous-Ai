@@ -2,3 +2,6 @@ _worker.js
 wrangler.toml
 .assetsignore
 server.js
+auth-server
+node_modules
+.wrangler

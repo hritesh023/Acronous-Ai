@@ -7,10 +7,12 @@ const TOKEN_NAME = 'acronous_token';
 // API routes on these subdomains are handled by their respective Workers directly
 // (via Cloudflare route matching), bypassing this proxy.
 const SUBDOMAIN_ORIGINS = {
-  'ai.acronous.com':        'https://acronous-ai.pages.dev',
-  'equyvo.acronous.com':    'https://equyvo.pages.dev',
-  'navigwiz.acronous.com':  'https://navigwiz.pages.dev',
+  'ai.acronous.com':        { spa: 'https://acronous-ai.pages.dev', api: 'https://acronous-ai.httpsacronous-landinghriteshkumarpatroworkersdev.workers.dev' },
+  'equyvo.acronous.com':    { spa: 'https://equyvo.pages.dev', api: '' },
+  'navigwiz.acronous.com':  { spa: 'https://navigwiz.pages.dev', api: '' },
 };
+
+const API_PREFIXES = ['/v1/', '/api/', '/health'];
 
 const LANDING_HOSTS = new Set(['acronous.com', 'www.acronous.com']);
 
@@ -163,6 +165,8 @@ function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+const NO_CACHE = { 'Cache-Control': 'private, no-cache, no-store, must-revalidate', 'Pragma': 'no-cache' };
+
 // ── Auth Request Handler ────────────────────────────────────────────────
 
 async function handleAuthRequest(request, url, env) {
@@ -170,7 +174,10 @@ async function handleAuthRequest(request, url, env) {
   const method = request.method;
   const origin = request.headers.get('Origin') || 'https://acronous.com';
   const hostname = url.hostname;
-  const jwtSecret = env?.JWT_SECRET || 'acronous-auth-secret-change-in-prod';
+  if (!env?.JWT_SECRET) {
+    return corsResponse({ error: 'Authentication not configured' }, 500, origin);
+  }
+  const jwtSecret = env.JWT_SECRET;
 
   // API routes
   if (path === '/api/auth/signup' && method === 'POST') {
@@ -272,22 +279,31 @@ async function handleAuthRequest(request, url, env) {
   }
 
   // HTML pages
+  function redirectWithToken(base, token) {
+    const sep = base.includes('?') ? '&' : '?';
+    return base + sep + 'token=' + token;
+  }
+
+  function htmlResponse(body) {
+    return new Response(body, { headers: { 'Content-Type': 'text/html;charset=utf-8', ...NO_CACHE } });
+  }
+
   if (path === '/login' || path === '/login.html') {
     const token = getTokenFromReq(request);
     if (token) {
       const decoded = await verifyJWT(token, jwtSecret);
-      if (decoded) return redirectResponse(url.searchParams.get('redirect') || '/');
+      if (decoded) return redirectResponse(redirectWithToken(url.searchParams.get('redirect') || '/', token));
     }
-    return new Response(loginPage(url.searchParams.get('redirect') || ''), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+    return htmlResponse(loginPage(url.searchParams.get('redirect') || ''));
   }
 
   if (path === '/signup' || path === '/signup.html') {
     const token = getTokenFromReq(request);
     if (token) {
       const decoded = await verifyJWT(token, jwtSecret);
-      if (decoded) return redirectResponse(url.searchParams.get('redirect') || '/');
+      if (decoded) return redirectResponse(redirectWithToken(url.searchParams.get('redirect') || '/', token));
     }
-    return new Response(signupPage(url.searchParams.get('redirect') || ''), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+    return htmlResponse(signupPage(url.searchParams.get('redirect') || ''));
   }
 
   if (path === '/dashboard' || path === '/dashboard.html') {
@@ -295,7 +311,7 @@ async function handleAuthRequest(request, url, env) {
     if (!token) return redirectResponse('/login?redirect=' + encodeURIComponent(url.pathname));
     const decoded = await verifyJWT(token, jwtSecret);
     if (!decoded) return redirectResponse('/login?redirect=' + encodeURIComponent(url.pathname));
-    return new Response(dashboardPage(decoded, token), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+    return htmlResponse(dashboardPage(decoded, token));
   }
 
   if (path === '/logout') {
@@ -351,9 +367,11 @@ export default {
     }
 
     // Subdomain proxy
-    const origin = SUBDOMAIN_ORIGINS[host];
-    if (origin) {
-      const targetUrl = origin + url.pathname + url.search;
+    const sub = SUBDOMAIN_ORIGINS[host];
+    if (sub) {
+      const isApi = API_PREFIXES.some(p => url.pathname === p || url.pathname.startsWith(p));
+      const targetOrigin = (isApi && sub.api) ? sub.api : sub.spa;
+      const targetUrl = targetOrigin + url.pathname + url.search;
       const token = getTokenFromReq(request);
       const headers = new Headers(request.headers);
       if (token) {
@@ -366,8 +384,8 @@ export default {
       });
       try {
         const response = await fetch(proxyReq);
-        if (response.status === 404) {
-          const indexRes = await fetch(origin + '/index.html');
+        if (response.status === 404 && !isApi) {
+          const indexRes = await fetch(sub.spa + '/index.html');
           return new Response(indexRes.body, {
             status: 200,
             headers: indexRes.headers,
