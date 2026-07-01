@@ -88,3 +88,5 @@ startup_log.txt
 # Symbolication
 app.*.symbols
 app.*.map.json
+
+.wrangler/
