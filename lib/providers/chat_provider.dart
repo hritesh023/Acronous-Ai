@@ -31,7 +31,7 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static final RegExp _privateInfoPattern = RegExp(
-    r"(powered by|hosted by|served by|hosted on|runs on)\s+\w+|\b(api[ _]?key|system prompt|internal (configuration|instructions)|backend (details?|technology)|infrastructure details?|technical (architecture|details))\b|(as an ai\b.{0,50}(created by|developed by|built by|made by))",
+    r"(powered by|hosted by|served by|hosted on|runs on|deployed on|built on|infrastructure of|backend is)\s+[\w.\/-]+|\b(api[ _]?key|system prompt|internal (configuration|instructions|prompt)|backend (details?|technology|endpoint|setup?|architecture|provider|infrastructure)|infrastructure details?|technical (architecture|details?|stack))\b|(as an ai\b.{0,80}(created by|developed by|built by|made by|trained by|owned by|operated by))",
     caseSensitive: false,
     dotAll: true,
   );
@@ -287,8 +287,6 @@ class ChatProvider extends ChangeNotifier {
   }
 
   String _cachedLocation = '';
-  String _cachedCity = '';
-  String _cachedCountry = '';
 
   Future<void> _fetchLocationInfo() async {
     final geoServices = [
@@ -307,33 +305,41 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<bool> _fetchFromIpApi() async {
-    final resp = await http
-        .get(Uri.parse('http://ip-api.com/json/'))
-        .timeout(const Duration(seconds: 8));
-    if (resp.statusCode != 200) return false;
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (data['status'] != 'success') return false;
-    _updateLocationData(
-      city: data['city'] as String? ?? '',
-      country: data['country'] as String? ?? '',
-      timezone: data['timezone'] as String? ?? '',
-    );
-    return true;
+    try {
+      final resp = await http
+          .get(Uri.parse('https://ip-api.com/json/'))
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode != 200) return false;
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') return false;
+      _updateLocationData(
+        city: data['city'] as String? ?? '',
+        country: data['country'] as String? ?? '',
+        timezone: data['timezone'] as String? ?? '',
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<bool> _fetchFromFreeIp() async {
-    final resp = await http
-        .get(Uri.parse('https://freeipapi.com/api/json'))
-        .timeout(const Duration(seconds: 8));
-    if (resp.statusCode != 200) return false;
-    final data = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (data['status'] != 'success') return false;
-    _updateLocationData(
-      city: data['cityName'] as String? ?? data['city'] as String? ?? '',
-      country: data['countryName'] as String? ?? data['country'] as String? ?? '',
-      timezone: data['timeZone'] as String? ?? data['timezone'] as String? ?? '',
-    );
-    return true;
+    try {
+      final resp = await http
+          .get(Uri.parse('https://freeipapi.com/api/json'))
+          .timeout(const Duration(seconds: 8));
+      if (resp.statusCode != 200) return false;
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      if (data['status'] != 'success') return false;
+      _updateLocationData(
+        city: data['cityName'] as String? ?? data['city'] as String? ?? '',
+        country: data['countryName'] as String? ?? data['country'] as String? ?? '',
+        timezone: data['timeZone'] as String? ?? data['timezone'] as String? ?? '',
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   void _updateLocationData({
@@ -341,8 +347,6 @@ class ChatProvider extends ChangeNotifier {
     required String country,
     required String timezone,
   }) {
-    _cachedCity = city;
-    _cachedCountry = country;
     if (city.isNotEmpty && country.isNotEmpty) {
       _cachedLocation = '$city, $country';
     } else if (city.isNotEmpty) {
@@ -416,7 +420,7 @@ class ChatProvider extends ChangeNotifier {
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
           final errMsg = resp['response'] as String? ?? resp['error'] as String? ?? '';
-          _addAssistantMessage(errMsg.isNotEmpty ? errMsg : 'An error occurred. Please try again.');
+          if (errMsg.isNotEmpty) _addAssistantMessage(errMsg);
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -457,7 +461,6 @@ class ChatProvider extends ChangeNotifier {
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
-        _addAssistantMessage('Request failed. Please try again.');
         break;
       }
     }
@@ -751,6 +754,20 @@ class ChatProvider extends ChangeNotifier {
     return cleaned;
   }
 
+  List<Map<String, String>> _buildMessageHistory() {
+    if (_currentConversation == null) return [];
+    final msgs = _currentConversation!.messages;
+    if (msgs.length <= 1) return [];
+    final history = <Map<String, String>>[];
+    for (var i = 0; i < msgs.length - 1; i++) {
+      final m = msgs[i];
+      if (m.role == 'user' || m.role == 'assistant') {
+        history.add({'role': m.role, 'content': m.content});
+      }
+    }
+    return history;
+  }
+
   Future<Map<String, dynamic>> _callApi(
     ChatMessage userMsg,
     String text,
@@ -771,19 +788,74 @@ class ChatProvider extends ChangeNotifier {
       );
       final bytes = await FileService.readAttachmentBytes(imgAttach);
       final t = text.toLowerCase();
-      final editKeywords = [
-        'edit', 'modify', 'change', 'redesign',
-        'add ', 'remove', 'replace', 'make ', 'make it', 'turn it',
-        'convert', 'transform', 'update', 'alter', 'adjust',
-        'recreate', 'reimagine', 'give it', 'put ',
-        'insert', 'delete', 'erase',
-        'recolor', 'recolour', 'resize', 'crop', 'rotate',
-        'enhance', 'improve', 'better',
-        'enhancement', 'improvement',
-        'create', 'turn this', 'turn into', 'into ', 'as a', 'like a',
-        'style', 'cartoon', 'painting', 'anime', 'sketch', 'drawing'
+      final wordCount = text.trim().split(RegExp(r'\s+')).length;
+
+      // Check if the message contains image-related context words
+      final visualContext = [
+        'image', 'photo', 'picture', 'art', 'design', 'graphic',
+        'background', 'color', 'style', 'filter', 'texture',
+        'subject', 'object', 'scene', 'view', 'look',
+        'cartoon', 'painting', 'sketch', 'drawing', 'anime',
+        'render', 'logo', 'icon', 'banner', 'wallpaper',
       ];
-      final isEditRequest = text.trim().length > 3 && editKeywords.any((kw) => t.contains(kw));
+      final hasVisualContext = visualContext.any((w) => t.contains(w));
+
+      // Strong edit keywords — clearly indicate image editing intent
+      final strongEditKeywords = [
+        'edit this', 'edit the', 'edit my', 'edit image', 'edit photo', 'edit picture',
+        'modify this', 'modify the', 'modify my',
+        'redesign this', 'redesign the',
+        'recreate this', 'reimagine this',
+        'turn this into', 'turn it into',
+        'enhance this', 'enhance the', 'enhance my', 'enhance image',
+        'improve this', 'improve the', 'improve my', 'improve image',
+        'make it better', 'make this better',
+        'recolor', 'recolour',
+        'turn into cartoon', 'turn into painting', 'turn into sketch',
+        'as a cartoon', 'as a painting', 'as a sketch',
+        'as an anime', 'like a cartoon', 'like a painting',
+        'convert to cartoon', 'convert to painting',
+      ];
+      // Medium keywords — need visual context to trigger edit mode
+      final mediumEditKeywords = [
+        'make it ', 'make this ', 'make the ',
+        'turn it ', 'turn this ', 'turn the ', 'turn my ',
+        'turn into ',
+        'change the', 'change this', 'change my', 'change to',
+        'change color', 'change style',
+        'convert this ', 'convert it ', 'transform this ',
+        'add a ', 'add some ', 'add more ', 'add new ',
+        'remove the ', 'remove this ', 'remove that ',
+        'replace the ', 'replace this ',
+        'crop this', 'crop the', 'crop it',
+        'rotate this', 'rotate the', 'rotate it',
+        'resize this', 'resize the', 'resize it',
+        'apply filter', 'apply a filter',
+        'convert to ', 'convert into',
+      ];
+      // Weak keywords — need visual context AND enough context words
+      final weakEditKeywords = [
+        'add ', 'remove ', 'replace ',
+        'insert ', 'delete ', 'erase ',
+        'crop', 'rotate', 'resize', 'filter',
+        'style as', 'style it',
+      ];
+
+      final isStrongMatch = strongEditKeywords.any((kw) => t.contains(kw));
+      final isMediumMatch = hasVisualContext && wordCount >= 3 && mediumEditKeywords.any((kw) => t.contains(kw));
+      bool isWeakKeywordMatch(String kw) {
+        if (kw.endsWith(' ')) {
+          return t.contains(kw) && t.indexOf(kw) + kw.length < t.length;
+        }
+        return t.contains(kw);
+      }
+      final isWeakMatch = hasVisualContext && wordCount >= 5 && weakEditKeywords.any(isWeakKeywordMatch);
+
+      // Also match when message starts with a clear transformation intent
+      final startsWithEdit = RegExp(r'^(edit|modify|redesign|enhance|improve)\s+(this|the|my|image|photo|picture)\b').hasMatch(t);
+      final isEditRequest = (
+        isStrongMatch || isMediumMatch || isWeakMatch || startsWithEdit
+      ) && wordCount >= 2;
       if (isEditRequest) {
         try {
           final editResp = await _api.editImage(
@@ -794,15 +866,30 @@ class ChatProvider extends ChangeNotifier {
           );
           final response = editResp['response'] as String? ?? '';
           final imageData = editResp['image_data'] as String? ?? '';
+          final editType = editResp['type'] as String? ?? '';
           if (imageData.isNotEmpty) {
             return {
               'response': response,
               'image_data': imageData,
-              'type': editResp['type'] as String? ?? 'chat',
+              'type': editType,
             };
           }
-        } catch (_) {}
+          if (editType == 'error') {
+            return {
+              'response': response.isNotEmpty ? response : '',
+              'image_data': '',
+              'type': 'error',
+            };
+          }
+        } catch (_) {
+          return {
+            'response': '',
+            'image_data': '',
+            'type': 'error',
+          };
+        }
       }
+      final history = _buildMessageHistory();
       final resp = await _api.chatWithImage(
         message: text,
         imageBytes: bytes,
@@ -810,9 +897,9 @@ class ChatProvider extends ChangeNotifier {
         sessionId: sessionId,
         timezone: timezone.isNotEmpty ? timezone : null,
         location: location,
-        timeout: const Duration(seconds: 90),
+        messages: history,
       );
-      return {'response': resp.content, 'image_data': '', 'type': resp.type};
+      return {'response': resp.content, 'image_data': resp.imageBase64 ?? '', 'type': resp.type};
     } else if (userMsg.attachments.isNotEmpty) {
       final attach = userMsg.attachments.first;
       final bytes = await FileService.readAttachmentBytes(attach);
@@ -840,7 +927,6 @@ class ChatProvider extends ChangeNotifier {
       }
 
       // For non-image file formats (PDF, DOCX, XLSX, CSV, etc.)
-      String lastError = '';
       for (var attempt = 0; attempt < 2; attempt++) {
         try {
           final isComplex = text.length > 80;
@@ -864,12 +950,13 @@ class ChatProvider extends ChangeNotifier {
           } else {
             instruction = 'The user requested: "$text"\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Include the COMPLETE content the user requested — every detail, every data point. Do NOT omit or summarize anything.';
           }
+          final history = _buildMessageHistory();
           final chatResp = await _api.chat(
             message: instruction,
             sessionId: sessionId,
             timezone: timezone.isNotEmpty ? timezone : null,
             location: location,
-            timeout: const Duration(seconds: 60),
+            messages: history,
           );
           final rawContent = _stripMarkdownFences(chatResp.content);
           if (rawContent.isNotEmpty) {
@@ -882,7 +969,7 @@ class ChatProvider extends ChangeNotifier {
             final fileName = fileResp['filename'] as String? ?? 'document.$fileFormat';
             final fileType = fileResp['format'] as String? ?? fileFormat;
             return {
-              'response': 'Here is your ${fileFormat.toUpperCase()} file: $fileName',
+              'response': '',
               'image_data': '',
               'type': 'chat',
               'file_data': fileContent,
@@ -890,26 +977,22 @@ class ChatProvider extends ChangeNotifier {
               'file_type': fileType,
             };
           }
-          lastError = 'AI returned empty content';
         } catch (e) {
-          lastError = e.toString();
           if (attempt < 1) {
             await Future.delayed(const Duration(seconds: 2));
           }
         }
       }
-      // File generation failed after retries — return clear error, don't fall through
       return {
-        'response': 'I tried to create the ${fileFormat.toUpperCase()} file but encountered an error. Please try again with more specific content details, or ask me to describe the content in text instead.',
+        'response': '',
         'image_data': '',
-        'type': 'chat',
+        'type': 'error',
       };
     }
     if (_isImageGenRequest(text)) {
       final imgResp = await _api.generateImage(
         prompt: text,
         sessionId: sessionId,
-        timeout: const Duration(seconds: 45),
       );
       return {
         'response': (imgResp['response'] as String?) ?? (imgResp['content'] as String?) ?? '',
@@ -917,12 +1000,13 @@ class ChatProvider extends ChangeNotifier {
         'type': (imgResp['type'] as String?) ?? 'image_gen',
       };
     }
+    final history = _buildMessageHistory();
     final resp = await _api.chat(
       message: text,
       sessionId: sessionId,
       timezone: timezone.isNotEmpty ? timezone : null,
       location: location,
-      timeout: const Duration(seconds: 60),
+      messages: history,
     );
     return {
       'response': resp.content,

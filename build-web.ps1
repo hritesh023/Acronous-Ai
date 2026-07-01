@@ -8,7 +8,7 @@
 $ErrorActionPreference = "Stop"
 
 $apiBaseUrl = $env:API_BASE_URL
-if (-not $apiBaseUrl) { $apiBaseUrl = "https://acronous-ai-api.httpsacronous-landinghriteshkumarpatroworkersdev.workers.dev" }
+if (-not $apiBaseUrl) { $apiBaseUrl = "https://ai.acronous.com" }
 
 Write-Host "Building Acronous AI Flutter Web..." -ForegroundColor Cyan
 Write-Host "  API Base URL: $apiBaseUrl" -ForegroundColor Gray
@@ -27,7 +27,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Host "  npx wrangler pages deploy build/web --project-name=acronous-ai" -ForegroundColor White
     Write-Host ""
     Write-Host "To deploy API worker:" -ForegroundColor Cyan
-    Write-Host "  npx wrangler deploy cloudflare-worker.js --name acronous-ai-api" -ForegroundColor White
+    Write-Host "  npx wrangler deploy cloudflare-worker.js --name acronous-ai" -ForegroundColor White
     Write-Host ""
     Write-Host "The subdomain ai.acronous.com is proxied via the landing page worker." -ForegroundColor Gray
 }

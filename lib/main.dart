@@ -70,12 +70,14 @@ class _SplashScreenState extends State<SplashScreen> {
     if (!mounted) return;
 
     if (status == AuthStatus.unauthenticated) {
-      if (kIsWeb) {
-        context.read<AuthProvider>().redirectToLogin();
-        return;
-      }
+      // Allow anonymous usage — show chat directly
+      // Auth is optional; logged-in users get extra features
+      final chatP = context.read<ChatProvider>();
+      final authP = context.read<AuthProvider>();
       Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (_) => const AuthPage()),
+        MaterialPageRoute(
+          builder: (_) => ChatPage(chatProvider: chatP, authProvider: authP),
+        ),
       );
       return;
     }

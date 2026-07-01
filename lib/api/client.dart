@@ -171,11 +171,13 @@ class ApiClient {
   }) async {
     final currentOrigin = _normalizeBaseUrl(_currentOrigin);
     final candidates = <String>[
-      'http://127.0.0.1:8000',
-      'http://localhost:8000',
       if (currentOrigin.isNotEmpty) currentOrigin,
-      ?savedUrl,
       ?configuredUrl,
+      ?savedUrl,
+      if (currentOrigin.isEmpty || currentOrigin.startsWith('http://')) ...[
+        'http://127.0.0.1:8000',
+        'http://localhost:8000',
+      ],
     ];
     final checked = <String>{};
 
@@ -345,6 +347,7 @@ class ApiClient {
     String? sessionId,
     String? timezone,
     String? location,
+    List<Map<String, String>>? messages,
     Duration? timeout,
   }) async {
     final body = <String, dynamic>{
@@ -356,6 +359,9 @@ class ApiClient {
     }
     if (location != null && location.isNotEmpty) {
       body['location'] = location;
+    }
+    if (messages != null && messages.isNotEmpty) {
+      body['messages'] = messages;
     }
     final resp = await _post('/v1/chat', body, timeout: timeout);
     return ChatResponse(
@@ -408,18 +414,22 @@ class ApiClient {
     String? sessionId,
     String? timezone,
     String? location,
+    List<Map<String, String>>? messages,
     Duration? timeout,
   }) async {
     final fields = <String, String>{'message': message};
     if (sessionId != null) fields['session_id'] = sessionId;
     if (timezone != null && timezone.isNotEmpty) fields['timezone'] = timezone;
     if (location != null && location.isNotEmpty) fields['location'] = location;
+    if (messages != null && messages.isNotEmpty) {
+      fields['messages'] = jsonEncode(messages);
+    }
     final resp = await _multipartPost(
       '/v1/chat/image',
       fields,
       imageBytes,
       fileName,
-      timeout: timeout ?? const Duration(seconds: 90),
+      timeout: timeout,
     );
     return ChatResponse(
       content: resp['response'] as String? ?? '',

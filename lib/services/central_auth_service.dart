@@ -29,10 +29,15 @@ class CentralAuthService {
   String get _authUrl {
     try {
       final uri = Uri.parse(html.window.location.href);
-      final origin = '${uri.scheme}://${uri.host}${uri.port == 80 || uri.port == 443 || uri.port <= 0 ? '' : ':${uri.port}'}';
-      return origin;
+      final host = uri.host;
+      // Local dev: use current origin. Production: centralized auth at acronous.com.
+      if (host == 'localhost' || host == '127.0.0.1') {
+        final origin = '${uri.scheme}://${uri.host}${uri.port == 80 || uri.port == 443 || uri.port <= 0 ? '' : ':${uri.port}'}';
+        return origin;
+      }
+      return 'https://acronous.com';
     } catch (_) {
-      return 'https://ai.acronous.com';
+      return 'https://acronous.com';
     }
   }
 
@@ -219,7 +224,7 @@ class CentralAuthService {
 
   void redirectToLogin() {
     final currentUrl = html.window.location.href;
-    html.window.location.href = '$_authUrl/login?redirect=${Uri.encodeComponent(currentUrl)}';
+    html.window.location.href = '$_authUrl/login?_=${DateTime.now().millisecondsSinceEpoch}&redirect=${Uri.encodeComponent(currentUrl)}';
   }
 
   String get authUrl => _authUrl;
