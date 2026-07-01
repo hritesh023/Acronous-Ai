@@ -2,20 +2,23 @@ name = "acronous-ai"
 compatibility_date = "2026-05-30"
 main = "cloudflare-worker.js"
 
+# ── Routes ─────────────────────────────────────────────────────────────────
+routes = [
+  { pattern = "ai.acronous.com", custom_domain = true },
+]
+
 # ── Environment variables (non-secret) ───────────────────────────────────
 [vars]
-OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
 VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct"
 FALLBACK_VISION_MODEL = "qwen/qwen-2-vl-7b-instruct"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
-# After deploying Flutter web to Cloudflare Pages, paste its URL here:
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
 
 # ── KV namespaces ──────────────────────────────────────────────────────────
-# Auth users (shared with landing page — same namespace ID)
 [[kv_namespaces]]
 binding = "AUTH_USERS"
 id = "eb112976703e4447af69c13dd5f8824c"
