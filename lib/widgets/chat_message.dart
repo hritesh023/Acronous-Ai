@@ -297,27 +297,51 @@ class ChatMessageWidget extends StatelessWidget {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
-                child: AnimatedOpacity(
-                  opacity: 1.0,
-                  duration: const Duration(milliseconds: 400),
-                  child: Image.memory(
-                    Uint8List.fromList(bytes),
-                    fit: BoxFit.contain,
-                    width: double.infinity,
-                    height: 300,
-                    errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                    frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                      if (wasSynchronouslyLoaded) return child;
-                      if (frame == null) {
-                        return _imagePlaceholder(cs);
-                      }
-                      return AnimatedOpacity(
-                        opacity: 1.0,
-                        duration: const Duration(milliseconds: 300),
-                        child: child,
-                      );
-                    },
-                  ),
+                child: Stack(
+                  children: [
+                    AnimatedOpacity(
+                      opacity: 1.0,
+                      duration: const Duration(milliseconds: 400),
+                      child: Image.memory(
+                        Uint8List.fromList(bytes),
+                        fit: BoxFit.contain,
+                        width: double.infinity,
+                        height: 300,
+                        errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
+                        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                          if (wasSynchronouslyLoaded) return child;
+                          if (frame == null) {
+                            return _imagePlaceholder(cs);
+                          }
+                          return AnimatedOpacity(
+                            opacity: 1.0,
+                            duration: const Duration(milliseconds: 300),
+                            child: child,
+                          );
+                        },
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 4,
+                      right: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.35),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Text(
+                          'Acronous AI',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.6),
+                            fontSize: 8,
+                            fontWeight: FontWeight.w400,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

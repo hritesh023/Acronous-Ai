@@ -88,14 +88,38 @@ class _ImageViewerState extends State<ImageViewer>
               tag: 'generated_image_${UniqueKey().toString()}',
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.memory(
-                  widget.imageBytes,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => Icon(
-                    Icons.broken_image,
-                    size: 64,
-                    color: Colors.white.withValues(alpha: 0.5),
-                  ),
+                child: Stack(
+                  children: [
+                    Image.memory(
+                      widget.imageBytes,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, _, _) => Icon(
+                        Icons.broken_image,
+                        size: 64,
+                        color: Colors.white.withValues(alpha: 0.5),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 8,
+                      right: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.4),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Text(
+                          'Acronous AI',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.6),
+                            fontSize: 10,
+                            fontWeight: FontWeight.w400,
+                            letterSpacing: 0.3,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
