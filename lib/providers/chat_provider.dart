@@ -31,7 +31,7 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static final RegExp _privateInfoPattern = RegExp(
-    r"(powered by|hosted by|served by|hosted on|runs on|deployed on|built on|infrastructure of|backend is)\s+[\w.\/-]+|\b(api[ _]?key|system prompt|internal (configuration|instructions|prompt)|backend (details?|technology|endpoint|setup?|architecture|provider|infrastructure)|infrastructure details?|technical (architecture|details?|stack))\b|(as an ai\b.{0,80}(created by|developed by|built by|made by|trained by|owned by|operated by))",
+    r"(powered by|hosted by|served by|hosted on|runs on|deployed on|built on|infrastructure of|backend is)\s+[\w.\/-]+|\b(api[ _]?key|system prompt|internal (configuration|instructions|prompt)|backend (details?|technology|endpoint|setup?|architecture|provider|infrastructure)|infrastructure details?|technical (architecture|details?|stack)|openrouter|pollinations|cloudflare|wrangler)\b|(as an ai\b.{0,80}(created by|developed by|built by|made by|trained by|owned by|operated by))",
     caseSensitive: false,
     dotAll: true,
   );
@@ -808,46 +808,47 @@ class ChatProvider extends ChangeNotifier {
         'subject', 'object', 'scene', 'view', 'look',
         'cartoon', 'painting', 'sketch', 'drawing', 'anime',
         'render', 'logo', 'icon', 'banner', 'wallpaper',
+        'dress', 'clothes', 'suit', 'shirt', 'outfit', 'wear',
+        'face', 'hair', 'eyes', 'skin', 'background',
+        'add', 'remove', 'replace', 'change',
       ];
       final hasVisualContext = visualContext.any((w) => t.contains(w));
 
-      // Strong edit keywords — clearly indicate image editing intent
+      // Strong edit keywords
       final strongEditKeywords = [
         'edit this', 'edit the', 'edit my', 'edit image', 'edit photo', 'edit picture',
         'modify this', 'modify the', 'modify my',
         'redesign this', 'redesign the',
-        'recreate this', 'reimagine this',
         'turn this into', 'turn it into',
         'enhance this', 'enhance the', 'enhance my', 'enhance image',
         'improve this', 'improve the', 'improve my', 'improve image',
         'make it better', 'make this better',
-        'recolor', 'recolour',
         'turn into cartoon', 'turn into painting', 'turn into sketch',
         'as a cartoon', 'as a painting', 'as a sketch',
         'as an anime', 'like a cartoon', 'like a painting',
         'convert to cartoon', 'convert to painting',
+        'change the dress', 'change the clothes', 'change the outfit',
+        'change the color', 'change the style',
+        'change the background', 'change the shirt',
+        'change the hair', 'change the eyes',
+        'change just', 'only change', 'keep the same',
+        'keep everything', 'same face', 'same person',
       ];
-      // Medium keywords — need visual context to trigger edit mode
       final mediumEditKeywords = [
         'make it ', 'make this ', 'make the ',
-        'turn it ', 'turn this ', 'turn the ', 'turn my ',
+        'turn it ', 'turn this ', 'turn the ',
         'turn into ',
-        'change the', 'change this', 'change my', 'change to',
-        'change color', 'change style',
+        'change the', 'change this', 'change my',
+        'change to', 'change color', 'change style',
         'convert this ', 'convert it ', 'transform this ',
-        'add a ', 'add some ', 'add more ', 'add new ',
-        'remove the ', 'remove this ', 'remove that ',
+        'add a ', 'add some ', 'add more ',
+        'remove the ', 'remove this ',
         'replace the ', 'replace this ',
-        'crop this', 'crop the', 'crop it',
-        'rotate this', 'rotate the', 'rotate it',
-        'resize this', 'resize the', 'resize it',
-        'apply filter', 'apply a filter',
         'convert to ', 'convert into',
+        'put a ', 'put on ',
       ];
-      // Weak keywords — need visual context AND enough context words
       final weakEditKeywords = [
         'add ', 'remove ', 'replace ',
-        'insert ', 'delete ', 'erase ',
         'crop', 'rotate', 'resize', 'filter',
         'style as', 'style it',
       ];
@@ -862,8 +863,7 @@ class ChatProvider extends ChangeNotifier {
       }
       final isWeakMatch = hasVisualContext && wordCount >= 5 && weakEditKeywords.any(isWeakKeywordMatch);
 
-      // Also match when message starts with a clear transformation intent
-      final startsWithEdit = RegExp(r'^(edit|modify|redesign|enhance|improve)\s+(this|the|my|image|photo|picture)\b').hasMatch(t);
+      final startsWithEdit = RegExp(r'^(edit|modify|redesign|enhance|improve|change)\s+(this|the|my|image|photo|picture)\b').hasMatch(t);
       final isEditRequest = (
         isStrongMatch || isMediumMatch || isWeakMatch || startsWithEdit
       ) && wordCount >= 2;

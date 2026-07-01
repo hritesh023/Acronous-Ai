@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
-import '../config/app_config.dart';
 
 class ApiException implements Exception {
   final int statusCode;
@@ -348,7 +347,6 @@ class ApiClient {
     String? timezone,
     String? location,
     List<Map<String, String>>? messages,
-    Duration? timeout,
   }) async {
     final body = <String, dynamic>{
       'message': message,
@@ -363,13 +361,11 @@ class ApiClient {
     if (messages != null && messages.isNotEmpty) {
       body['messages'] = messages;
     }
-    final resp = await _post('/v1/chat', body, timeout: timeout);
+    final resp = await _post('/v1/chat', body);
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
       type: resp['type'] as String? ?? 'chat',
-      complexity: resp['complexity'] as int? ?? 0,
-      complexityLabel: resp['complexity_label'] as String? ?? 'simple',
       imageBase64: resp['image_data'] as String?,
     );
   }
@@ -470,17 +466,11 @@ class ApiClient {
     required String prompt,
     String? sessionId,
     String? style,
-    Duration? timeout,
   }) async {
     final body = <String, dynamic>{'prompt': prompt};
     if (style != null) body['style'] = style;
     if (sessionId != null) body['session_id'] = sessionId;
-    final t = timeout ?? AppConfig.instance.apiImageGenTimeout;
-    return _post(
-      '/v1/image/generate',
-      body,
-      timeout: t > Duration.zero ? t : null,
-    );
+    return _post('/v1/image/generate', body);
   }
 
   Future<Map<String, dynamic>> generateQRCode({
@@ -497,17 +487,10 @@ class ApiClient {
     required String fileName,
     required String prompt,
     String? sessionId,
-    Duration? timeout,
   }) async {
     final fields = <String, String>{'message': prompt};
     if (sessionId != null) fields['session_id'] = sessionId;
-    return _multipartPost(
-      '/v1/image/edit',
-      fields,
-      imageBytes,
-      fileName,
-      timeout: timeout,
-    );
+    return _multipartPost('/v1/image/edit', fields, imageBytes, fileName);
   }
 
   Future<Map<String, dynamic>> redesignImage(

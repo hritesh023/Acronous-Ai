@@ -1,7 +1,7 @@
 // Acronous AI — Cloudflare Pages Worker
 // Serves Flutter SPA + proxies API calls to the AI Worker
 
-const API_WORKER = 'https://acronous-ai.httpsacronous-landinghriteshkumarpatroworkersdev.workers.dev';
+const API_WORKER = 'https://ai.acronous.com';
 
 const API_PREFIXES = ['/v1/', '/api/', '/health'];
 
