@@ -1,94 +1,43 @@
-// Acronous AI (Flutter Web) — Cloudflare Pages Worker
-// Serves Flutter SPA with SPA fallback and proxies auth routes to acronous.com
-//
-// Deployment:
-//   flutter build web && Copy-Item web/_worker.js build/web/ && npx wrangler pages deploy build/web --project-name=acronous-ai
+// Acronous AI — Cloudflare Pages Worker
+// Serves Flutter SPA + proxies API calls to the AI Worker
 
-const AUTH_ORIGIN = 'https://acronous.com';
+const API_WORKER = 'https://acronous-ai.httpsacronous-landinghriteshkumarpatroworkersdev.workers.dev';
 
-const AUTH_ROUTES = new Set([
-  '/login', '/login.html',
-  '/signup', '/signup.html',
-  '/dashboard', '/dashboard.html',
-  '/logout',
-]);
+const API_PREFIXES = ['/v1/', '/api/', '/health'];
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Allow-Credentials': 'true',
-          'Access-Control-Max-Age': '86400',
-        },
+    // Proxy API calls to the AI Worker
+    if (API_PREFIXES.some(p => path === p || path.startsWith(p))) {
+      const targetUrl = API_WORKER + path + url.search;
+      const headers = new Headers(request.headers);
+      headers.set('X-Forwarded-Host', url.hostname);
+      const proxyReq = new Request(targetUrl, {
+        method: request.method,
+        headers,
+        body: request.body,
       });
-    }
-
-    // Auth routes → proxy to centralized auth at acronous.com
-    if (AUTH_ROUTES.has(path) || path.startsWith('/api/auth/')) {
       try {
-        const targetUrl = `${AUTH_ORIGIN}${path}${url.search}`;
-        const headers = new Headers(request.headers);
-
-        // Forward cookies for cross-subdomain auth
-        const cookie = request.headers.get('Cookie');
-        if (cookie) {
-          headers.set('Cookie', cookie);
-        }
-
-        const body = (request.method !== 'GET' && request.method !== 'HEAD') ? request.body : null;
-        const proxyReq = new Request(targetUrl, {
-          method: request.method,
-          headers,
-          body,
-          redirect: 'manual',
-        });
-        const resp = await fetch(proxyReq);
-
-        // If the auth server responds with a redirect, pass it through to the browser
-        if (resp.status >= 300 && resp.status < 400) {
-          const location = resp.headers.get('Location');
-          if (location) {
-            return Response.redirect(location, resp.status);
-          }
-        }
-
-        const respHeaders = new Headers(resp.headers);
-
-        // Forward Set-Cookie headers for cross-subdomain auth
-        const setCookie = resp.headers.get('Set-Cookie');
-        if (setCookie) {
-          respHeaders.set('Set-Cookie', setCookie);
-        }
-
-        respHeaders.set('Access-Control-Allow-Origin', '*');
-        respHeaders.set('Access-Control-Allow-Credentials', 'true');
-        return new Response(resp.body, { status: resp.status, headers: respHeaders });
+        return await fetch(proxyReq);
       } catch {
-        return new Response(
-          `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Auth Unavailable</title></head><body>
-          <h2>Authentication server is temporarily unreachable</h2>
-          <p>Please try again later. <a href="${AUTH_ORIGIN}/login">Go to Sign In</a></p>
-          </body></html>`,
-          { status: 502, headers: { 'Content-Type': 'text/html; charset=utf-8' } },
-        );
+        return new Response('API proxy error', { status: 502 });
       }
     }
 
-    // SPA fallback for Flutter routes
+    // Static files + SPA fallback
     try {
       const response = await env.ASSETS.fetch(request);
       if (response.status === 404) {
         const indexResponse = await env.ASSETS.fetch(
-          new Request(new URL('/index.html', request.url), request)
+          new Request(new URL('/index.html', request.url))
         );
-        return new Response(indexResponse.body, { status: 200, headers: indexResponse.headers });
+        return new Response(indexResponse.body, {
+          status: 200,
+          headers: indexResponse.headers,
+        });
       }
       return response;
     } catch {

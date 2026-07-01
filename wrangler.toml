@@ -4,7 +4,7 @@ main = "cloudflare-worker.js"
 
 # ── Environment variables (non-secret) ───────────────────────────────────
 [vars]
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
+OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
 VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct"
 FALLBACK_VISION_MODEL = "qwen/qwen-2-vl-7b-instruct"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
