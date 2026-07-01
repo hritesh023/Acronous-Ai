@@ -193,8 +193,8 @@ function buildMessages(userMessage, sessionId, timezone, location, systemPrompt,
   }
 
   // Inject time context immediately before the user message so it's most recent
-  msgs.push({ role: 'system', content: timeContext });
-  msgs.push({ role: 'user', content: `[Current time info: ${timeContext}]\n\n${userMessage}` });
+  msgs.push({ role: 'system', content: `CRITICAL — This is the ACTUAL current date/time. You MUST use this for ALL time-related questions. Ignore any date/time knowledge from your training data. Current real date and time: ${timeContext}` });
+  msgs.push({ role: 'user', content: `[SYSTEM OVERRIDE — Current real time: ${timeContext}]\n\n${userMessage}` });
   return msgs;
 }
 
@@ -253,6 +253,12 @@ function shouldSearchWeb(text) {
     'latest score', 'live score',
     'standings', 'points table', 'ranking',
     'recent news about', 'latest news about',
+    // Time-related patterns
+    'what time', 'current time', 'the time', 'tell me the time',
+    'what date', 'current date', "what's the date", 'todays date', 'today\'s date',
+    'what day', 'current day', 'which day', 'whats today', "what's today",
+    'time right now', 'time now', 'date today', 'day today',
+    'what is the time', 'what is the date', 'what is the day',
   ];
   return patterns.some(p => t.includes(p));
 }
@@ -590,8 +596,8 @@ async function constructEditPrompt(userRequest, originalDescription) {
   // Use LLM to generate a precise edit prompt preserving the original subject
   try {
     const llmMessages = [
-      { role: 'system', content: 'You are an expert image prompt engineer. Given an original image description and a user edit request, generate ONE image generation prompt that preserves the original subject exactly and only applies the user\'s requested changes. CRITICAL: The main subject, pose, expression, setting, and all unspecified elements must remain IDENTICAL to the original. NEVER include text, letters, words, watermarks, signatures, captions, labels, or typography. Return ONLY the prompt, no explanations, no markdown, no labels.' },
-      { role: 'user', content: `Original subject: "${subject}"\n\nUser edit request: "${userRequest}"\n\nGenerate a detailed image prompt that preserves the EXACT original subject and ONLY applies the requested changes. Start with "A photograph of" or "An image of" followed by the exact subject.` },
+      { role: 'system', content: 'You are an expert image prompt engineer. Given an original image description and a user edit request, generate ONE image generation prompt that preserves the original subject EXACTLY — especially the FACE and facial features — and only applies the user\'s requested changes. CRITICAL: The main subject\'s face, identity, pose, expression, setting, and all unspecified elements must remain IDENTICAL to the original. Include extreme facial detail (eye shape, nose, mouth, skin tone, hair) to ensure the same person appears. NEVER include text, letters, words, watermarks, signatures, captions, labels, or typography. Return ONLY the prompt, no explanations, no markdown, no labels.' },
+      { role: 'user', content: `Original subject: "${subject}"\n\nUser edit request: "${userRequest}"\n\nGenerate a detailed image prompt that preserves the EXACT original subject face and ONLY applies the requested changes. Start with "A photograph of" or "An image of" followed by the exact subject with extreme facial detail.` },
     ];
     const resp = await callOpenRouter(llmMessages, { model: OPENROUTER_MODEL, stream: false, max_tokens: 500, temperature: 0.3 });
     const data = await resp.json();
@@ -608,9 +614,9 @@ async function constructEditPrompt(userRequest, originalDescription) {
     .trim();
 
   if (cleanRequest && cleanRequest.length > 5) {
-    return `A photograph of ${subject}, ${cleanRequest}, natural lighting, sharp focus, vivid colors, high quality, detailed`;
+    return `A photograph of ${subject}, ${cleanRequest}, same exact face and identity, natural lighting, sharp focus, vivid colors, high quality, detailed`;
   }
-  return `A photograph of ${subject}, natural lighting, sharp focus, vivid colors, high quality, detailed`;
+  return `A photograph of ${subject}, same exact face and identity, natural lighting, sharp focus, vivid colors, high quality, detailed`;
 }
 
 function constructEditResponse(userRequest, editQuery) {
@@ -670,9 +676,9 @@ async function pollinationsImage(prompt) {
   const negative = encodeURIComponent('text, watermark, signature, writing, typography, deformed, distorted, blurry, low quality');
 
   const urls = [
-    `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&model=flux&negative=${negative}&seed=${seed}`,
-    `https://image.pollinations.ai/prompt/${encodedPrompt}?width=768&height=768&nologo=true&model=flux&negative=${negative}&seed=${seed + 1}`,
-    `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&model=flux&seed=${seed + 2}`,
+    `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=flux&negative=${negative}&seed=${seed}`,
+    `https://image.pollinations.ai/prompt/${encodedPrompt}?width=768&height=768&model=flux&negative=${negative}&seed=${seed + 1}`,
+    `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&model=flux&seed=${seed + 2}`,
   ];
 
   for (const url of urls) {
@@ -741,12 +747,12 @@ async function chatImageHandler(request) {
       // ── Phase 1: Describe the original image in extreme detail ──────────
       let originalDescription = '';
       const describePrompt = buildMultimodalContent(
-        'Describe this image in extreme detail. Identify the MAIN SUBJECT (who or what it is), its appearance, pose, expression, clothing, colors, setting, background, lighting, and composition. Be specific and precise. Include details like: what the subject is doing, what they are wearing, the background/environment, colors present, lighting conditions, camera angle, and any notable objects. Return ONLY a detailed factual description. No greetings, no explanations, no markdown.',
+        'Describe this image in EXTREME detail. Focus heavily on the MAIN SUBJECT\'S FACE — describe facial features (eye shape, nose, mouth, jawline, skin tone, hair style/color, facial hair, glasses, expression), pose, clothing, and every visual detail. Then describe the setting, background, colors, lighting, and composition. Return ONLY a detailed factual description. No greetings, no explanations, no markdown.',
         base64,
         mimeType,
       );
       const describeMessages = [
-        { role: 'system', content: 'You are an expert image analyst. Your only job is to describe images factually and comprehensively. You identify the main subject precisely and describe every visual detail. You never infer or make up information.' },
+        { role: 'system', content: 'You are an expert forensic image analyst. Your ONLY job is to describe images with extreme precision — especially facial features like eye shape, nose, mouth, skin tone, hair, and expression. You never infer or make up information.' },
         { role: 'user', content: describePrompt },
       ];
       for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
@@ -775,14 +781,14 @@ USER EDIT REQUEST: "${editDesc}"
 ${isEnhanceRequest ? `ENHANCE THIS IMAGE: The subject and EVERY detail is: ${originalDescription}. Do NOT change the subject, scene, or any content. ONLY improve: sharpness, clarity, lighting, texture detail, color naturalness, noise reduction.` : `EDIT THIS IMAGE: The MAIN SUBJECT is described above. You may ONLY change what the user explicitly requested. Keep ALL other details — subject identity, pose, expression, clothing, setting, colors, composition — EXACTLY as described.`}
 
 CRITICAL RULES:
-- The MAIN SUBJECT from the original image MUST be the main subject of the edited version. NEVER replace the subject.
-- The subject's identity, pose, and expression must remain the same unless the user explicitly asks to change them.
+- The MAIN SUBJECT's FACE from the original image MUST be IDENTICAL in the edited version. The exact same person with the exact same facial features (eye shape, nose, mouth, skin tone, hair).
+- NEVER change the subject's identity, face, or expression unless the user explicitly asks for it.
 - The setting and background must remain the same unless the user explicitly asks to change them.
 - Apply ONLY the specific change the user requests. Change nothing else.
 - NEVER include text, letters, words, watermarks, signatures, captions, labels, or typography.
 
 OUTPUT FORMAT:
-PROMPT: Write ONE image generation prompt for the edited version. Start with "A photograph of" or "An image of" followed by the EXACT main subject from the original, then describe only the changes.
+PROMPT: Write ONE image generation prompt for the edited version. CRITICAL: You MUST include EXTREME DETAIL about the subject's face so that an image generation model can recreate the IDENTICAL person. Include: eye shape, nose, mouth, skin tone, hair color/style, facial hair, and expression. Start with "A photograph of" or "An image of" followed by the EXACT main subject from the original, then describe only the changes.
 DESCRIPTION: Write ONE short sentence describing what was generated, starting with the subject. This will be shown to the user.
 
 Return BOTH labels. No other text, markdown, or JSON.`,
@@ -790,7 +796,7 @@ Return BOTH labels. No other text, markdown, or JSON.`,
         mimeType,
       );
       const editMessages = [
-        { role: 'system', content: 'You are an expert image editor. You ALWAYS preserve the original image\'s main subject. You NEVER change anything the user did not ask to change. You NEVER generate a completely different image. You output PROMPT and DESCRIPTION as specified.' },
+        { role: 'system', content: 'You are an expert image editor. You ALWAYS preserve the original image\'s MAIN SUBJECT\'S FACE IDENTICALLY. You NEVER change anything the user did not ask to change. You NEVER generate a completely different image. You output PROMPT and DESCRIPTION as specified.' },
         { role: 'user', content: editContent },
       ];
 
@@ -1107,7 +1113,7 @@ async function generateImageHandler(request) {
       ? 'artificial rendering, cgi, 3d render, digital art, illustration, painting, cartoon, anime, sketch'
       : '';
     const negativePrompt = encodeURIComponent(styleNegative ? `${baseNegative}, ${styleNegative}` : baseNegative);
-    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&model=flux&negative=${negativePrompt}&seed=${Math.floor(Math.random() * 1000000)}`;
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=flux&negative=${negativePrompt}&seed=${Math.floor(Math.random() * 1000000)}`;
 
     const imageResp = await fetch(imageUrl, { signal: AbortSignal.timeout(60000) });
     if (!imageResp.ok) {
@@ -1180,13 +1186,13 @@ async function editImageHandler(request) {
     const isEnhance = /enhance|improve|better|fix/.test(message.toLowerCase());
 
     const describeContent = buildMultimodalContent(
-      'Describe this image in extreme detail. Identify the MAIN SUBJECT (who or what it is), its appearance, pose, expression, clothing, colors, setting, background, lighting, and composition. Be specific and precise. Return ONLY a detailed factual description. No greetings, no explanations, no markdown.',
+      'Describe this image in EXTREME detail. Focus heavily on the MAIN SUBJECT\'S FACE — describe facial features (eye shape, nose, mouth, jawline, skin tone, hair style/color, facial hair, glasses, expression), pose, clothing, and every visual detail. Then describe setting, background, colors, lighting, and composition. Return ONLY a detailed factual description. No greetings, no explanations, no markdown.',
       base64, mimeType,
     );
     for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
       try {
         const resp = await callOpenRouter(
-          [{ role: 'system', content: 'You are an expert image analyst. Your only job is to describe images factually and comprehensively. You identify the main subject precisely and describe every visual detail.' },
+          [{ role: 'system', content: 'You are an expert forensic image analyst. Your ONLY job is to describe images with extreme precision — especially facial features like eye shape, nose, mouth, skin tone, hair, and expression.' },
            { role: 'user', content: describeContent }],
           { model, stream: false, max_tokens: 1024, temperature: 0.1 }
         );
@@ -1201,10 +1207,17 @@ async function editImageHandler(request) {
       `ORIGINAL IMAGE: "${originalDescription}"
 USER EDIT: "${editDesc}"
 ${isEnhance ? `ENHANCE: Keep subject "${originalDescription}" identical. Only improve quality.`
-            : `EDIT: Keep the MAIN SUBJECT and ALL unchanged details exactly as described. Apply ONLY the user's requested change. Never change the subject's identity.`}
+            : `EDIT: Keep the MAIN SUBJECT's FACE and ALL unchanged details exactly as described. Apply ONLY the user's requested change. NEVER change the subject's face or identity.`}
+
+CRITICAL RULES:
+- The subject's FACE must be IDENTICAL — same person, same facial features, same expression.
+- NEVER change the subject's identity, face, or expression unless explicitly asked.
+- The setting and background must remain the same unless explicitly asked to change.
+- Apply ONLY the specific change the user requests.
+- NEVER include text, fonts, watermarks, or typography.
 
 OUTPUT FORMAT:
-PROMPT: A single image generation prompt starting with the exact main subject from the original, then describing only the requested changes. No text, fonts, watermarks, or typography.
+PROMPT: A single image generation prompt starting with the exact main subject from the original (including EXTRERE facial detail for identity preservation), then describing only the requested changes.
 DESCRIPTION: One short sentence describing what was generated, starting with the subject.
 
 Return BOTH labels. No other text.`,
@@ -1214,7 +1227,7 @@ Return BOTH labels. No other text.`,
     for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
       try {
         const resp = await callOpenRouter(
-          [{ role: 'system', content: 'You are an expert image editor. You ALWAYS preserve the original image\'s main subject. You NEVER change anything the user did not ask to change. You output PROMPT and DESCRIPTION as specified.' },
+          [{ role: 'system', content: 'You are an expert image editor. You ALWAYS preserve the original image\'s subject face IDENTICALLY. You NEVER change anything the user did not ask to change. You output PROMPT and DESCRIPTION as specified.' },
            { role: 'user', content: editContent }],
           { model, stream: false, max_tokens: 1024, temperature: 0.1 }
         );
@@ -1255,7 +1268,7 @@ Return BOTH labels. No other text.`,
   if (!imageBuffer) {
     try {
       const simple = encodeURIComponent(editDesc.slice(0, 200));
-      const r = await fetch(`https://image.pollinations.ai/prompt/${simple}?width=512&height=512&nologo=true&model=flux`, { signal: AbortSignal.timeout(30000) });
+      const r = await fetch(`https://image.pollinations.ai/prompt/${simple}?width=512&height=512&model=flux`, { signal: AbortSignal.timeout(30000) });
       if (r.ok) {
         const b = await r.arrayBuffer();
         if (b && b.byteLength > 200) imageBuffer = b;
@@ -1444,7 +1457,7 @@ OUTPUT: Only the image generation prompt — starting with the exact main subjec
 
     const encodedPrompt = encodeURIComponent(redesignPrompt);
     const negativePrompt = encodeURIComponent('text, letters, words, watermark, signature, caption, labels, writing, typography, font, alphabet, character, symbol, numbering, heading, title, subtitle, label, sticker, badge, banner text, calligraphy, handwriting, deformed, distorted, bad anatomy, blurry, low quality, oversaturated, plastic looking, unnatural, artificial rendering, cgi, 3d render, digital art, illustration, painting, cartoon, anime, sketch');
-    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&model=flux&negative=${negativePrompt}&seed=${Math.floor(Math.random() * 1000000)}`;
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=flux&negative=${negativePrompt}&seed=${Math.floor(Math.random() * 1000000)}`;
     const resp = await fetch(imageUrl, { signal: AbortSignal.timeout(60000) });
 
     if (!resp.ok) throw new Error('Redesign generation failed');
@@ -2024,7 +2037,7 @@ async function generateFileHandler(request) {
           if (!pngPrompt || pngPrompt.length < 10) pngPrompt = pngContent;
           const encodedPrompt = encodeURIComponent(pngPrompt);
           const negativePrompt = encodeURIComponent('text, letters, words, watermark, signature, caption, labels, writing, typography, font, alphabet, character, symbol, numbering, heading, title, subtitle, label, sticker, badge, banner text, calligraphy, handwriting, artificial rendering, cgi, 3d render, deformed, distorted, bad anatomy, blurry, low quality, plastic looking, unnatural skin, digital art, illustration, painting, cartoon, anime, sketch');
-          const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true&model=flux&negative=${negativePrompt}&seed=${Math.floor(Math.random() * 1000000)}`;
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=flux&negative=${negativePrompt}&seed=${Math.floor(Math.random() * 1000000)}`;
           const imageResp = await fetch(imageUrl, { signal: AbortSignal.timeout(60000) });
           if (imageResp.ok) {
             const imageBuffer = await imageResp.arrayBuffer();

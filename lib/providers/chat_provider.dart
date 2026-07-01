@@ -56,6 +56,7 @@ class ChatProvider extends ChangeNotifier {
   Conversation? _currentConversation;
   bool _isLoading = false;
   bool _isTakingLong = false;
+  bool _cancelled = false;
   bool get isTakingLong => _isTakingLong;
   ThemeMode _themeMode = ThemeMode.system;
 
@@ -97,7 +98,11 @@ class ChatProvider extends ChangeNotifier {
     }
     await _initTts();
     await _discoverServer(savedUrl: savedUrl);
-    _newConversation();
+    if (_conversations.isEmpty) {
+      _newConversation();
+    } else {
+      _currentConversation = _conversations.first;
+    }
     _fetchLocationInfo();
   }
 
@@ -280,6 +285,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void cancelGeneration() {
+    _cancelled = true;
     _isLoading = false;
     _isTakingLong = false;
     _api.cancelCurrentRequest();
@@ -390,6 +396,7 @@ class ChatProvider extends ChangeNotifier {
       cancelGeneration();
     }
 
+    _cancelled = false;
     _isLoading = true;
     _isTakingLong = false;
     notifyListeners();
@@ -450,13 +457,17 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
         return;
       } catch (e) {
+        if (_cancelled) break;
         if (attempt < 1) {
           _isTakingLong = true;
           notifyListeners();
+          if (_cancelled) break;
           await _discoverServer(retries: 1);
+          if (_cancelled) break;
           if (_isServerConnected) {
             await Future.delayed(const Duration(seconds: 3));
           }
+          if (_cancelled) break;
           continue;
         }
         _isServerConnected = false;
