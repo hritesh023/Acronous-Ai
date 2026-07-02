@@ -79,7 +79,7 @@ class _ImageViewerState extends State<ImageViewer>
             maxScale: 5.0,
             boundaryMargin: const EdgeInsets.all(100),
             child: Stack(
-              fit: StackFit.expand,
+              fit: StackFit.loose,
               alignment: Alignment.bottomRight,
               children: [
                 Hero(
@@ -98,14 +98,17 @@ class _ImageViewerState extends State<ImageViewer>
                   ),
                 ),
                 Positioned(
-                  bottom: 12,
-                  right: 12,
+                  bottom: 16,
+                  right: 16,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(5),
+                      color: Colors.black.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    padding: const EdgeInsets.all(3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 4,
+                    ),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(4),
                       child: Image.asset(

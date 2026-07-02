@@ -321,7 +321,8 @@ class ChatMessageWidget extends StatelessWidget {
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 300),
                     child: Stack(
-                      fit: StackFit.expand,
+                      fit: StackFit.loose,
+                      alignment: Alignment.bottomRight,
                       clipBehavior: Clip.antiAlias,
                       children: [
                         Image.memory(
@@ -343,20 +344,23 @@ class ChatMessageWidget extends StatelessWidget {
                               },
                         ),
                         Positioned(
-                          bottom: 8,
-                          right: 8,
+                          bottom: 10,
+                          right: 10,
                           child: Container(
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.4),
-                              borderRadius: BorderRadius.circular(5),
+                              color: Colors.black.withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(6),
                             ),
-                            padding: const EdgeInsets.all(3),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 3,
+                            ),
                             child: ClipRRect(
                               borderRadius: BorderRadius.circular(4),
                               child: Image.asset(
                                 'assets/logo.png',
-                                width: 20,
-                                height: 20,
+                                width: 18,
+                                height: 18,
                               ),
                             ),
                           ),
