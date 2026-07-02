@@ -22,11 +22,16 @@ class ChatMessageWidget extends StatelessWidget {
     final inlineCode = RegExp(r'`[^`\n]+`');
     if (inlineCode.hasMatch(text)) return true;
     final codePatterns = [
-      RegExp(r'(?:function|class|def |import |from |const |let |var |if\s*\()',
-          caseSensitive: false),
+      RegExp(
+        r'(?:function|class|def |import |from |const |let |var |if\s*\()',
+        caseSensitive: false,
+      ),
       RegExp(r'[{};]\s*$', multiLine: true),
-      RegExp(r'^\s*(?:public|private|protected|static|void|int|string|bool|float|double|return)\s',
-          multiLine: true, caseSensitive: false),
+      RegExp(
+        r'^\s*(?:public|private|protected|static|void|int|string|bool|float|double|return)\s',
+        multiLine: true,
+        caseSensitive: false,
+      ),
     ];
     for (final p in codePatterns) {
       if (p.hasMatch(text)) return true;
@@ -54,16 +59,18 @@ class ChatMessageWidget extends StatelessWidget {
       ),
       child: Align(
         alignment: Alignment.centerRight,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxWidth: (MediaQuery.of(context).size.width * AppDimens.maxBubbleWidthRatio)
-                  .clamp(0, 650),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                if (message.attachments.isNotEmpty)
-                  _buildAttachmentPreviews(context, cs, true),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth:
+                (MediaQuery.of(context).size.width *
+                        AppDimens.maxBubbleWidthRatio)
+                    .clamp(0, 650),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              if (message.attachments.isNotEmpty)
+                _buildAttachmentPreviews(context, cs, true),
               Container(
                 padding: EdgeInsets.symmetric(
                   horizontal: AppDimens.bubbleMinPaddingH,
@@ -71,31 +78,30 @@ class ChatMessageWidget extends StatelessWidget {
                 ),
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [
-                      cs.primary,
-                      cs.primary.withValues(alpha: 0.85),
-                    ],
+                    colors: [cs.primary, cs.primary.withValues(alpha: 0.85)],
                     begin: Alignment.topLeft,
                     end: Alignment.bottomRight,
                   ),
                   borderRadius: BorderRadius.circular(AppDimens.bubbleRadius)
                       .copyWith(
-                    bottomRight: const Radius.circular(AppDimens.bubbleRadiusSmall),
-                  ),
+                        bottomRight: const Radius.circular(
+                          AppDimens.bubbleRadiusSmall,
+                        ),
+                      ),
                 ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        if (message.content.isNotEmpty)
-                          Text(
-                            message.content,
-                            style: TextStyle(
-                              color: cs.onPrimary,
-                              fontSize: AppDimens.fontSizeBody,
-                              height: 1.35,
-                            ),
-                          ),
-                        SizedBox(height: AppDimens.paddingXS),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (message.content.isNotEmpty)
+                      Text(
+                        message.content,
+                        style: TextStyle(
+                          color: cs.onPrimary,
+                          fontSize: AppDimens.fontSizeBody,
+                          height: 1.35,
+                        ),
+                      ),
+                    SizedBox(height: AppDimens.paddingXS),
                     Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -107,9 +113,11 @@ class ChatMessageWidget extends StatelessWidget {
                           ),
                         ),
                         SizedBox(width: AppDimens.gapXS),
-                        Icon(Icons.check_rounded,
-                            size: AppDimens.iconSmall,
-                            color: cs.onPrimary.withValues(alpha: 0.45)),
+                        Icon(
+                          Icons.check_rounded,
+                          size: AppDimens.iconSmall,
+                          color: cs.onPrimary.withValues(alpha: 0.45),
+                        ),
                       ],
                     ),
                   ],
@@ -141,28 +149,29 @@ class ChatMessageWidget extends StatelessWidget {
               borderRadius: BorderRadius.circular(AppDimens.avatarRadius),
               color: cs.primaryContainer,
             ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(AppDimens.avatarRadius),
-                child: Image.asset(
-                  'assets/logo.png',
-                  width: AppDimens.avatarSize,
-                  height: AppDimens.avatarSize,
-                  fit: BoxFit.contain,
-                  errorBuilder: (_, _, _) => Icon(
-                    Icons.auto_awesome,
-                    size: AppDimens.iconMed - 3,
-                    color: cs.primary,
-                  ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppDimens.avatarRadius),
+              child: Image.asset(
+                'assets/logo.png',
+                width: AppDimens.avatarSize,
+                height: AppDimens.avatarSize,
+                fit: BoxFit.contain,
+                errorBuilder: (_, _, _) => Icon(
+                  Icons.auto_awesome,
+                  size: AppDimens.iconMed - 3,
+                  color: cs.primary,
                 ),
               ),
+            ),
           ),
           SizedBox(width: AppDimens.gapLG),
           Expanded(
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxWidth: (MediaQuery.of(context).size.width *
-                        AppDimens.maxBubbleWidthRatioAI)
-                    .clamp(0, 700),
+                maxWidth:
+                    (MediaQuery.of(context).size.width *
+                            AppDimens.maxBubbleWidthRatioAI)
+                        .clamp(0, 700),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -174,11 +183,14 @@ class ChatMessageWidget extends StatelessWidget {
                     ),
                     decoration: BoxDecoration(
                       color: cs.surfaceContainerHighest.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(AppDimens.bubbleRadius)
-                          .copyWith(
-                        bottomLeft:
-                            const Radius.circular(AppDimens.bubbleRadiusSmall),
-                      ),
+                      borderRadius:
+                          BorderRadius.circular(
+                            AppDimens.bubbleRadius,
+                          ).copyWith(
+                            bottomLeft: const Radius.circular(
+                              AppDimens.bubbleRadiusSmall,
+                            ),
+                          ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -221,7 +233,8 @@ class ChatMessageWidget extends StatelessWidget {
                                   behavior: SnackBarBehavior.floating,
                                   duration: const Duration(seconds: 1),
                                   padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 6,
+                                    horizontal: 16,
+                                    vertical: 6,
                                   ),
                                   margin: const EdgeInsets.only(bottom: 60),
                                   shape: RoundedRectangleBorder(
@@ -237,7 +250,8 @@ class ChatMessageWidget extends StatelessWidget {
                         SizedBox(width: AppDimens.gapSM),
                         Consumer<ChatProvider>(
                           builder: (context, chat, _) {
-                            final isSpeaking = chat.isSpeaking &&
+                            final isSpeaking =
+                                chat.isSpeaking &&
                                 chat.speakingMessageId == message.id;
                             return _ActionIcon(
                               icon: isSpeaking
@@ -270,7 +284,11 @@ class ChatMessageWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildGeneratedImage(BuildContext context, String b64, ColorScheme cs) {
+  Widget _buildGeneratedImage(
+    BuildContext context,
+    String b64,
+    ColorScheme cs,
+  ) {
     try {
       final bytes = base64Decode(b64);
       return Padding(
@@ -300,9 +318,7 @@ class ChatMessageWidget extends StatelessWidget {
                 child: AnimatedOpacity(
                   opacity: 1.0,
                   duration: const Duration(milliseconds: 400),
-                    child: AspectRatio(
-                      aspectRatio: 1,
-                      child: ConstrainedBox(
+                  child: ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 300),
                     child: Stack(
                       fit: StackFit.loose,
@@ -311,18 +327,20 @@ class ChatMessageWidget extends StatelessWidget {
                         Image.memory(
                           Uint8List.fromList(bytes),
                           fit: BoxFit.contain,
-                          errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                            if (wasSynchronouslyLoaded) return child;
-                            if (frame == null) {
-                              return _imagePlaceholder(cs);
-                            }
-                            return AnimatedOpacity(
-                              opacity: 1.0,
-                              duration: const Duration(milliseconds: 300),
-                              child: child,
-                            );
-                          },
+                          errorBuilder: (_, _, _) =>
+                              const Icon(Icons.broken_image, size: 48),
+                          frameBuilder:
+                              (context, child, frame, wasSynchronouslyLoaded) {
+                                if (wasSynchronouslyLoaded) return child;
+                                if (frame == null) {
+                                  return _imagePlaceholder(cs);
+                                }
+                                return AnimatedOpacity(
+                                  opacity: 1.0,
+                                  duration: const Duration(milliseconds: 300),
+                                  child: child,
+                                );
+                              },
                         ),
                         Positioned(
                           bottom: 4,
@@ -357,9 +375,15 @@ class ChatMessageWidget extends StatelessWidget {
     }
   }
 
-  Widget _buildFileDownload(BuildContext context, ChatMessage msg, ColorScheme cs) {
+  Widget _buildFileDownload(
+    BuildContext context,
+    ChatMessage msg,
+    ColorScheme cs,
+  ) {
     final icon = _fileIcon(msg.fileType);
-    final label = msg.fileName.isNotEmpty ? msg.fileName : 'Download ${msg.fileType.toUpperCase()}';
+    final label = msg.fileName.isNotEmpty
+        ? msg.fileName
+        : 'Download ${msg.fileType.toUpperCase()}';
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: GestureDetector(
@@ -398,19 +422,29 @@ class ChatMessageWidget extends StatelessWidget {
 
   IconData _fileIcon(String type) {
     switch (type) {
-      case 'pdf': return Icons.picture_as_pdf;
+      case 'pdf':
+        return Icons.picture_as_pdf;
       case 'docx':
-      case 'doc': return Icons.description;
+      case 'doc':
+        return Icons.description;
       case 'xlsx':
-      case 'xls': return Icons.table_chart;
-      case 'csv': return Icons.table_chart;
-      case 'svg': return Icons.image;
-      case 'png': return Icons.image;
-      case 'json': return Icons.data_object;
+      case 'xls':
+        return Icons.table_chart;
+      case 'csv':
+        return Icons.table_chart;
+      case 'svg':
+        return Icons.image;
+      case 'png':
+        return Icons.image;
+      case 'json':
+        return Icons.data_object;
       case 'html':
-      case 'htm': return Icons.code;
-      case 'md': return Icons.description;
-      default: return Icons.insert_drive_file;
+      case 'htm':
+        return Icons.code;
+      case 'md':
+        return Icons.description;
+      default:
+        return Icons.insert_drive_file;
     }
   }
 
@@ -424,7 +458,10 @@ class ChatMessageWidget extends StatelessWidget {
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open file'), behavior: SnackBarBehavior.floating),
+        SnackBar(
+          content: Text('Could not open file'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
   }
@@ -442,7 +479,10 @@ class ChatMessageWidget extends StatelessWidget {
       );
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not save file'), behavior: SnackBarBehavior.floating),
+        SnackBar(
+          content: Text('Could not save file'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
     }
   }
@@ -451,9 +491,11 @@ class ChatMessageWidget extends StatelessWidget {
     final ext = name.split('.').last.toLowerCase();
     final mimeTypes = <String, String>{
       'pdf': 'application/pdf',
-      'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'docx':
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'doc': 'application/msword',
-      'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'xlsx':
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'csv': 'text/csv',
       'png': 'image/png',
       'jpg': 'image/jpeg',
@@ -512,10 +554,7 @@ class ChatMessageWidget extends StatelessWidget {
         pageBuilder: (context, animation, secondaryAnimation) =>
             ImageViewer(imageBytes: bytes),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
-          return FadeTransition(
-            opacity: animation,
-            child: child,
-          );
+          return FadeTransition(opacity: animation, child: child);
         },
         transitionDuration: const Duration(milliseconds: 300),
       ),
@@ -553,18 +592,18 @@ class ChatMessageWidget extends StatelessWidget {
                             const Icon(Icons.broken_image),
                       )
                     : kIsWeb
-                        ? Image.network(
-                            att.path,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.broken_image),
-                          )
-                        : Image.file(
-                            File(att.path),
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                const Icon(Icons.broken_image),
-                          ),
+                    ? Image.network(
+                        att.path,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            const Icon(Icons.broken_image),
+                      )
+                    : Image.file(
+                        File(att.path),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) =>
+                            const Icon(Icons.broken_image),
+                      ),
               ),
             );
           }

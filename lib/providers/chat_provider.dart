@@ -119,7 +119,7 @@ class ChatProvider extends ChangeNotifier {
           _api.updateBaseUrl(bestUrl);
           await _prefs.saveServerUrl(bestUrl);
           await _api.wakeup(timeout: const Duration(seconds: 15));
-          final ready =           await _api.waitForReady(
+          final ready = await _api.waitForReady(
             timeout: bestUrl.startsWith('https://')
                 ? const Duration(seconds: 10)
                 : const Duration(seconds: 10),
@@ -147,8 +147,7 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-      } catch (_) {
-      }
+      } catch (_) {}
 
       if (attempt < retries) {
         await Future.delayed(Duration(seconds: 3));
@@ -287,10 +286,7 @@ class ChatProvider extends ChangeNotifier {
   String _cachedLocation = '';
 
   Future<void> _fetchLocationInfo() async {
-    final geoServices = [
-      _fetchFromIpApi,
-      _fetchFromFreeIp,
-    ];
+    final geoServices = [_fetchFromIpApi, _fetchFromFreeIp];
     for (final service in geoServices) {
       try {
         final success = await service();
@@ -331,8 +327,10 @@ class ChatProvider extends ChangeNotifier {
       if (data['status'] != 'success') return false;
       _updateLocationData(
         city: data['cityName'] as String? ?? data['city'] as String? ?? '',
-        country: data['countryName'] as String? ?? data['country'] as String? ?? '',
-        timezone: data['timeZone'] as String? ?? data['timezone'] as String? ?? '',
+        country:
+            data['countryName'] as String? ?? data['country'] as String? ?? '',
+        timezone:
+            data['timeZone'] as String? ?? data['timezone'] as String? ?? '',
       );
       return true;
     } catch (_) {
@@ -385,10 +383,7 @@ class ChatProvider extends ChangeNotifier {
     }
 
     if (_isLoading) {
-      _messageQueue.add({
-        'text': text,
-        'attachments': attach,
-      });
+      _messageQueue.add({'text': text, 'attachments': attach});
       final userMsg = ChatMessage(
         role: 'user',
         content: text,
@@ -431,9 +426,12 @@ class ChatProvider extends ChangeNotifier {
         );
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
-          final errMsg = resp['response'] as String? ?? resp['error'] as String? ?? '';
+          final errMsg =
+              resp['response'] as String? ?? resp['error'] as String? ?? '';
           _addAssistantMessage(
-            errMsg.isNotEmpty ? errMsg : 'Sorry, I could not process your request. Please try again.',
+            errMsg.isNotEmpty
+                ? errMsg
+                : 'Sorry, I could not process your request. Please try again.',
           );
           _isTakingLong = false;
           _isLoading = false;
@@ -447,7 +445,9 @@ class ChatProvider extends ChangeNotifier {
             await Future.delayed(const Duration(seconds: 2));
             continue;
           }
-          _addAssistantMessage('I had trouble generating a response. Please try rephrasing your question.');
+          _addAssistantMessage(
+            'I had trouble generating a response. Please try rephrasing your question.',
+          );
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -455,7 +455,9 @@ class ChatProvider extends ChangeNotifier {
           _processQueue();
           return;
         }
-        if (rawContent.isNotEmpty || imageData.isNotEmpty || fileData.isNotEmpty) {
+        if (rawContent.isNotEmpty ||
+            imageData.isNotEmpty ||
+            fileData.isNotEmpty) {
           _currentConversation!.messages.add(
             ChatMessage(
               role: 'assistant',
@@ -493,7 +495,9 @@ class ChatProvider extends ChangeNotifier {
       }
     }
 
-    _addAssistantMessage('Sorry, I could not get a response. Please check your connection and try again.');
+    _addAssistantMessage(
+      'Sorry, I could not get a response. Please check your connection and try again.',
+    );
     _isTakingLong = false;
     _isLoading = false;
     _prefs.saveConversations(_conversations).catchError((_) {});
@@ -568,34 +572,75 @@ class ChatProvider extends ChangeNotifier {
     final imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'];
     if (imageExts.any((ext) => t.contains(ext))) {
       final visualWords = [
-        'image', 'picture', 'photo', 'draw', 'paint', 'sketch',
-        'illustration', 'artwork', 'design', 'graphic',
-        'of a', 'of an', 'of the', 'sunset', 'landscape', 'portrait',
-        'cartoon', 'art', 'render', 'visualize', 'logo', 'icon',
-        'banner', 'wallpaper', 'background', 'poster',
-        'meme', 'comic', 'character', 'scene', 'view',
+        'image',
+        'picture',
+        'photo',
+        'draw',
+        'paint',
+        'sketch',
+        'illustration',
+        'artwork',
+        'design',
+        'graphic',
+        'of a',
+        'of an',
+        'of the',
+        'sunset',
+        'landscape',
+        'portrait',
+        'cartoon',
+        'art',
+        'render',
+        'visualize',
+        'logo',
+        'icon',
+        'banner',
+        'wallpaper',
+        'background',
+        'poster',
+        'meme',
+        'comic',
+        'character',
+        'scene',
+        'view',
       ];
       if (visualWords.any((w) => t.contains(w))) return true;
     }
 
     // Starting with visual noun phrases
-    if (t.startsWith('a picture') || t.startsWith('a photo') ||
-        t.startsWith('an image') || t.startsWith('a drawing') ||
-        t.startsWith('a painting') || t.startsWith('a sketch') ||
-        t.startsWith('a cartoon') || t.startsWith('a logo') ||
-        t.startsWith('a poster') || t.startsWith('a banner')) {
+    if (t.startsWith('a picture') ||
+        t.startsWith('a photo') ||
+        t.startsWith('an image') ||
+        t.startsWith('a drawing') ||
+        t.startsWith('a painting') ||
+        t.startsWith('a sketch') ||
+        t.startsWith('a cartoon') ||
+        t.startsWith('a logo') ||
+        t.startsWith('a poster') ||
+        t.startsWith('a banner')) {
       return true;
     }
 
     // Design patterns
     final designPatterns = [
-      'design a', 'design an', 'design me',
-      'create a logo', 'create a banner', 'create a poster',
-      'make a logo', 'make a banner', 'make a poster',
-      'generate a logo', 'generate a banner', 'generate a poster',
-      'create a wallpaper', 'make a wallpaper',
-      'create a character', 'design a character',
-      'create a meme', 'make a meme',
+      'design a',
+      'design an',
+      'design me',
+      'create a logo',
+      'create a banner',
+      'create a poster',
+      'make a logo',
+      'make a banner',
+      'make a poster',
+      'generate a logo',
+      'generate a banner',
+      'generate a poster',
+      'create a wallpaper',
+      'make a wallpaper',
+      'create a character',
+      'design a character',
+      'create a meme',
+      'make a meme',
     ];
     for (final pat in designPatterns) {
       if (t.contains(pat)) return true;
@@ -621,10 +666,17 @@ class ChatProvider extends ChangeNotifier {
 
     // "Can you" patterns
     final canYouPatterns = [
-      'can you draw', 'can you paint', 'can you sketch', 'can you render',
-      'can you create', 'can you generate', 'can you make',
-      'can you design', 'can you imagine',
-      'can you show me', 'can you make me',
+      'can you draw',
+      'can you paint',
+      'can you sketch',
+      'can you render',
+      'can you create',
+      'can you generate',
+      'can you make',
+      'can you design',
+      'can you imagine',
+      'can you show me',
+      'can you make me',
     ];
     for (final pat in canYouPatterns) {
       if (t.contains(pat)) return true;
@@ -632,8 +684,12 @@ class ChatProvider extends ChangeNotifier {
 
     // "Please" patterns
     final pleasePatterns = [
-      'please draw', 'please paint', 'please sketch',
-      'please create', 'please generate', 'please make',
+      'please draw',
+      'please paint',
+      'please sketch',
+      'please create',
+      'please generate',
+      'please make',
     ];
     for (final pat in pleasePatterns) {
       if (t.contains(pat)) return true;
@@ -641,8 +697,12 @@ class ChatProvider extends ChangeNotifier {
 
     // Broad visual noun + "of" anywhere
     final visualOfPatterns = [
-      'photo of', 'picture of', 'image of',
-      'drawing of', 'painting of', 'sketch of',
+      'photo of',
+      'picture of',
+      'image of',
+      'drawing of',
+      'painting of',
+      'sketch of',
     ];
     for (final pat in visualOfPatterns) {
       if (t.contains(pat)) return true;
@@ -651,13 +711,29 @@ class ChatProvider extends ChangeNotifier {
     // Action + article patterns (covers "draw a cat", "create a landscape", etc.)
     // Includes grammatical variants with "a" instead of "an" before vowels
     final actionArticle = [
-      'draw a', 'draw an', 'paint a', 'paint an',
-      'sketch a', 'sketch an', 'render a', 'render an',
-      'create a picture', 'create a photo', 'create an image',
-      'create a image', 'create a drawing', 'create a painting',
-      'make a picture', 'make a photo', 'make an image',
-      'make a image', 'make a drawing', 'make a painting',
-      'generate a picture', 'generate a photo', 'generate an image',
+      'draw a',
+      'draw an',
+      'paint a',
+      'paint an',
+      'sketch a',
+      'sketch an',
+      'render a',
+      'render an',
+      'create a picture',
+      'create a photo',
+      'create an image',
+      'create a image',
+      'create a drawing',
+      'create a painting',
+      'make a picture',
+      'make a photo',
+      'make an image',
+      'make a image',
+      'make a drawing',
+      'make a painting',
+      'generate a picture',
+      'generate a photo',
+      'generate an image',
       'generate a image',
     ];
     for (final pat in actionArticle) {
@@ -666,16 +742,46 @@ class ChatProvider extends ChangeNotifier {
 
     // ── Broad combined-intent safety net ───────────────────────────────
     // If text has both a creation verb and a visual noun, it's image gen
-    final creationVerbs = ['draw', 'paint', 'sketch', 'render', 'imagine',
-                           'generate', 'create', 'make'];
-    final visualNouns = ['image', 'picture', 'photo', 'drawing', 'painting',
-                         'sketch', 'illustration', 'artwork', 'art',
-                         'logo', 'banner', 'poster', 'wallpaper', 'meme',
-                         'icon', 'portrait', 'landscape', 'scene', 'sunset',
-                         'cartoon', 'character', 'graphic'];
+    final creationVerbs = [
+      'draw',
+      'paint',
+      'sketch',
+      'render',
+      'imagine',
+      'generate',
+      'create',
+      'make',
+    ];
+    final visualNouns = [
+      'image',
+      'picture',
+      'photo',
+      'drawing',
+      'painting',
+      'sketch',
+      'illustration',
+      'artwork',
+      'art',
+      'logo',
+      'banner',
+      'poster',
+      'wallpaper',
+      'meme',
+      'icon',
+      'portrait',
+      'landscape',
+      'scene',
+      'sunset',
+      'cartoon',
+      'character',
+      'graphic',
+    ];
     bool hasVerb = false;
     for (final v in creationVerbs) {
-      if (RegExp(r'\b' + v + r'\b').hasMatch(t)) { hasVerb = true; break; }
+      if (RegExp(r'\b' + v + r'\b').hasMatch(t)) {
+        hasVerb = true;
+        break;
+      }
     }
     if (hasVerb) {
       for (final n in visualNouns) {
@@ -692,13 +798,40 @@ class ChatProvider extends ChangeNotifier {
     // ── Code-related queries should NEVER trigger file generation ──
     // If the user is asking for code, show it inline — never as a PDF/doc
     final codeKeywords = [
-      'python', 'javascript', 'typescript', 'java', 'c++', 'c#', 'ruby',
-      'php', 'go', 'rust', 'swift', 'kotlin', 'dart', 'scala', 'perl',
-      'shell script', 'bash script', 'batch script', 'powershell',
-      'code', 'script', 'function', 'class', 'method', 'api',
+      'python',
+      'javascript',
+      'typescript',
+      'java',
+      'c++',
+      'c#',
+      'ruby',
+      'php',
+      'go',
+      'rust',
+      'swift',
+      'kotlin',
+      'dart',
+      'scala',
+      'perl',
+      'shell script',
+      'bash script',
+      'batch script',
+      'powershell',
+      'code',
+      'script',
+      'function',
+      'class',
+      'method',
+      'api',
     ];
     final codeMatches = codeKeywords.where((kw) => t.contains(kw)).length;
-    final codeActions = ['write', 'create a script', 'build a', 'code a', 'program'];
+    final codeActions = [
+      'write',
+      'create a script',
+      'build a',
+      'code a',
+      'program',
+    ];
     final hasCodeAction = codeActions.any((a) => t.contains(a));
     if (codeMatches >= 1 && hasCodeAction) return null;
     // Also catch "write a [language] script" patterns
@@ -726,11 +859,31 @@ class ChatProvider extends ChangeNotifier {
     // PNG with visual context -> image gen
     if (t.contains('png')) {
       final visualIndicators = [
-        'image', 'picture', 'photo', 'draw', 'paint', 'sketch',
-        'of a', 'of an', 'of the', 'illustration', 'artwork',
-        'design', 'graphic', 'render', 'visualize', 'logo',
-        'icon', 'banner', 'wallpaper', 'background',
-        'sunset', 'landscape', 'portrait', 'cartoon', 'art',
+        'image',
+        'picture',
+        'photo',
+        'draw',
+        'paint',
+        'sketch',
+        'of a',
+        'of an',
+        'of the',
+        'illustration',
+        'artwork',
+        'design',
+        'graphic',
+        'render',
+        'visualize',
+        'logo',
+        'icon',
+        'banner',
+        'wallpaper',
+        'background',
+        'sunset',
+        'landscape',
+        'portrait',
+        'cartoon',
+        'art',
       ];
       final isVisualRequest = visualIndicators.any((w) => t.contains(w));
       final isShortRequest = t.split(RegExp(r'\s+')).length <= 6;
@@ -752,26 +905,59 @@ class ChatProvider extends ChangeNotifier {
     // If we found a format keyword, also check for creation action
     // This prevents false positives like "explain report" -> docx
     final actionWords = [
-      'create', 'make', 'generate', 'build', 'write', 'convert', 'export',
-      'save', 'download', 'produce', 'prepare', 'compile', 'draft', 'compose',
-      'develop', 'construct', 'produce a', 'make a', 'create a', 'generate a',
-      'write a', 'i need', 'i want', 'can you create', 'can you make',
-      'can you generate', 'can you write', 'please create', 'please make',
+      'create',
+      'make',
+      'generate',
+      'build',
+      'write',
+      'convert',
+      'export',
+      'save',
+      'download',
+      'produce',
+      'prepare',
+      'compile',
+      'draft',
+      'compose',
+      'develop',
+      'construct',
+      'produce a',
+      'make a',
+      'create a',
+      'generate a',
+      'write a',
+      'i need',
+      'i want',
+      'can you create',
+      'can you make',
+      'can you generate',
+      'can you write',
+      'please create',
+      'please make',
     ];
     final hasAction = actionWords.any((w) => t.contains(w));
 
     // Also check if text starts with the format (e.g., "pdf of sales report")
-    final startsWithFormat = RegExp(r'^(a|an|the)?\s*(pdf|docx?|xlsx?|csv|txt|md|html|json|xml)\b').hasMatch(t);
+    final startsWithFormat = RegExp(
+      r'^(a|an|the)?\s*(pdf|docx?|xlsx?|csv|txt|md|html|json|xml)\b',
+    ).hasMatch(t);
 
     if (!hasAction && !startsWithFormat) return null;
 
     // Slides/presentations -> pdf
-    if (t.contains('presentation') || t.contains('slide') ||
-        t.contains('powerpoint') || t.contains('pptx') ||
+    if (t.contains('presentation') ||
+        t.contains('slide') ||
+        t.contains('powerpoint') ||
+        t.contains('pptx') ||
         t.contains('slides')) {
-      if (t.contains('resume') || t.contains('cv') ||
-          t.contains('cover letter') || t.contains('report') ||
-          t.contains('invoice') || t.contains('receipt')) return 'docx';
+      if (t.contains('resume') ||
+          t.contains('cv') ||
+          t.contains('cover letter') ||
+          t.contains('report') ||
+          t.contains('invoice') ||
+          t.contains('receipt')) {
+        return 'docx';
+      }
       return 'pdf';
     }
 
@@ -781,12 +967,22 @@ class ChatProvider extends ChangeNotifier {
   String _stripMarkdownFences(String text) {
     final trimmed = text.trim();
     // Remove leading AI explanations like "Here is your PDF:", "Sure, here's the content:", etc.
-    String cleaned = trimmed.replaceFirst(RegExp(r"^(here\s+is|here'?s|i'?ve?\s+(created|generated|made|prepared|produced)|below\s+is|the\s+following\s+is|sure[!.,]+\s*here'?s?|certainly[!.,]+\s*here'?s?|of\s+course[!.,]+\s*here'?s?)[^]*?(?=```|<\w|[A-Z]|\d)", caseSensitive: false), '').trim();
+    String cleaned = trimmed
+        .replaceFirst(
+          RegExp(
+            r"^(here\s+is|here'?s|i'?ve?\s+(created|generated|made|prepared|produced)|below\s+is|the\s+following\s+is|sure[!.,]+\s*here'?s?|certainly[!.,]+\s*here'?s?|of\s+course[!.,]+\s*here'?s?)[^]*?(?=```|<\w|[A-Z]|\d)",
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .trim();
 
     if (cleaned.startsWith('```') && cleaned.endsWith('```')) {
       final firstNewline = cleaned.indexOf('\n');
       if (firstNewline > 3 && firstNewline < cleaned.length - 4) {
-        cleaned = cleaned.substring(firstNewline + 1, cleaned.length - 3).trim();
+        cleaned = cleaned
+            .substring(firstNewline + 1, cleaned.length - 3)
+            .trim();
       } else {
         cleaned = cleaned.substring(3, cleaned.length - 3).trim();
       }
@@ -802,7 +998,16 @@ class ChatProvider extends ChangeNotifier {
       cleaned = cleaned.substring(0, cleaned.length - 3).trim();
     }
     // Remove trailing AI wrap-up
-    cleaned = cleaned.replaceFirst(RegExp(r'(i\s+hope|feel\s+free|let\s+me\s+know|if\s+you\s+need|please\s+let|do\s+not\s+hesitate).*$', caseSensitive: false, dotAll: true), '').trim();
+    cleaned = cleaned
+        .replaceFirst(
+          RegExp(
+            r'(i\s+hope|feel\s+free|let\s+me\s+know|if\s+you\s+need|please\s+let|do\s+not\s+hesitate).*$',
+            caseSensitive: false,
+            dotAll: true,
+          ),
+          '',
+        )
+        .trim();
     return cleaned;
   }
 
@@ -844,71 +1049,234 @@ class ChatProvider extends ChangeNotifier {
 
       // Check if the message contains image-related context words
       final visualContext = [
-        'image', 'photo', 'picture', 'art', 'design', 'graphic',
-        'background', 'color', 'style', 'filter', 'texture',
-        'subject', 'object', 'scene', 'view', 'look',
-        'cartoon', 'painting', 'sketch', 'drawing', 'anime',
-        'render', 'logo', 'icon', 'banner', 'wallpaper',
-        'dress', 'clothes', 'suit', 'shirt', 'outfit', 'wear',
-        'face', 'hair', 'eyes', 'skin', 'background',
-        'add', 'remove', 'replace', 'change',
+        'image',
+        'photo',
+        'picture',
+        'art',
+        'design',
+        'graphic',
+        'background',
+        'color',
+        'style',
+        'filter',
+        'texture',
+        'subject',
+        'object',
+        'scene',
+        'view',
+        'look',
+        'cartoon',
+        'painting',
+        'sketch',
+        'drawing',
+        'anime',
+        'render',
+        'logo',
+        'icon',
+        'banner',
+        'wallpaper',
+        'dress',
+        'clothes',
+        'suit',
+        'shirt',
+        'outfit',
+        'wear',
+        'face',
+        'hair',
+        'eyes',
+        'skin',
+        'background',
+        'add',
+        'remove',
+        'replace',
+        'change',
       ];
       final hasVisualContext = visualContext.any((w) => t.contains(w));
 
       // Strong edit keywords
       final strongEditKeywords = [
-        'edit this', 'edit the', 'edit my', 'edit image', 'edit photo', 'edit picture',
-        'modify this', 'modify the', 'modify my',
-        'redesign this', 'redesign the',
-        'turn this into', 'turn it into',
-        'enhance this', 'enhance the', 'enhance my', 'enhance image',
-        'improve this', 'improve the', 'improve my', 'improve image',
-        'make it better', 'make this better',
-        'turn into cartoon', 'turn into painting', 'turn into sketch',
-        'as a cartoon', 'as a painting', 'as a sketch',
-        'as an anime', 'like a cartoon', 'like a painting',
-        'convert to cartoon', 'convert to painting',
-        'change the dress', 'change the clothes', 'change the outfit',
-        'change the color', 'change the style',
-        'change the background', 'change the shirt',
-        'change the hair', 'change the eyes',
-        'change just', 'only change', 'keep the same',
-        'keep everything', 'same face', 'same person',
+        'edit this',
+        'edit the',
+        'edit my',
+        'edit image',
+        'edit photo',
+        'edit picture',
+        'modify this',
+        'modify the',
+        'modify my',
+        'redesign this',
+        'redesign the',
+        'turn this into',
+        'turn it into',
+        'enhance this',
+        'enhance the',
+        'enhance my',
+        'enhance image',
+        'improve this',
+        'improve the',
+        'improve my',
+        'improve image',
+        'make it better',
+        'make this better',
+        'turn into cartoon',
+        'turn into painting',
+        'turn into sketch',
+        'as a cartoon',
+        'as a painting',
+        'as a sketch',
+        'as an anime',
+        'like a cartoon',
+        'like a painting',
+        'convert to cartoon',
+        'convert to painting',
+        'change the dress',
+        'change the clothes',
+        'change the outfit',
+        'change the color',
+        'change the style',
+        'change the background',
+        'change the shirt',
+        'change the hair',
+        'change the eyes',
+        'change just',
+        'only change',
+        'keep the same',
+        'keep everything',
+        'same face',
+        'same person',
       ];
       final mediumEditKeywords = [
-        'make it ', 'make this ', 'make the ',
-        'turn it ', 'turn this ', 'turn the ',
+        'make it ',
+        'make this ',
+        'make the ',
+        'turn it ',
+        'turn this ',
+        'turn the ',
         'turn into ',
-        'change the', 'change this', 'change my',
-        'change to', 'change color', 'change style',
-        'convert this ', 'convert it ', 'transform this ',
-        'add a ', 'add some ', 'add more ',
-        'remove the ', 'remove this ',
-        'replace the ', 'replace this ',
-        'convert to ', 'convert into',
-        'put a ', 'put on ',
+        'change the',
+        'change this',
+        'change my',
+        'change to',
+        'change color',
+        'change style',
+        'convert this ',
+        'convert it ',
+        'transform this ',
+        'add a ',
+        'add some ',
+        'add more ',
+        'remove the ',
+        'remove this ',
+        'replace the ',
+        'replace this ',
+        'convert to ',
+        'convert into',
+        'put a ',
+        'put on ',
       ];
       final weakEditKeywords = [
-        'add ', 'remove ', 'replace ',
-        'crop', 'rotate', 'resize', 'filter',
-        'style as', 'style it',
+        'add ',
+        'remove ',
+        'replace ',
+        'crop',
+        'rotate',
+        'resize',
+        'filter',
+        'style as',
+        'style it',
       ];
 
       final isStrongMatch = strongEditKeywords.any((kw) => t.contains(kw));
-      final isMediumMatch = hasVisualContext && wordCount >= 3 && mediumEditKeywords.any((kw) => t.contains(kw));
+      final isMediumMatch =
+          hasVisualContext &&
+          wordCount >= 3 &&
+          mediumEditKeywords.any((kw) => t.contains(kw));
       bool isWeakKeywordMatch(String kw) {
         if (kw.endsWith(' ')) {
           return t.contains(kw) && t.indexOf(kw) + kw.length < t.length;
         }
         return t.contains(kw);
       }
-      final isWeakMatch = hasVisualContext && wordCount >= 5 && weakEditKeywords.any(isWeakKeywordMatch);
 
-      final startsWithEdit = RegExp(r'^(edit|modify|redesign|enhance|improve|change)\s+(this|the|my|image|photo|picture)\b').hasMatch(t);
-      final isEditRequest = (
-        isStrongMatch || isMediumMatch || isWeakMatch || startsWithEdit
-      ) && wordCount >= 2;
+      final isWeakMatch =
+          hasVisualContext &&
+          wordCount >= 5 &&
+          weakEditKeywords.any(isWeakKeywordMatch);
+
+      final startsWithEdit = RegExp(
+        r'^(edit|modify|redesign|enhance|improve|change|make|turn|convert)\s+(this|the|my|image|photo|picture|it|into)\b',
+      ).hasMatch(t);
+      // Broader catch-all: any edit-like verb + visual context = edit request
+      final editVerbs = [
+        'edit',
+        'modify',
+        'redesign',
+        'enhance',
+        'improve',
+        'change',
+        'turn',
+        'convert',
+        'transform',
+        'recolor',
+        'recolour',
+        'replace',
+        'add',
+        'remove',
+        'crop',
+        'rotate',
+        'resize',
+      ];
+      final hasEditVerb = editVerbs.any(
+        (v) => RegExp(r'\b' + v + r'\b').hasMatch(t),
+      );
+      final isEditRequest =
+          (isStrongMatch ||
+              isMediumMatch ||
+              isWeakMatch ||
+              startsWithEdit ||
+              (hasEditVerb && hasVisualContext && wordCount >= 2)) &&
+          wordCount >= 2;
       if (isEditRequest) {
+        final cleanEdit = text
+            .replaceAll(
+              RegExp(
+                r'^(edit|modify|redesign|transform|enhance|improve|change|make|turn|convert)\s+(this|the|my|image|photo|picture|it|into)\s*',
+                caseSensitive: false,
+              ),
+              '',
+            )
+            .trim();
+        final friendlyResponse = cleanEdit.isNotEmpty
+            ? 'Edited image: $cleanEdit.'
+            : 'Edited image generated.';
+        try {
+          final editResp = await _api.redesignImageBytes(
+            imageBytes: bytes,
+            fileName: imgAttach.name,
+            prompt: text,
+          );
+          final imageData =
+              editResp['content'] as String? ??
+              editResp['image_data'] as String? ??
+              '';
+          if (imageData.isNotEmpty) {
+            return {
+              'response': friendlyResponse,
+              'image_data': imageData,
+              'type': 'chat',
+            };
+          }
+          if ((editResp['error'] as String?)?.isNotEmpty ?? false) {
+            return {
+              'response':
+                  editResp['error'] as String? ?? 'Could not edit the image.',
+              'image_data': '',
+              'type': 'chat',
+            };
+          }
+        } catch (_) {
+          // Fall through to regular image analysis
+        }
         try {
           final editResp = await _api.editImage(
             imageBytes: bytes,
@@ -928,11 +1296,7 @@ class ChatProvider extends ChangeNotifier {
           }
           // Edit failed — fall through to regular image analysis
           if (editType == 'error' && response.isNotEmpty) {
-            return {
-              'response': response,
-              'image_data': '',
-              'type': 'chat',
-            };
+            return {'response': response, 'image_data': '', 'type': 'chat'};
           }
         } catch (_) {
           // Fall through to regular image analysis
@@ -948,7 +1312,11 @@ class ChatProvider extends ChangeNotifier {
         location: location,
         messages: history,
       );
-      return {'response': resp.content, 'image_data': resp.imageBase64 ?? '', 'type': resp.type};
+      return {
+        'response': resp.content,
+        'image_data': resp.imageBase64 ?? '',
+        'type': resp.type,
+      };
     } else if (userMsg.attachments.isNotEmpty) {
       final attach = userMsg.attachments.first;
       final bytes = await FileService.readAttachmentBytes(attach);
@@ -967,10 +1335,19 @@ class ChatProvider extends ChangeNotifier {
     if (fileFormat != null) {
       if (fileFormat == 'png') {
         // PNG is an image format — route to image generation instead
-        final imgResp = await _api.generateImage(prompt: text, sessionId: sessionId);
+        final imgResp = await _api.generateImage(
+          prompt: text,
+          sessionId: sessionId,
+        );
         return {
-          'response': (imgResp['response'] as String?) ?? (imgResp['content'] as String?) ?? '',
-          'image_data': (imgResp['image_data'] as String?) ?? (imgResp['imageBase64'] as String?) ?? '',
+          'response':
+              (imgResp['response'] as String?) ??
+              (imgResp['content'] as String?) ??
+              '',
+          'image_data':
+              (imgResp['image_data'] as String?) ??
+              (imgResp['imageBase64'] as String?) ??
+              '',
           'type': (imgResp['type'] as String?) ?? 'image_gen',
         };
       }
@@ -982,22 +1359,36 @@ class ChatProvider extends ChangeNotifier {
           String instruction;
           // Format-specific instructions ensure proper content generation
           final formatInstructions = {
-            'pdf': 'Generate structured HTML content that will be converted to a PDF document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <pre>, <code>, <strong>, <em>, <br> to structure the content clearly. The HTML will be automatically converted to a proper downloadable PDF file. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text, do NOT use sample data. Include the COMPLETE content the user asked for. Return ONLY the HTML content, no explanations, no greetings, no markdown fences.',
-            'docx': 'Generate HTML content for a Microsoft Word document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <strong>, <em>, <br> to structure the content. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text, do NOT use sample data. Include the COMPLETE content the user asked for. Return ONLY the HTML content, no explanations, no greetings, no markdown fences.',
-            'xlsx': 'Generate CSV content (comma-separated values) for an Excel spreadsheet. The first row should be column headers. Each subsequent row is a data row with ACTUAL values — do NOT leave cells empty, do NOT use placeholder data. Use proper CSV escaping (double-quote fields containing commas or newlines). CRITICAL: You MUST include EVERY specific data point and row the user requested — include the COMPLETE dataset with all the values asked for. Return ONLY the CSV content, no explanations, no markdown fences.',
-            'csv': 'Generate CSV content (comma-separated values). The first row should be column headers. Each subsequent row is a data row with ACTUAL values — do NOT leave cells empty, do NOT use placeholder data. Use proper CSV escaping. CRITICAL: You MUST include EVERY specific data point the user requested — include the COMPLETE dataset. Return ONLY the CSV content, no explanations, no markdown fences.',
-            'md': 'Generate Markdown content. Use proper markdown formatting with headings, lists, tables, code blocks, and emphasis as appropriate. CRITICAL: You MUST include ALL the specific content the user requested — do NOT omit any sections or details. Return ONLY the markdown content, no explanations, no markdown fences.',
-            'html': 'Generate a complete HTML web page. Include DOCTYPE, html, head, and body tags with proper CSS styling. CRITICAL: You MUST include ALL the specific content and context the user requested — every detail must be in the page. Return ONLY the HTML code, no explanations, no markdown fences.',
-            'json': 'Generate JSON content. Ensure it is valid JSON format. CRITICAL: You MUST include ALL the specific data the user requested — every field, value, and nested structure. Return ONLY the JSON content, no explanations, no markdown fences.',
-            'xml': 'Generate XML content. Ensure it is well-formed XML with proper tags. CRITICAL: You MUST include ALL the specific data the user requested — every element and attribute. Return ONLY the XML content, no explanations, no markdown fences.',
-            'svg': 'Generate SVG image content as raw SVG XML. Include proper viewBox and namespace attributes. CRITICAL: You MUST include ALL the specific visual elements the user requested. Return ONLY the SVG XML, no explanations, no markdown fences.',
-            'txt': 'Generate plain text content. Format the text clearly with sections and proper line breaks. CRITICAL: You MUST include ALL the specific information the user requested — every detail, point, and section complete. Return ONLY the text content, no explanations, no markdown fences.',
+            'pdf':
+                'Generate structured HTML content that will be converted to a PDF document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <pre>, <code>, <strong>, <em>, <br> to structure the content clearly. The HTML will be automatically converted to a proper downloadable PDF file. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text, do NOT use sample data. Include the COMPLETE content the user asked for. Return ONLY the HTML content, no explanations, no greetings, no markdown fences.',
+            'docx':
+                'Generate HTML content for a Microsoft Word document. Use proper HTML tags like <h1>, <h2>, <p>, <ul>, <ol>, <li>, <table>, <tr>, <td>, <th>, <strong>, <em>, <br> to structure the content. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text, do NOT use sample data. Include the COMPLETE content the user asked for. Return ONLY the HTML content, no explanations, no greetings, no markdown fences.',
+            'xlsx':
+                'Generate CSV content (comma-separated values) for an Excel spreadsheet. The first row should be column headers. Each subsequent row is a data row with ACTUAL values — do NOT leave cells empty, do NOT use placeholder data. Use proper CSV escaping (double-quote fields containing commas or newlines). CRITICAL: You MUST include EVERY specific data point and row the user requested — include the COMPLETE dataset with all the values asked for. Return ONLY the CSV content, no explanations, no markdown fences.',
+            'csv':
+                'Generate CSV content (comma-separated values). The first row should be column headers. Each subsequent row is a data row with ACTUAL values — do NOT leave cells empty, do NOT use placeholder data. Use proper CSV escaping. CRITICAL: You MUST include EVERY specific data point the user requested — include the COMPLETE dataset. Return ONLY the CSV content, no explanations, no markdown fences.',
+            'md':
+                'Generate Markdown content. Use proper markdown formatting with headings, lists, tables, code blocks, and emphasis as appropriate. CRITICAL: You MUST include ALL the specific content the user requested — do NOT omit any sections or details. Return ONLY the markdown content, no explanations, no markdown fences.',
+            'html':
+                'Generate a complete HTML web page. Include DOCTYPE, html, head, and body tags with proper CSS styling. CRITICAL: You MUST include ALL the specific content and context the user requested — every detail must be in the page. Return ONLY the HTML code, no explanations, no markdown fences.',
+            'json':
+                'Generate JSON content. Ensure it is valid JSON format. CRITICAL: You MUST include ALL the specific data the user requested — every field, value, and nested structure. Return ONLY the JSON content, no explanations, no markdown fences.',
+            'xml':
+                'Generate XML content. Ensure it is well-formed XML with proper tags. CRITICAL: You MUST include ALL the specific data the user requested — every element and attribute. Return ONLY the XML content, no explanations, no markdown fences.',
+            'svg':
+                'Generate SVG image content as raw SVG XML. Include proper viewBox and namespace attributes. CRITICAL: You MUST include ALL the specific visual elements the user requested. Return ONLY the SVG XML, no explanations, no markdown fences.',
+            'txt':
+                'Generate plain text content. Format the text clearly with sections and proper line breaks. CRITICAL: You MUST include ALL the specific information the user requested — every detail, point, and section complete. Return ONLY the text content, no explanations, no markdown fences.',
           };
-          final fmtInstruction = formatInstructions[fileFormat] ?? 'Generate the complete content for a ${fileFormat.toUpperCase()} file. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text. Include the COMPLETE content. Return ONLY the raw file content, no explanations, no markdown fences.';
+          final fmtInstruction =
+              formatInstructions[fileFormat] ??
+              'Generate the complete content for a ${fileFormat.toUpperCase()} file. CRITICAL: You MUST include EVERY specific detail, data point, and section the user requested — do NOT omit any content, do NOT use placeholder text. Include the COMPLETE content. Return ONLY the raw file content, no explanations, no markdown fences.';
           if (isComplex) {
-            instruction = 'The user wants: $text\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Carefully read the user\'s request above and include EVERY specific detail, data point, and section they asked for. The content must be COMPREHENSIVE and COMPLETE — do not summarize, do not use placeholders, do not omit anything. Generate the ACTUAL full content with ALL the information specified. If the user provides specific text to include, include it VERBATIM.';
+            instruction =
+                'The user wants: $text\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Carefully read the user\'s request above and include EVERY specific detail, data point, and section they asked for. The content must be COMPREHENSIVE and COMPLETE — do not summarize, do not use placeholders, do not omit anything. Generate the ACTUAL full content with ALL the information specified. If the user provides specific text to include, include it VERBATIM.';
           } else {
-            instruction = 'The user requested: "$text"\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Include the COMPLETE content the user requested — every detail, every data point. Do NOT omit or summarize anything.';
+            instruction =
+                'The user requested: "$text"\n\n$fmtInstruction\n\nCRITICAL INSTRUCTION: Include the COMPLETE content the user requested — every detail, every data point. Do NOT omit or summarize anything.';
           }
           final history = _buildMessageHistory();
           final chatResp = await _api.chat(
@@ -1015,7 +1406,8 @@ class ChatProvider extends ChangeNotifier {
               filename: 'document.$fileFormat',
             );
             final fileContent = fileResp['content'] as String? ?? '';
-            final fileName = fileResp['filename'] as String? ?? 'document.$fileFormat';
+            final fileName =
+                fileResp['filename'] as String? ?? 'document.$fileFormat';
             final fileType = fileResp['format'] as String? ?? fileFormat;
             return {
               'response': '',
@@ -1032,11 +1424,7 @@ class ChatProvider extends ChangeNotifier {
           }
         }
       }
-      return {
-        'response': '',
-        'image_data': '',
-        'type': 'error',
-      };
+      return {'response': '', 'image_data': '', 'type': 'error'};
     }
     if (_isImageGenRequest(text)) {
       final imgResp = await _api.generateImage(
@@ -1044,8 +1432,14 @@ class ChatProvider extends ChangeNotifier {
         sessionId: sessionId,
       );
       return {
-        'response': (imgResp['response'] as String?) ?? (imgResp['content'] as String?) ?? '',
-        'image_data': (imgResp['image_data'] as String?) ?? (imgResp['imageBase64'] as String?) ?? '',
+        'response':
+            (imgResp['response'] as String?) ??
+            (imgResp['content'] as String?) ??
+            '',
+        'image_data':
+            (imgResp['image_data'] as String?) ??
+            (imgResp['imageBase64'] as String?) ??
+            '',
         'type': (imgResp['type'] as String?) ?? 'image_gen',
       };
     }
@@ -1239,7 +1633,10 @@ class ChatProvider extends ChangeNotifier {
               sendMessage(text);
             }
             if (_continuousVoiceEnabled) {
-              Future.delayed(const Duration(milliseconds: 500), startVoiceInput);
+              Future.delayed(
+                const Duration(milliseconds: 500),
+                startVoiceInput,
+              );
             }
             notifyListeners();
           }
@@ -1287,8 +1684,7 @@ class ChatProvider extends ChangeNotifier {
         _pendingAttachments.add(attachment);
         notifyListeners();
       }
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   Future<void> pickFile() async {
@@ -1298,8 +1694,7 @@ class ChatProvider extends ChangeNotifier {
         _pendingAttachments.add(attachment);
         notifyListeners();
       }
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   void removePendingAttachment(int index) {
@@ -1323,8 +1718,7 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
         },
       );
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   Future<void> speakMessage(String messageId, String text) async {
