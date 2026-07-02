@@ -20,10 +20,10 @@
 
 // ── Config (injected via env parameter by Cloudflare) ───────────────────
 let OPENROUTER_API_KEY = '';
-let OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
-let VISION_MODEL = 'google/gemini-2.0-flash-exp:free';
-let FALLBACK_VISION_MODEL = 'google/gemma-3-12b-it:free';
-let FAST_MODEL = 'meta-llama/llama-3.1-8b-instruct:free';
+let OPENROUTER_MODEL = 'openrouter/free';
+let VISION_MODEL = 'openrouter/free';
+let FALLBACK_VISION_MODEL = 'openrouter/free';
+let FAST_MODEL = 'openrouter/free';
 let OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 let PAGES_ORIGIN = '';
 let ENABLE_WEB = true;
