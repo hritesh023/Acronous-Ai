@@ -373,39 +373,6 @@ class ApiClient {
     );
   }
 
-  Stream<String> chatStream(String message, {String? sessionId}) async* {
-    final uri = Uri.parse('$_baseUrl/v1/chat/stream');
-    final client = http.Client();
-    try {
-      final request = http.Request('POST', uri)
-        ..headers['Content-Type'] = 'application/json'
-        ..body = jsonEncode({
-          'message': message,
-          'session_id': sessionId ?? 'default',
-        });
-      final streamedResp = await client.send(request);
-      final lines = streamedResp.stream
-          .transform(utf8.decoder)
-          .transform(const LineSplitter());
-      await for (final line in lines) {
-        if (line.startsWith('data: ')) {
-          final data = line.substring(6);
-          if (data.trim().isEmpty) continue;
-          try {
-            final json = jsonDecode(data) as Map<String, dynamic>;
-            if (json['done'] == true) break;
-            if (json['error'] != null) throw Exception(json['error']);
-            yield json['content'] as String? ?? '';
-          } catch (_) {
-            rethrow;
-          }
-        }
-      }
-    } finally {
-      client.close();
-    }
-  }
-
   Future<ChatResponse> chatWithImage({
     required String message,
     required Uint8List imageBytes,

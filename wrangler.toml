@@ -9,9 +9,9 @@ routes = [
 
 # ── Environment variables (non-secret) ───────────────────────────────────
 [vars]
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
-VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct"
-FALLBACK_VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct"
+OPENROUTER_MODEL = "openrouter/free"
+VISION_MODEL = "openrouter/free"
+FALLBACK_VISION_MODEL = "openrouter/free"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"

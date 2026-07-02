@@ -21,9 +21,9 @@
 
 // ── Config (injected via env parameter by Cloudflare) ───────────────────
 let OPENROUTER_API_KEY = '';
-let OPENROUTER_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b:free';
-let VISION_MODEL = 'meta-llama/llama-3.2-11b-vision-instruct';
-let FALLBACK_VISION_MODEL = 'qwen/qwen-2-vl-7b-instruct';
+let OPENROUTER_MODEL = 'openrouter/free';
+let VISION_MODEL = 'openrouter/free';
+let FALLBACK_VISION_MODEL = 'openrouter/free';
 let OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 let PAGES_ORIGIN = '';
 let ENABLE_WEB = true;
@@ -1211,6 +1211,7 @@ async function chatHandler(request) {
       file_type: '',
     });
   } catch (e) {
+    console.error('chatHandler error:', e?.message || e);
     return jsonResponse({
       response: '',
       session_id: 'default',
@@ -1221,80 +1222,6 @@ async function chatHandler(request) {
       file_name: '',
       file_type: '',
     });
-  }
-}
-
-// ── Chat Stream (POST /v1/chat/stream) ────────────────────────────────────
-
-async function chatStreamHandler(request) {
-  try {
-    const body = await request.json();
-    const { message, session_id = 'default', timezone = '', location = '', messages: history = [] } = body;
-
-    if (!message) {
-      return jsonResponse({ error: 'No message provided' }, 400);
-    }
-
-    const messages = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
-
-    const opts = { stream: true, max_tokens: 16384, temperature: 0.7 };
-
-    const resp = await callOpenRouter(messages, opts);
-
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
-
-    (async () => {
-      try {
-        const reader = resp.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const chunk = line.slice(6).trim();
-              if (chunk === '[DONE]') continue;
-              try {
-                const parsed = JSON.parse(chunk);
-                const delta = parsed?.choices?.[0]?.delta;
-                const content = delta?.content;
-                const reasoning = delta?.reasoning || parsed?.choices?.[0]?.reasoning;
-                if (content || reasoning) {
-                  await writer.write(encoder.encode(`data: ${JSON.stringify({ content: content || '', reasoning: reasoning || '' })}\n\n`));
-                }
-              } catch (_) {}
-            }
-          }
-        }
-
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ done: true })}\n\n`));
-      } catch (e) {
-        await writer.write(encoder.encode(`data: ${JSON.stringify({ error: 'Stream error occurred', done: true })}\n\n`));
-      } finally {
-        await writer.close();
-      }
-    })();
-
-    return new Response(readable, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
-  } catch (e) {
-    return jsonResponse({ error: 'Failed to start stream' }, 500);
   }
 }
 
@@ -3185,9 +3112,9 @@ export default {
   async fetch(request, env) {
     // Load config from env (secrets + vars)
     OPENROUTER_API_KEY = env.OPENROUTER_API_KEY || '';
-    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct';
-    VISION_MODEL = env.VISION_MODEL || 'meta-llama/llama-3.2-11b-vision-instruct';
-    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'qwen/qwen-2-vl-7b-instruct';
+    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'openrouter/free';
+    VISION_MODEL = env.VISION_MODEL || 'openrouter/free';
+    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'openrouter/free';
     OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
     PAGES_ORIGIN = env.PAGES_ORIGIN || '';
     ENABLE_WEB = (env.ENABLE_WEB || 'true') === 'true';
@@ -3231,7 +3158,6 @@ export default {
       if (path === '/health' || path === '/api/health') return healthHandler();
 
       // ── Chat ────────────────────────────────────────────────────────
-      if (path === '/v1/chat/stream' && method === 'POST') return chatStreamHandler(request);
       if (path === '/v1/chat' && method === 'POST') return chatHandler(request);
       if (path === '/v1/chat/image' && method === 'POST') return chatImageHandler(request);
       if (path === '/v1/chat/file' && method === 'POST') return chatFileHandler(request);
