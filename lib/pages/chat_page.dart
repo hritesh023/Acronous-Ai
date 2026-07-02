@@ -72,10 +72,10 @@ class _ChatPageState extends State<ChatPage> {
   void _setDefaultSuggestions() {
     if (_suggestions.isNotEmpty) return;
     setState(() => _suggestions = [
-      Suggestion(icon: 'book', title: 'Learn Something', desc: 'Explain ML simply', query: 'Explain machine learning in simple terms'),
-      Suggestion(icon: 'code', title: 'Write Code', desc: 'Create a Python script', query: 'Write a Python script that scrapes a website'),
+      Suggestion(icon: 'book', title: 'Learn Something', desc: 'Tell me a fun fact', query: 'Tell me an interesting fun fact about anything'),
+      Suggestion(icon: 'code', title: 'Write Recipe', desc: 'Give me a cookie recipe', query: 'Write a simple recipe for chocolate chip cookies'),
       Suggestion(icon: 'image', title: 'Generate Art', desc: 'Draw a landscape', query: 'Draw a serene mountain landscape at sunset'),
-      Suggestion(icon: 'search', title: 'Research', desc: 'Latest AI news', query: 'What are the latest developments in artificial intelligence?'),
+      Suggestion(icon: 'search', title: 'Plan a Trip', desc: 'Plan a weekend trip', query: 'Suggest a simple weekend trip itinerary for a family of 4'),
     ]);
   }
 

@@ -432,7 +432,9 @@ class ChatProvider extends ChangeNotifier {
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
           final errMsg = resp['response'] as String? ?? resp['error'] as String? ?? '';
-          if (errMsg.isNotEmpty) _addAssistantMessage(errMsg);
+          _addAssistantMessage(
+            errMsg.isNotEmpty ? errMsg : 'Sorry, I could not process your request. Please try again.',
+          );
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -491,6 +493,7 @@ class ChatProvider extends ChangeNotifier {
       }
     }
 
+    _addAssistantMessage('Sorry, I could not get a response. Please check your connection and try again.');
     _isTakingLong = false;
     _isLoading = false;
     _prefs.saveConversations(_conversations).catchError((_) {});

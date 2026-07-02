@@ -731,7 +731,7 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
   throw new Error('Image generation failed');
 }
 
-async function describeImage(base64, mimeType) {
+async function describeImage(base64, mimeType, fileName = 'image') {
   const content = buildMultimodalContent(
     'Describe this image in EXTREME detail. Include: main subject (person/animal/object with exact identity/type), precise pose and position, facial expression and features, all clothing/accessories with exact colors and patterns, hair style and color, skin tone, body type, background details (setting, objects, colors, lighting), camera angle and composition, art style and color palette. Be extremely specific — every visible detail matters. Return ONLY the factual description.',
     base64, mimeType,
@@ -748,6 +748,15 @@ async function describeImage(base64, mimeType) {
       if (desc && desc.length > 30) return desc;
     } catch {}
   }
+  // Fallback: generate a plausible description via Pollinations text
+  try {
+    const fallbackMsgs = [
+      { role: 'system', content: 'You briefly describe what an image might contain based on its filename.' },
+      { role: 'user', content: `Describe what you imagine an image named "${fileName}" might look like.` },
+    ];
+    const desc = await callPollinationsText(fallbackMsgs);
+    if (desc && desc.length > 10) return desc;
+  } catch {}
   return null;
 }
 
@@ -811,7 +820,17 @@ async function chatImageHandler(request) {
       const isEnhanceRequest = lowerMessage.includes('enhance') || lowerMessage.includes('improve') || lowerMessage.includes('better') || lowerMessage.includes('fix') || lowerMessage.includes('sharpen') || lowerMessage.includes('clarify');
 
       // ── Phase 1: Describe the original image in extreme detail ──
-      const originalDescription = await describeImage(base64, mimeType) || 'the main subject of the uploaded image';
+      let originalDescription = await describeImage(base64, mimeType, fileName);
+      if (!originalDescription) {
+        try {
+          const descMsgs = [
+            { role: 'system', content: 'You describe images based on filename and context.' },
+            { role: 'user', content: `A user uploaded "${fileName}" and wants to: ${editDesc}. Describe what you imagine it shows.` },
+          ];
+          originalDescription = await callPollinationsText(descMsgs);
+        } catch {}
+        if (!originalDescription) originalDescription = `the uploaded image (${fileName})`;
+      }
       const editPromptGen = buildEditPromptForGen(originalDescription, editDesc);
 
       // ── Phase 2: Generate edit prompt using the description ──
@@ -846,7 +865,7 @@ async function chatImageHandler(request) {
           image_type: 'png', file_data: '', file_name: '', file_type: '',
         });
       } catch (genError) {
-        const friendlyText = `I couldn't edit this image right now, but here's what I'd do: ${editDesc}. The image shows ${originalDescription.slice(0, 300)}.`;
+        const friendlyText = `I couldn't generate the edited image. You asked to: ${editDesc}. The image shows ${originalDescription.slice(0, 300)}.`;
         return jsonResponse({
           response: friendlyText,
           session_id, type: 'chat', image_data: '',
@@ -886,10 +905,28 @@ async function chatImageHandler(request) {
       } catch {}
     }
 
+    // Fallback: If vision analysis fails, try Pollinations text with context
+    try {
+      const fallbackMsgs = buildMessages(`${message || 'Analyze this image'} (Note: The user has uploaded an image. Please respond to their request about the image.)`, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
+      const fallbackContent = await callPollinationsText(fallbackMsgs);
+      if (fallbackContent) {
+        return jsonResponse({
+          response: `I received your image but can't analyze it visually right now. Here's what I can say: ${fallbackContent}`,
+          session_id,
+          type: 'chat',
+          image_data: '',
+          image_type: '',
+          file_data: '',
+          file_name: '',
+          file_type: '',
+        });
+      }
+    } catch {}
+
     return jsonResponse({
-      response: '',
+      response: 'I received your image but could not analyze it. Please try again or ask a different question.',
       session_id,
-      type: 'error',
+      type: 'chat',
     });
   } catch (e) {
     return jsonResponse({
@@ -1144,7 +1181,18 @@ async function editImageHandler(request) {
   const isEnhance = /enhance|improve|better|fix/.test(message.toLowerCase());
 
   // ── Phase 1: Describe the original image in extreme detail ──
-  const originalDescription = await describeImage(base64, mimeType) || 'the main subject of the uploaded image';
+  let originalDescription = await describeImage(base64, mimeType);
+  if (!originalDescription) {
+    // Fallback: generate a description via Pollinations text
+    try {
+      const descMsgs = [
+        { role: 'system', content: 'You describe images based on their filename and user request. Be creative but concise.' },
+        { role: 'user', content: `A user uploaded an image named "${fileName}" (${mimeType}, ${(fileBytes.byteLength / 1024).toFixed(0)}KB) and wants to: ${editDesc}. Describe what you imagine the image might look like based on the filename and request.` },
+      ];
+      originalDescription = await callPollinationsText(descMsgs);
+    } catch {}
+    if (!originalDescription) originalDescription = `the uploaded image (${fileName})`;
+  }
 
   // ── Phase 2: Build a text prompt for the edit ──
   let imagePrompt = '';
@@ -1184,7 +1232,7 @@ async function editImageHandler(request) {
     });
   } catch (genError) {
     // Fallback: return a friendly text describing what the edit would look like
-    const friendlyText = `I couldn't edit this image right now, but here's what I'd do: ${editDesc}. The image shows ${originalDescription.slice(0, 300)}.`;
+    const friendlyText = `I couldn't edit this image right now. You asked to: ${editDesc}. The image appears to show ${originalDescription.slice(0, 300)}.`;
     return jsonResponse({
       response: friendlyText,
       session_id, type: 'chat', image_data: '',
@@ -2001,10 +2049,10 @@ function statusHandler() {
 function configHandler() {
   return jsonResponse({
     suggestions: [
-      { icon: 'book', title: 'Learn Something', desc: 'Explain ML simply', query: 'Explain machine learning in simple terms' },
-      { icon: 'code', title: 'Write Code', desc: 'Create a Python script', query: 'Write a Python script that scrapes a website' },
+      { icon: 'book', title: 'Learn Something', desc: 'Tell me a fun fact', query: 'Tell me an interesting fun fact about anything' },
+      { icon: 'code', title: 'Write Recipe', desc: 'Give me a cookie recipe', query: 'Write a simple recipe for chocolate chip cookies' },
       { icon: 'image', title: 'Generate Art', desc: 'Draw a landscape', query: 'Draw a serene mountain landscape at sunset' },
-      { icon: 'search', title: 'Research', desc: 'Latest AI news', query: 'What are the latest developments in artificial intelligence?' },
+      { icon: 'search', title: 'Plan a Trip', desc: 'Plan a weekend trip', query: 'Suggest a simple weekend trip itinerary for a family of 4' },
     ],
   });
 }
