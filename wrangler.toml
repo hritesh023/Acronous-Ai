@@ -11,7 +11,7 @@ routes = [
 [vars]
 OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
 VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct"
-FALLBACK_VISION_MODEL = "qwen/qwen-2-vl-7b-instruct"
+FALLBACK_VISION_MODEL = "meta-llama/llama-3.2-11b-vision-instruct"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"

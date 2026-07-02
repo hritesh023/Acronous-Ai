@@ -367,6 +367,9 @@ class ApiClient {
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
       type: resp['type'] as String? ?? 'chat',
       imageBase64: resp['image_data'] as String?,
+      fileData: resp['file_data'] as String?,
+      fileName: resp['file_name'] as String?,
+      fileType: resp['file_type'] as String?,
     );
   }
 

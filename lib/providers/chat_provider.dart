@@ -31,24 +31,18 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static final RegExp _privateInfoPattern = RegExp(
-    r"(powered by|hosted by|served by|hosted on|runs on|deployed on|built on|infrastructure of|backend is)\s+[\w.\/-]+|\b(api[ _]?key|system prompt|internal (configuration|instructions|prompt)|backend (details?|technology|endpoint|setup?|architecture|provider|infrastructure)|infrastructure details?|technical (architecture|details?|stack)|openrouter|pollinations|cloudflare|wrangler)\b|(as an ai\b.{0,80}(created by|developed by|built by|made by|trained by|owned by|operated by))",
+    r'\b(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|openrouter|pollinations|cloudflare)[\s:=]',
     caseSensitive: false,
-    dotAll: true,
   );
 
   static String _sanitizeAssistantText(String text) {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) return '';
-    final cleaned = trimmed
+    if (text.trim().isEmpty) return '';
+    final cleaned = text
         .replaceAll(RegExp(r'\[Internal[^\]]*\]'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
-    if (cleaned.isEmpty) {
-      return trimmed;
-    }
-    if (_privateInfoPattern.hasMatch(cleaned)) {
-      return '';
-    }
+    if (cleaned.isEmpty) return text.trim();
+    if (_privateInfoPattern.hasMatch(cleaned)) return '';
     return cleaned;
   }
 
@@ -434,10 +428,17 @@ class ChatProvider extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        if (rawContent.isEmpty && imageData.isEmpty && fileData.isEmpty && attempt < 1) {
-          await _api.wakeup();
-          await Future.delayed(const Duration(seconds: 3));
-          continue;
+        if (rawContent.isEmpty && imageData.isEmpty && fileData.isEmpty) {
+          if (attempt < 2) {
+            await Future.delayed(const Duration(seconds: 2));
+            continue;
+          }
+          _addAssistantMessage('I had trouble generating a response. Please try rephrasing your question.');
+          _isTakingLong = false;
+          _isLoading = false;
+          _prefs.saveConversations(_conversations).catchError((_) {});
+          notifyListeners();
+          return;
         }
         if (rawContent.isNotEmpty || imageData.isNotEmpty || fileData.isNotEmpty) {
           _currentConversation!.messages.add(
@@ -458,14 +459,14 @@ class ChatProvider extends ChangeNotifier {
         return;
       } catch (e) {
         if (_cancelled) break;
-        if (attempt < 1) {
+        if (attempt < 2) {
           _isTakingLong = true;
           notifyListeners();
           if (_cancelled) break;
           await _discoverServer(retries: 1);
           if (_cancelled) break;
           if (_isServerConnected) {
-            await Future.delayed(const Duration(seconds: 3));
+            await Future.delayed(const Duration(seconds: 5));
           }
           if (_cancelled) break;
           continue;
@@ -661,80 +662,78 @@ class ChatProvider extends ChangeNotifier {
   String? _detectFileGenFormat(String text) {
     final t = text.trim().toLowerCase();
 
-    // Expanded action words for better detection
-    final hasAction = [
-      'create', 'make', 'generate', 'build', 'write', 'convert', 'export',
-      'save', 'download', 'need', 'want', 'give', 'produce', 'prepare',
-      'compile', 'draft', 'compose', 'form', 'develop', 'construct',
-      'fashion', 'put together', 'set up', 'produce a', 'make a',
-      'create a', 'generate a', 'write a', 'need a', 'want a',
-      'i need', 'i want', 'can you create', 'can you make', 'can you generate',
-      'can you write', 'please create', 'please make', 'please generate',
-    ].any((w) => t.contains(w));
+    // Check for explicit format keyword in the text FIRST
+    // Must have a specific format keyword + action to trigger file generation
+    final formatKeywords = {
+      'pdf': ['pdf', 'document'],
+      'docx': ['word', 'docx', '.doc', 'microsoft word'],
+      'xlsx': ['excel', 'xlsx', 'xls', 'spreadsheet', 'tabular', 'table'],
+      'csv': ['csv', 'comma separated', 'comma-separated'],
+      'html': ['html', 'web page', 'website'],
+      'md': ['markdown', '.md', 'md file'],
+      'svg': ['svg', 'vector'],
+      'json': ['json', 'json file'],
+      'xml': ['xml', 'xml file'],
+      'txt': ['text file', 'txt file'],
+    };
 
-    // Also detect if text starts with file-creation intent like "a pdf" or "pdf of"
-    final startsWithFormat = RegExp(r'^(a|an|the)?\s*(pdf|docx?|xlsx?|csv|txt|md|html|json|xml|svg|png|jpg|jpeg|gif|bmp|webp)\b').hasMatch(t);
+    // Image formats should route to image generation
+    final imageFormats = ['jpg', 'jpeg', 'gif', 'bmp', 'webp'];
+    if (imageFormats.any((f) => t.contains(f))) return null;
 
-    if (!hasAction && !startsWithFormat) return null;
+    // PNG with visual context -> image gen
+    if (t.contains('png')) {
+      final visualIndicators = [
+        'image', 'picture', 'photo', 'draw', 'paint', 'sketch',
+        'of a', 'of an', 'of the', 'illustration', 'artwork',
+        'design', 'graphic', 'render', 'visualize', 'logo',
+        'icon', 'banner', 'wallpaper', 'background',
+        'sunset', 'landscape', 'portrait', 'cartoon', 'art',
+      ];
+      final isVisualRequest = visualIndicators.any((w) => t.contains(w));
+      final isShortRequest = t.split(RegExp(r'\s+')).length <= 6;
+      if (isVisualRequest || isShortRequest) return null;
+      return 'png';
+    }
 
-    // Check for image format keywords first — these should go to image generation, not file generation
-    final imageFormats = ['jpg', 'jpeg', 'gif', 'bmp', 'webp', 'png'];
-    for (final fmt in imageFormats) {
-      if (t.contains(fmt)) {
-        // Check if it's a visual creation request (e.g., "create a png of a cat")
-        final visualIndicators = [
-          'image', 'picture', 'photo', 'draw', 'paint', 'sketch',
-          'of a', 'of an', 'of the', 'illustration', 'artwork',
-          'design', 'graphic', 'render', 'visualize', 'logo',
-          'icon', 'banner', 'wallpaper', 'background',
-          'sunset', 'landscape', 'portrait', 'cartoon', 'art',
-        ];
-        final isVisualRequest = visualIndicators.any((w) => t.contains(w));
-
-        // Short phrases like "create a png" -> image gen (user wants to generate a picture)
-        final wordCount = t.trim().split(RegExp(r'\s+')).length;
-        final isShortRequest = wordCount <= 6;
-
-        if (isVisualRequest || isShortRequest) {
-          return null; // Route to image generation
-        }
-        return 'png'; // "convert data to png" type -> file gen
+    // Check for explicit format keyword
+    String? matchedFormat;
+    for (final entry in formatKeywords.entries) {
+      if (entry.value.any((kw) => t.contains(kw))) {
+        matchedFormat = entry.key;
+        break;
       }
     }
 
-    // Check for document format keywords
-    if (t.contains('pdf') || t.contains('document')) return 'pdf';
+    if (matchedFormat == null) return null;
 
-    // Word document detection - expanded patterns
-    if (t.contains('word') || t.contains('docx') || t.contains('.doc')) return 'docx';
+    // If we found a format keyword, also check for creation action
+    // This prevents false positives like "explain report" -> docx
+    final actionWords = [
+      'create', 'make', 'generate', 'build', 'write', 'convert', 'export',
+      'save', 'download', 'produce', 'prepare', 'compile', 'draft', 'compose',
+      'develop', 'construct', 'produce a', 'make a', 'create a', 'generate a',
+      'write a', 'i need', 'i want', 'can you create', 'can you make',
+      'can you generate', 'can you write', 'please create', 'please make',
+    ];
+    final hasAction = actionWords.any((w) => t.contains(w));
 
-    // Excel/spreadsheet detection - expanded patterns
-    if (t.contains('excel') || t.contains('xlsx') || t.contains('xls') ||
-        t.contains('spreadsheet') || t.contains(' sheet') ||
-        t.contains('tabular') || t.contains('table')) return 'xlsx';
+    // Also check if text starts with the format (e.g., "pdf of sales report")
+    final startsWithFormat = RegExp(r'^(a|an|the)?\s*(pdf|docx?|xlsx?|csv|txt|md|html|json|xml)\b').hasMatch(t);
 
-    if (t.contains('csv') || t.contains('comma separated') ||
-        t.contains('comma-separated')) return 'csv';
+    if (!hasAction && !startsWithFormat) return null;
 
-    if (t.contains('html') || t.contains('web page') || t.contains('website')) return 'html';
-
-    if (t.contains('markdown') || t.contains('.md') || t.contains('md file')) return 'md';
-
-    if (t.contains('svg') || t.contains('vector')) return 'svg';
-
+    // Slides/presentations -> pdf
     if (t.contains('presentation') || t.contains('slide') ||
         t.contains('powerpoint') || t.contains('pptx') ||
-        t.contains('slides')) return 'pdf';
+        t.contains('slides')) {
+      if (t.contains('resume') || t.contains('cv') ||
+          t.contains('cover letter') || t.contains('report') ||
+          t.contains('invoice') || t.contains('receipt')) return 'docx';
+      return 'pdf';
+    }
 
-    if (t.contains('resume') || t.contains('cv') ||
-        t.contains('cover letter') || t.contains('report') ||
-        t.contains('invoice') || t.contains('receipt')) return 'docx';
-
-    if (t.contains('json') || t.contains('json file')) return 'json';
-    if (t.contains('xml') || t.contains('xml file')) return 'xml';
-    if (t.contains('text file') || t.contains('txt file')) return 'txt';
-
-    return null;
+    return matchedFormat;
   }
 
   String _stripMarkdownFences(String text) {

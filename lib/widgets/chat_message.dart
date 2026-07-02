@@ -297,45 +297,27 @@ class ChatMessageWidget extends StatelessWidget {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
-                child: Stack(
-                  children: [
-                    AnimatedOpacity(
-                      opacity: 1.0,
-                      duration: const Duration(milliseconds: 400),
-                      child: Image.memory(
-                        Uint8List.fromList(bytes),
-                        fit: BoxFit.contain,
-                        width: double.infinity,
-                        height: 300,
-                        errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                          if (wasSynchronouslyLoaded) return child;
-                          if (frame == null) {
-                            return _imagePlaceholder(cs);
-                          }
-                          return AnimatedOpacity(
-                            opacity: 1.0,
-                            duration: const Duration(milliseconds: 300),
-                            child: child,
-                          );
-                        },
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 4,
-                      right: 6,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: Image.asset(
-                          'assets/logo.png',
-                          width: 28,
-                          height: 28,
-                          color: Colors.white.withValues(alpha: 0.5),
-                          colorBlendMode: BlendMode.srcIn,
-                        ),
-                      ),
-                    ),
-                  ],
+                child: AnimatedOpacity(
+                  opacity: 1.0,
+                  duration: const Duration(milliseconds: 400),
+                  child: Image.memory(
+                    Uint8List.fromList(bytes),
+                    fit: BoxFit.contain,
+                    width: double.infinity,
+                    height: 300,
+                    errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
+                    frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                      if (wasSynchronouslyLoaded) return child;
+                      if (frame == null) {
+                        return _imagePlaceholder(cs);
+                      }
+                      return AnimatedOpacity(
+                        opacity: 1.0,
+                        duration: const Duration(milliseconds: 300),
+                        child: child,
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
