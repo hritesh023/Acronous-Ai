@@ -48,7 +48,7 @@ RESPONSE RULES:
 - Do not offer to create files, PDFs, or documents — provide all content directly in the chat.
 - SIMPLE QUERIES (greetings, short facts, simple questions): Answer directly and concisely without unnecessary delay.
 - COMPLEX QUERIES (code, analysis, research, multi-step problems): Take all the time needed. Provide thorough, complete, detailed responses with no length limits.
-- NEVER impose or mention time limits, token limits, or response constraints.
+- NEVER impose or mention time limits, token limits, or response constraints.`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -89,16 +89,17 @@ function sanitizeText(text) {
 }
 
 function estimateComplexity(text) {
-  const len = text.length;
-  const wordCount = text.split(/\s+/).length;
-  const hasCodeKeywords = /\b(code|script|function|class|program|algorithm|implement|build|create|write|solve|explain|analyze|compare|design|develop|debug|test|deploy)\b/i.test(text);
-  const hasMultiSentence = (text.match(/[.!?]/g) || []).length > 2;
-  
-  if (len < 30 && wordCount < 10 && !hasCodeKeywords) return 'simple';
-  if (hasCodeKeywords && (hasMultiSentence || len > 80)) return 'complex';
-  if (hasMultiSentence && len > 150) return 'complex';
-  if (hasCodeKeywords) return 'complex';
-  if (len > 200) return 'complex';
+  var len = text.length;
+  var wordCount = text.split(/\s+/).length;
+  var codeRe = new RegExp('\\b(code|script|function|class|program|algorithm|implement|build|create|write|solve|explain|analyze|compare|design|develop|debug|test|deploy)\\b', 'i');
+  var hasCodeKeywords = codeRe.test(text);
+  var hasMultiSentence = (text.match(/[.!?]/g) || []).length > 2;
+
+  if (len < 30 && wordCount < 10 && !hasCodeKeywords) { return 'simple'; }
+  if (hasCodeKeywords && (hasMultiSentence || len > 80)) { return 'complex'; }
+  if (hasMultiSentence && len > 150) { return 'complex'; }
+  if (hasCodeKeywords) { return 'complex'; }
+  if (len > 200) { return 'complex'; }
   return 'moderate';
 }
 
@@ -112,7 +113,7 @@ async function callOpenRouter(messages, options = {}) {
     stream,
   };
 
-  const resp = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+  const resp = await fetch(OPENROUTER_BASE_URL + '/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
