@@ -1,47 +1,51 @@
 # Acronous AI — Agent Context
 
-## Current API Setup (OpenRouter Free)
-- **Base URL**: `https://openrouter.ai/api/v1` (set via `OPENROUTER_BASE_URL`)
-- **API Key**: OpenRouter key stored as `OPENROUTER_API_KEY` secret
-- **Models**: `openrouter/free` for all (auto-selects best free model per request)
+## Architecture
+
+### Chat (Text)
+- **Primary**: Pollinations Text API (`https://text.pollinations.ai`) — free, no API key needed, uses `openai` model
+- **Fallback**: OpenRouter (`OPENROUTER_API_KEY`) — used when Pollinations fails
+
+### Image Generation
+- **Pollinations.ai** image generation (`https://image.pollinations.ai/prompt/...`) — free, no API key needed
+
+### Image Analysis (Vision)
+- **OpenRouter** with vision models (`VISION_MODEL`, `FALLBACK_VISION_MODEL`)
+
+### File Processing
+- **OpenRouter** for file analysis/code generation
+
+## API Setup
+
+### Pollinations (always free, no key)
+- Chat: POST `https://text.pollinations.ai` with `{ messages: [...], model: "openai", private: true }`
+- Images: GET `https://image.pollinations.ai/prompt/{encoded}`
+
+### OpenRouter (fallback only)
+- **Base URL**: `https://openrouter.ai/api/v1` (env `OPENROUTER_BASE_URL`)
+- **API Key**: Stored as `OPENROUTER_API_KEY` secret
+- **Models**: `meta-llama/llama-3.3-70b-instruct:free`, `google/gemini-2.5-flash-lite`, `nvidia/nemotron-nano-12b-v2-vl:free`, `qwen/qwen3-next-80b-a3b-instruct:free`
 - **Headers**: `HTTP-Referer: https://ai.acronous.com`, `X-Title: Acronous AI`
 
-## If OpenRouter Causes Problems → Revert to OpenAI
+## Watermark
+- 10px font size, positioned on the image itself (inside `InteractiveViewer`/`Stack`)
+- Visible when zoomed — scales with the image
 
-Change these files:
+## Common Commands
 
-### 1. `cloudflare-worker.js`
-- `OPENROUTER_BASE_URL` default: `https://openrouter.ai/api/v1` → `https://api.openai.com/v1`
-- `OPENROUTER_MODEL` default: `openrouter/free` → `gpt-4o`
-- `VISION_MODEL` default: `openrouter/free` → `gpt-4o`
-- `FALLBACK_VISION_MODEL` default: `openrouter/free` → `gpt-4o-mini`
-- `FAST_MODEL` default: `openrouter/free` → `gpt-4o-mini`
-- In `callOpenRouter()` function: remove the `HTTP-Referer` and `X-Title` headers.
-
-### 2. `wrangler.toml`
-```toml
-OPENROUTER_MODEL = "gpt-4o"
-VISION_MODEL = "gpt-4o"
-FALLBACK_VISION_MODEL = "gpt-4o-mini"
-FAST_MODEL = "gpt-4o-mini"
-OPENROUTER_BASE_URL = "https://api.openai.com/v1"
-```
-
-### 3. Set the OpenAI key
-```sh
-npx wrangler secret put OPENROUTER_API_KEY
-```
-Enter the OpenAI key.
-
-### 4. Redeploy
+### Deploy worker
 ```sh
 npx wrangler deploy cloudflare-worker.js --name acronous-ai
 ```
 
-## Build & Deploy
+### Rebuild and deploy frontend
 ```sh
 flutter build web --dart-define="API_BASE_URL=https://ai.acronous.com"
 Copy-Item -LiteralPath "web/_worker.js" -Destination "build/web/_worker.js" -Force
 npx wrangler pages deploy build/web --project-name=acronous-ai
-npx wrangler deploy cloudflare-worker.js --name acronous-ai
+```
+
+### Set secrets
+```sh
+npx wrangler secret put OPENROUTER_API_KEY
 ```

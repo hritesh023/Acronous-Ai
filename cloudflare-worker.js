@@ -153,8 +153,18 @@ async function callOpenRouter(messages, options = {}) {
   });
 
   if (!resp.ok) {
-    const errBody = await resp.text();
+    const errBody = await resp.text().catch(() => '');
     const sanitized = errBody.replace(/["']?api[_-]?key["']?\s*[:=]\s*["'][^"']+["']/gi, '').slice(0, 200);
+    // If model with :free suffix gets 402, try without suffix as fallback
+    if (resp.status === 402 && model.includes(':free')) {
+      const altModel = model.replace(/:free$/, '');
+      const altResp = await fetch(OPENROUTER_BASE_URL + '/chat/completions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ ...body, model: altModel }),
+      });
+      if (altResp.ok) return altResp;
+    }
     throw new Error(`Upstream AI error (${resp.status})`);
   }
 
@@ -515,9 +525,6 @@ function readyHandler() {
 }
 
 function healthLLMHandler() {
-  if (!OPENROUTER_API_KEY) {
-    return jsonResponse({ status: 'unavailable' }, 503);
-  }
   return jsonResponse({ status: 'ok' });
 }
 
@@ -525,18 +532,33 @@ function wakeupHandler() {
   return jsonResponse({ status: 'ok' });
 }
 
+// ── Pollinations text (free, no API key needed) ──────────────────────────
+
+const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai';
+
+async function callPollinationsText(messages, options = {}) {
+  const { max_tokens = 4096, temperature = 0.7 } = options;
+  const body = { messages, model: 'openai', private: true };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120000);
+  try {
+    const resp = await fetch(POLLINATIONS_TEXT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    if (!resp.ok) throw new Error(`Pollinations error (${resp.status})`);
+    return resp.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // ── Chat (POST /v1/chat) ──────────────────────────────────────────────────
 
 async function chatHandler(request) {
   try {
-    if (!OPENROUTER_API_KEY) {
-      return jsonResponse({
-        response: '',
-        session_id: 'default',
-        type: 'error',
-      }, 503);
-    }
-
     const body = await request.json();
     const { message, session_id = 'default', timezone = '', location = '', messages: history = [] } = body;
 
@@ -548,42 +570,27 @@ async function chatHandler(request) {
       }, 400);
     }
 
-    const complexity = estimateComplexity(message);
+    // Build message array
+    const msgs = buildMessages(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
 
-    // Greetings & simple queries: skip web search, respond fast with low tokens
-    let messages;
-    if (complexity === 'greeting') {
-      const msgs = buildMessages(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
-      // Add a system instruction for instant greeting response
-      msgs.splice(1, 0, { role: 'system', content: 'The user just greeted you. Respond warmly in 1-2 sentences. Be friendly but brief. No search needed. Just say hello back.' });
-      messages = msgs;
-    } else if (complexity === 'simple') {
-      // Simple queries: skip web search, use fast path
-      messages = buildMessages(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
-    } else {
-      // Moderate & complex queries: do web search for current info
-      messages = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
-    }
-
-    const maxTokens = complexity === 'greeting' ? 128 : complexity === 'simple' ? 1024 : complexity === 'moderate' ? 4096 : 8192;
-    const temperature = complexity === 'greeting' ? 0.5 : 0.7;
-    const useModel = (complexity === 'greeting' || complexity === 'simple') ? FAST_MODEL : OPENROUTER_MODEL;
-
-    // Retry logic for empty responses — also catches HTTP errors
+    // Try Pollinations text first (always free, no key needed)
     let content = '';
-    const models = complexity === 'greeting' || complexity === 'simple'
-      ? [FAST_MODEL, OPENROUTER_MODEL]
-      : [OPENROUTER_MODEL, FAST_MODEL];
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const resp = await callOpenRouter(messages, { model: models[attempt] || useModel, max_tokens: maxTokens, temperature: attempt === 0 ? temperature : temperature + 0.2 });
-        const data = await resp.json();
-        content = sanitizeText(data?.choices?.[0]?.message?.content || '');
-        if (content) break;
-      } catch (_) {
-        // Try next model
+    try {
+      content = sanitizeText(await callPollinationsText(msgs));
+    } catch (_) {}
+
+    // Fallback to OpenRouter if Pollinations fails
+    if (!content && OPENROUTER_API_KEY) {
+      const models = [OPENROUTER_MODEL, FAST_MODEL, 'openrouter/auto'];
+      for (let attempt = 0; attempt < models.length; attempt++) {
+        try {
+          const resp = await callOpenRouter(msgs, { model: models[attempt], max_tokens: 8192, temperature: 0.7 });
+          const data = await resp.json();
+          content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+          if (content) break;
+        } catch (_) {}
+        if (attempt < models.length - 1) await new Promise(r => setTimeout(r, 1000));
       }
-      if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
     }
 
     if (!content) {
@@ -603,8 +610,6 @@ async function chatHandler(request) {
       file_data: '',
       file_name: '',
       file_type: '',
-      complexity: complexity === 'greeting' ? 0 : complexity === 'simple' ? 0 : complexity === 'moderate' ? 1 : 2,
-      complexity_label: complexity,
     });
   } catch (e) {
     console.error('chatHandler error:', e?.message || e);
@@ -2509,9 +2514,9 @@ export default {
   async fetch(request, env) {
     // Load config from env (secrets + vars)
     OPENROUTER_API_KEY = env.OPENROUTER_API_KEY || '';
-    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
-    VISION_MODEL = env.VISION_MODEL || 'qwen/qwen3-vl-235b-a22b-instruct:free';
-    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'qwen/qwen3-vl-30b-a3b-instruct:free';
+    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+    VISION_MODEL = env.VISION_MODEL || 'google/gemini-2.5-flash-lite';
+    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free';
     FAST_MODEL = env.FAST_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free';
     OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
     PAGES_ORIGIN = env.PAGES_ORIGIN || '';
