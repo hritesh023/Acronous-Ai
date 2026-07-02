@@ -297,27 +297,50 @@ class ChatMessageWidget extends StatelessWidget {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
-                child: AnimatedOpacity(
-                  opacity: 1.0,
-                  duration: const Duration(milliseconds: 400),
-                  child: Image.memory(
-                    Uint8List.fromList(bytes),
-                    fit: BoxFit.contain,
-                    width: double.infinity,
-                    height: 300,
-                    errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                    frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                      if (wasSynchronouslyLoaded) return child;
-                      if (frame == null) {
-                        return _imagePlaceholder(cs);
-                      }
-                      return AnimatedOpacity(
-                        opacity: 1.0,
-                        duration: const Duration(milliseconds: 300),
-                        child: child,
-                      );
-                    },
-                  ),
+                child: Stack(
+                  children: [
+                    AnimatedOpacity(
+                      opacity: 1.0,
+                      duration: const Duration(milliseconds: 400),
+                      child: Image.memory(
+                        Uint8List.fromList(bytes),
+                        fit: BoxFit.contain,
+                        width: double.infinity,
+                        height: 300,
+                        errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
+                        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                          if (wasSynchronouslyLoaded) return child;
+                          if (frame == null) {
+                            return _imagePlaceholder(cs);
+                          }
+                          return AnimatedOpacity(
+                            opacity: 1.0,
+                            duration: const Duration(milliseconds: 300),
+                            child: child,
+                          );
+                        },
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 4,
+                      right: 6,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        padding: const EdgeInsets.all(1),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(1),
+                          child: Image.asset(
+                            'assets/logo.png',
+                            width: 10,
+                            height: 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),

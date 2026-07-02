@@ -52,12 +52,18 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
       return;
     }
     _controller.clear();
-    _focusNode.unfocus();
     setState(() {
       _isComposing = false;
       _showExtras = false;
     });
     chat.sendMessage(msg);
+    if (!_disposed && mounted) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_disposed && mounted) {
+          _focusNode.requestFocus();
+        }
+      });
+    }
   }
 
   void _onChanged(String v) {
@@ -149,10 +155,8 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
                         minLines: 1,
                         textInputAction: TextInputAction.send,
                         onChanged: _onChanged,
-                        onSubmitted: chat.isLoading
-                            ? null
-                            : (v) => _sendText(v.trim()),
-                        readOnly: chat.isLoading,
+                        onSubmitted: (v) => _sendText(v.trim()),
+                        readOnly: false,
                         decoration: const InputDecoration(
                           hintText: AppStrings.messageHint,
                           border: InputBorder.none,

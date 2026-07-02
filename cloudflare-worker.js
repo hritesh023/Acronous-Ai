@@ -679,7 +679,7 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
       try {
         const encodedPrompt = encodeURIComponent(prompt);
         const encodedNegative = encodeURIComponent(negative);
-        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
+        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1&nologo=1`;
         const resp = await fetch(url, { signal: AbortSignal.timeout(timeout) });
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
@@ -746,28 +746,60 @@ async function chatImageHandler(request) {
       const editDesc = message?.trim() || 'edit this image';
       const isEnhanceRequest = lowerMessage.includes('enhance') || lowerMessage.includes('improve') || lowerMessage.includes('better') || lowerMessage.includes('fix') || lowerMessage.includes('sharpen') || lowerMessage.includes('clarify');
 
-      // ── Single vision LLM call to get image prompt ──
+      // ── Phase 1: Describe the original image in extreme detail ──
+      let originalDescription = '';
+      const describeContent = buildMultimodalContent(
+        'Describe this image in EXTREME detail for image reconstruction. Include: 1) EXACT main subject (person/animal/object), 2) Precise pose and position, 3) Facial expression and features, 4) ALL clothing/accessories with exact colors and patterns, 5) Hair style and color, 6) Skin tone, 7) Body type and proportions, 8) Background details (setting, objects, colors, lighting), 9) Camera angle and composition, 10) Art style and color palette. Be extremely specific and detailed. Return ONLY the factual description.',
+        base64, mimeType,
+      );
+      const describeMessages = [
+        { role: 'system', content: 'You are an expert image analyst providing EXTREMELY detailed descriptions for image reconstruction. Be precise about every visible detail. Do not generalize - describe exactly what you see.' },
+        { role: 'user', content: describeContent },
+      ];
+      for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
+        try {
+          const resp = await callOpenRouter(describeMessages, { model, stream: false, max_tokens: 1500, temperature: 0.1 });
+          const data = await resp.json();
+          const desc = data?.choices?.[0]?.message?.content?.trim();
+          if (desc && desc.length > 30) {
+            originalDescription = desc;
+            break;
+          }
+        } catch {}
+      }
+      if (!originalDescription) {
+        originalDescription = 'the main subject of the uploaded image';
+      }
+
+      // ── Phase 2: Generate edit prompt using the description ──
       let imagePrompt = '';
       let responseText = '';
       try {
-        const promptContent = buildMultimodalContent(
-          `You are an image editor. Look at this image carefully.
-User request: "${editDesc}"
-${isEnhanceRequest ? 'Enhance quality only, change nothing else.' : 'Apply ONLY the requested change. Keep everything else identical.'}
-Generate a single text-to-image prompt describing the ENTIRE image with the change applied.
-NO text/words/letters in the image.
-Return ONLY the prompt.`,
+        const editContent = buildMultimodalContent(
+          `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION): "${originalDescription}"
+USER EDIT REQUEST: "${editDesc}"
+${isEnhanceRequest ? 'Enhance quality only, change nothing else. Keep the subject, pose, expression, clothing, background, lighting, and composition IDENTICAL.' : 'Apply ONLY the specific change requested below. Keep EVERYTHING else from the original image IDENTICAL — same subject, same pose, same expression, same clothing, same background, same lighting, same composition, same art style.'}
+
+CRITICAL RULES:
+- The original image description above is EXACT. Preserve ALL details that are NOT being changed.
+- Apply ONLY the user's requested change.
+- Do NOT alter the subject's identity, face, body, pose, or expression unless specifically requested.
+- Do NOT change clothing, colors, or accessories unless specifically requested.
+- Do NOT change the background, lighting, or composition unless specifically requested.
+- Keep the same art style, resolution, and overall aesthetic.
+
+Generate a SINGLE detailed text-to-image prompt that describes the ENTIRE scene with ONLY the requested change applied. Start with the original subject description, then state the change. No text/words/letters in the image. Return ONLY the prompt.`,
           base64, mimeType,
         );
         for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL].filter(Boolean)) {
           try {
             const resp = await callOpenRouter(
-              [{ role: 'user', content: promptContent }],
-              { model, stream: false, max_tokens: 300, temperature: 0.1 }
+              [{ role: 'user', content: editContent }],
+              { model, stream: false, max_tokens: 700, temperature: 0.1 }
             );
             const data = await resp.json();
             const output = data?.choices?.[0]?.message?.content?.trim();
-            if (output && output.length > 15 && isValidImagePrompt(output, editDesc)) {
+            if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
               imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
               break;
             }
@@ -776,8 +808,8 @@ Return ONLY the prompt.`,
         responseText = isEnhanceRequest ? 'Here is your enhanced image.' : 'Here is your edited image.';
       } catch {}
 
-      if (!imagePrompt || imagePrompt.length < 15) {
-        imagePrompt = `${editDesc}, high quality, photorealistic, no text`;
+      if (!imagePrompt || imagePrompt.length < 20) {
+        imagePrompt = `${originalDescription}, ${editDesc}, no text, preserve original composition`;
       }
 
       try {
@@ -1093,30 +1125,62 @@ async function editImageHandler(request) {
   mimeType = normalizeImageMime(rawMime, fileName);
   base64 = arrayBufferToBase64(fileBytes);
   editDesc = message?.trim() || 'edit this image';
+  const isEnhance = /enhance|improve|better|fix/.test(message.toLowerCase());
 
-  // ── Single phase: Vision model generates image prompt directly ──
+  // ── Phase 1: Describe the original image in extreme detail ──
+  let originalDescription = '';
+  const describeContent = buildMultimodalContent(
+    'Describe this image in EXTREME detail for image reconstruction. Include: 1) EXACT main subject (person/animal/object), 2) Precise pose and position, 3) Facial expression and features, 4) ALL clothing/accessories with exact colors and patterns, 5) Hair style and color, 6) Skin tone, 7) Body type and proportions, 8) Background details (setting, objects, colors, lighting), 9) Camera angle and composition, 10) Art style and color palette. Be extremely specific and detailed. Return ONLY the factual description.',
+    base64, mimeType,
+  );
+  const describeMessages = [
+    { role: 'system', content: 'You are an expert image analyst providing EXTREMELY detailed descriptions for image reconstruction. Be precise about every visible detail. Do not generalize - describe exactly what you see.' },
+    { role: 'user', content: describeContent },
+  ];
+  for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
+    try {
+      const resp = await callOpenRouter(describeMessages, { model, stream: false, max_tokens: 1500, temperature: 0.1 });
+      const data = await resp.json();
+      const desc = data?.choices?.[0]?.message?.content?.trim();
+      if (desc && desc.length > 30) {
+        originalDescription = desc;
+        break;
+      }
+    } catch {}
+  }
+  if (!originalDescription) {
+    originalDescription = 'the main subject of the uploaded image';
+  }
+
+  // ── Phase 2: Generate edit prompt using the description ──
   let imagePrompt = '';
   let responseText = '';
   try {
-    const isEnhance = /enhance|improve|better|fix/.test(message.toLowerCase());
-    const promptContent = buildMultimodalContent(
-      `You are an image editor. Look at this image carefully.
-User request: "${editDesc}"
-${isEnhance ? 'Enhance quality only, change nothing else.' : 'Apply ONLY the requested change. Keep everything else identical.'}
-Generate a single text-to-image prompt that describes the ENTIRE image with the change applied.
-NO text/words/letters in the image.
-Return ONLY the prompt.`,
+    const editContent = buildMultimodalContent(
+      `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION): "${originalDescription}"
+USER EDIT REQUEST: "${editDesc}"
+${isEnhance ? 'Enhance quality only, change nothing else. Keep the subject, pose, expression, clothing, background, lighting, and composition IDENTICAL.' : 'Apply ONLY the specific change requested below. Keep EVERYTHING else from the original image IDENTICAL — same subject, same pose, same expression, same clothing, same background, same lighting, same composition, same art style.'}
+
+CRITICAL RULES:
+- The original image description above is EXACT. Preserve ALL details that are NOT being changed.
+- Apply ONLY the user's requested change.
+- Do NOT alter the subject's identity, face, body, pose, or expression unless specifically requested.
+- Do NOT change clothing, colors, or accessories unless specifically requested.
+- Do NOT change the background, lighting, or composition unless specifically requested.
+- Keep the same art style, resolution, and overall aesthetic.
+
+Generate a SINGLE detailed text-to-image prompt that describes the ENTIRE scene with ONLY the requested change applied. Start with the original subject description, then state the change. No text/words/letters in the image. Return ONLY the prompt.`,
       base64, mimeType,
     );
     for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL].filter(Boolean)) {
       try {
         const resp = await callOpenRouter(
-          [{ role: 'user', content: promptContent }],
-          { model, stream: false, max_tokens: 300, temperature: 0.1 }
+          [{ role: 'user', content: editContent }],
+          { model, stream: false, max_tokens: 700, temperature: 0.1 }
         );
         const data = await resp.json();
         const output = data?.choices?.[0]?.message?.content?.trim();
-        if (output && output.length > 15 && isValidImagePrompt(output, editDesc)) {
+        if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
           imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
           break;
         }
@@ -1125,8 +1189,8 @@ Return ONLY the prompt.`,
     responseText = isEnhance ? 'Here is your enhanced image.' : 'Here is your edited image.';
   } catch {}
 
-  if (!imagePrompt || imagePrompt.length < 15) {
-    imagePrompt = `${editDesc}, high quality, photorealistic, no text`;
+  if (!imagePrompt || imagePrompt.length < 20) {
+    imagePrompt = `${originalDescription}, ${editDesc}, no text, preserve original composition`;
   }
 
   // ── Generate image ──────────────────────────────────

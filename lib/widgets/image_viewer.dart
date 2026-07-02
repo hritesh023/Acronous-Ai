@@ -77,19 +77,19 @@ class _ImageViewerState extends State<ImageViewer>
             statusBarIconBrightness: Brightness.light,
           ),
         ),
-        body: Center(
-          child: InteractiveViewer(
-            transformationController: _transformController,
-            minScale: 0.5,
-            maxScale: 5.0,
-            boundaryMargin: const EdgeInsets.all(100),
-            child: Hero(
-              tag: 'generated_image_${UniqueKey().toString()}',
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: Stack(
-                  children: [
-                    Image.memory(
+        body: Stack(
+          children: [
+            Center(
+              child: InteractiveViewer(
+                transformationController: _transformController,
+                minScale: 0.5,
+                maxScale: 5.0,
+                boundaryMargin: const EdgeInsets.all(100),
+                child: Hero(
+                  tag: 'generated_image_${UniqueKey().toString()}',
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
                       widget.imageBytes,
                       fit: BoxFit.contain,
                       errorBuilder: (_, _, _) => Icon(
@@ -98,25 +98,30 @@ class _ImageViewerState extends State<ImageViewer>
                         color: Colors.white.withValues(alpha: 0.5),
                       ),
                     ),
-                    Positioned(
-                      bottom: 8,
-                      right: 10,
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(3),
-                        child: Image.asset(
-                          'assets/logo.png',
-                          width: 32,
-                          height: 32,
-                          color: Colors.white.withValues(alpha: 0.5),
-                          colorBlendMode: BlendMode.srcIn,
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
+            Positioned(
+              bottom: 56,
+              right: 12,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(3),
+                ),
+                padding: const EdgeInsets.all(2),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: Image.asset(
+                    'assets/logo.png',
+                    width: 12,
+                    height: 12,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         bottomNavigationBar: SafeArea(
           child: Padding(
