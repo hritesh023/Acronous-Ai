@@ -3,7 +3,11 @@
 ## Current API Setup (OpenRouter Free)
 - **Base URL**: `https://openrouter.ai/api/v1` (set via `OPENROUTER_BASE_URL`)
 - **API Key**: OpenRouter key stored as `OPENROUTER_API_KEY` secret
-- **Models**: `openrouter/free` for all (auto-selects best free model per request)
+- **Models**:
+  - Main: `meta-llama/llama-3.3-70b-instruct:free`
+  - Vision: `google/gemini-2.0-flash-exp:free`
+  - Fallback vision: `google/gemma-3-12b-it:free`
+  - Fast: `meta-llama/llama-3.1-8b-instruct:free`
 - **Headers**: `HTTP-Referer: https://ai.acronous.com`, `X-Title: Acronous AI`
 
 ## If OpenRouter Causes Problems → Revert to OpenAI
@@ -12,10 +16,10 @@ Change these files:
 
 ### 1. `cloudflare-worker.js`
 - `OPENROUTER_BASE_URL` default: `https://openrouter.ai/api/v1` → `https://api.openai.com/v1`
-- `OPENROUTER_MODEL` default: `openrouter/free` → `gpt-4o`
-- `VISION_MODEL` default: `openrouter/free` → `gpt-4o`
-- `FALLBACK_VISION_MODEL` default: `openrouter/free` → `gpt-4o-mini`
-- `FAST_MODEL` default: `openrouter/free` → `gpt-4o-mini`
+- `OPENROUTER_MODEL` default: `meta-llama/llama-3.3-70b-instruct:free` → `gpt-4o`
+- `VISION_MODEL` default: `google/gemini-2.0-flash-exp:free` → `gpt-4o`
+- `FALLBACK_VISION_MODEL` default: `google/gemma-3-12b-it:free` → `gpt-4o-mini`
+- `FAST_MODEL` default: `meta-llama/llama-3.1-8b-instruct:free` → `gpt-4o-mini`
 - In `callOpenRouter()` function: remove the `HTTP-Referer` and `X-Title` headers.
 
 ### 2. `wrangler.toml`

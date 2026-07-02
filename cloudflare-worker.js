@@ -20,10 +20,10 @@
 
 // ── Config (injected via env parameter by Cloudflare) ───────────────────
 let OPENROUTER_API_KEY = '';
-let OPENROUTER_MODEL = 'openrouter/free';
-let VISION_MODEL = 'openrouter/free';
-let FALLBACK_VISION_MODEL = 'openrouter/free';
-let FAST_MODEL = 'openrouter/free';
+let OPENROUTER_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
+let VISION_MODEL = 'google/gemini-2.0-flash-exp:free';
+let FALLBACK_VISION_MODEL = 'google/gemma-3-12b-it:free';
+let FAST_MODEL = 'meta-llama/llama-3.1-8b-instruct:free';
 let OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 let PAGES_ORIGIN = '';
 let ENABLE_WEB = true;
@@ -565,13 +565,20 @@ async function chatHandler(request) {
     const temperature = complexity === 'greeting' ? 0.5 : 0.7;
     const useModel = (complexity === 'greeting' || complexity === 'simple') ? FAST_MODEL : OPENROUTER_MODEL;
 
-    // Retry logic for empty responses
+    // Retry logic for empty responses — also catches HTTP errors
     let content = '';
+    const models = complexity === 'greeting' || complexity === 'simple'
+      ? [FAST_MODEL, OPENROUTER_MODEL]
+      : [OPENROUTER_MODEL, FAST_MODEL];
     for (let attempt = 0; attempt < 2; attempt++) {
-      const resp = await callOpenRouter(messages, { model: useModel, max_tokens: maxTokens, temperature: attempt === 0 ? temperature : temperature + 0.2 });
-      const data = await resp.json();
-      content = sanitizeText(data?.choices?.[0]?.message?.content || '');
-      if (content) break;
+      try {
+        const resp = await callOpenRouter(messages, { model: models[attempt] || useModel, max_tokens: maxTokens, temperature: attempt === 0 ? temperature : temperature + 0.2 });
+        const data = await resp.json();
+        content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+        if (content) break;
+      } catch (_) {
+        // Try next model
+      }
       if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
     }
 

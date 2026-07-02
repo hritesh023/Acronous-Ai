@@ -302,23 +302,25 @@ class ChatMessageWidget extends StatelessWidget {
                     AnimatedOpacity(
                       opacity: 1.0,
                       duration: const Duration(milliseconds: 400),
-                      child: Image.memory(
-                        Uint8List.fromList(bytes),
-                        fit: BoxFit.contain,
-                        width: double.infinity,
-                        height: 300,
-                        errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                          if (wasSynchronouslyLoaded) return child;
-                          if (frame == null) {
-                            return _imagePlaceholder(cs);
-                          }
-                          return AnimatedOpacity(
-                            opacity: 1.0,
-                            duration: const Duration(milliseconds: 300),
-                            child: child,
-                          );
-                        },
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 300),
+                        child: Image.memory(
+                          Uint8List.fromList(bytes),
+                          fit: BoxFit.contain,
+                          width: double.infinity,
+                          errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
+                          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                            if (wasSynchronouslyLoaded) return child;
+                            if (frame == null) {
+                              return _imagePlaceholder(cs);
+                            }
+                            return AnimatedOpacity(
+                              opacity: 1.0,
+                              duration: const Duration(milliseconds: 300),
+                              child: child,
+                            );
+                          },
+                        ),
                       ),
                     ),
                     Positioned(
