@@ -706,7 +706,7 @@ function isValidImagePrompt(text, originalUserText) {
 
 async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed, imageUrl, imageBase64, imageMime } = {}) {
   const seed = customSeed ?? Math.floor(Math.random() * 1000000);
-  const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality, different person, different face, different identity, different pose, different expression, different background, different lighting, different composition, different style, different colors, different clothing, different hair, different body type, different age, different gender, different ethnicity, change subject, change identity, change face, change pose, change expression, change background, change lighting, change composition, change style, change colors';
+  const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality, worse quality, low res, pixelated, artifacts, different person, different face, different identity, different body, different pose, different posture, different expression, different emotion, different background, different setting, different lighting, different shadows, different composition, different camera angle, different style, different colors, different clothing, different hair, different hair color, different hair style, different body type, different age, different gender, different ethnicity, different skin tone, change subject, change identity, change face, change pose, change expression, change background, change lighting, change composition, change style, change colors, partial body, cropped, cut off, incomplete, mutated, extra limbs, missing limbs, malformed';
   const [w, h] = size.split('x');
 
   // Build effective image URL for img2img: prefer provided URL, fallback to data URL
@@ -876,20 +876,87 @@ async function chatImageHandler(request) {
       let responseText = '';
 
       const multimodalContent = buildMultimodalContent(
-        `CRITICAL: Generate an image generation prompt to edit this image as: "${editDesc}"
+        `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator.
 
-Study the ORIGINAL image in EXTREME detail. Your goal is to recreate this EXACT image with ONLY the requested change. Describe EVERY visible aspect:
-- Subject: exact identity, age, gender, skin tone, face shape, eye/hair color, hair style, facial features
-- Pose: exact body position, head angle, arm/leg positions
-- Expression: exact facial expression, eye direction, mouth shape
-- Clothing: exact type, color, fabric, fit, style
-- Background: exact setting, objects, colors, lighting, depth
-- Composition: camera angle, shot distance, framing
-- Lighting: direction, type, quality, shadows
+The user wants to edit this image like this: "${editDesc}"
 
-Then apply ONLY: "${editDesc}"
-Keep EVERYTHING else EXACTLY IDENTICAL.
-Format: describe the original image fully, then state only what changes.`,
+Your goal: Write a prompt that will make the image generator RECREATE THIS EXACT IMAGE with ONLY the requested change applied.
+
+STUDY EVERY VISIBLE DETAIL of the original image with EXTREME precision:
+
+SUBJECT & IDENTITY:
+- If person: exact age range, gender, ethnicity, skin tone, face shape, distinctive facial features
+- Eye color, shape, expression
+- Nose shape and size
+- Mouth/lips shape, size, color
+- Hair: exact style, color, length, texture, direction
+- Any facial hair, markings, scars, or distinguishing features
+- Body type, posture, stance, hand positions
+
+CLOTHING & APPEARANCE:
+- Type of each garment
+- EXACT color of each item (specify shade: navy blue, sky blue, etc.)
+- Fabric type
+- Fit and style
+- Any patterns or prints
+- Visible logos or emblems
+- Accessories: jewelry, watches, hats, bags, shoes (with exact colors)
+
+POSE & POSITIONING:
+- Head tilt angle
+- Arm positions and angles
+- Hand gestures
+- Leg position
+- Overall body stance
+- Camera view angle
+
+FACIAL EXPRESSION & EYES:
+- Exact expression
+- Eye gaze direction
+- Eyebrow position
+- Mouth shape
+- Lighting on face
+
+BACKGROUND & ENVIRONMENT:
+- Setting description
+- All visible objects
+- Background colors and textures
+- Depth of field
+- Any visible windows, doors, furniture
+
+LIGHTING & ATMOSPHERE:
+- Light direction and type
+- Shadow positions
+- Highlights and reflections
+- Overall mood
+- Color temperature
+
+COMPOSITION & CAMERA:
+- Camera angle (low/eye-level/high)
+- Shot type (close-up/medium/wide)
+- Framing and crop
+- Aspect ratio
+
+OVERALL STYLE:
+- Photography style
+- Image quality
+- Color grading
+- Overall tone
+
+THEN APPLY ONLY THIS CHANGE: "${editDesc}"
+
+FORMAT YOUR RESPONSE EXACTLY AS:
+ORIGINAL IMAGE: [Detailed description with every detail above]
+CHANGE: [ONLY what changes]
+PRESERVE: Everything from original except the change
+
+CRITICAL:
+- Image must look like the EXACT same photograph with ONLY the requested modification
+- Do NOT change person identity, face, expression, pose unless explicitly requested
+- Do NOT change background, lighting, composition unless explicitly requested
+- Do NOT change clothing/accessories unless explicitly requested
+- Every pixel should match original except the requested change
+- No text, words, letters, symbols, or writing`,
         base64, mimeType
       );
 
@@ -1249,28 +1316,91 @@ async function editImageHandler(request) {
   // Primary: pass original image + edit request as multimodal to LLM
   // Use a hyper-detailed prompt to ensure the vision model captures EVERYTHING about the original
   const multimodalContent = buildMultimodalContent(
-    `CRITICAL: You are generating an image generation prompt for an AI image generator.
-The user wants to edit this image: "${editDesc}"
+    `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator.
 
-Study this ORIGINAL image in EXTREME detail. Your job is to write a prompt that will make the AI image generator recreate this EXACT image with ONLY the requested change applied.
+The user wants to edit this image like this: "${editDesc}"
 
-You MUST describe EVERY visible detail with maximum precision:
-- Subject: exact identity, age, gender, ethnicity, skin tone, face shape, eye color/shape, nose shape, lip shape, hair style/color/length, facial hair
-- Pose: exact body position, head angle, arm/leg positions, hand gestures, overall posture
-- Expression: exact facial expression, eye direction, mouth shape, emotional state
-- Clothing: exact type, color (use specific color names), fabric texture, fit, style, layers, accessories
-- Background: exact setting, objects present, colors, textures, depth, lighting direction and quality
-- Composition: camera angle, shot distance (close-up/medium/wide), aspect ratio, framing
-- Lighting: direction (front/side/back), type (natural/studio/dramatic/soft), shadows, highlights
-- Colors: overall color palette, dominant colors, saturation, contrast levels
-- Style: photographic realism / artistic style / specific art movement
+Your goal: Write a prompt that will make the image generator RECREATE THIS EXACT IMAGE with ONLY the requested change applied.
 
-Then apply ONLY this change: "${editDesc}"
-Keep EVERYTHING else EXACTLY IDENTICAL - the same person with the same face, same expression, same pose, same background, same lighting, same composition, same everything except the change.
+STUDY EVERY VISIBLE DETAIL of the original image with EXTREME precision:
 
-Format your response as a single paragraph starting with "ORIGINAL IMAGE: " followed by the full description, then "CHANGE: " followed ONLY by what changes, then "PRESERVE ALL OTHER DETAILS IDENTICAL."
+SUBJECT & IDENTITY:
+- If person: exact age range, gender, ethnicity, skin tone, face shape, distinctive facial features
+- Eye color, shape, expression
+- Nose shape and size
+- Mouth/lips shape, size, color
+- Hair: exact style, color, length, texture, direction
+- Any facial hair, markings, scars, or distinguishing features
+- Body type, posture, stance, hand positions
+- Any tattoos, piercings, or accessories on the body
 
-CRITICAL: No text, words, letters, symbols, typography, labels, captions, or writing of any kind in the generated image.`,
+CLOTHING & APPEARANCE:
+- Type of each garment (shirt, pants, jacket, etc.)
+- EXACT color of each item (not just "blue" - specify shade: navy blue, sky blue, royal blue, etc.)
+- Fabric type (cotton, silk, denim, leather, etc.)
+- Fit and style
+- Any patterns (stripes, checks, prints)
+- Visible logos, text, or emblems
+- Accessories: jewelry, watches, hats, bags, shoes
+- Exact color of each accessory
+
+POSE & POSITIONING:
+- Head tilt angle
+- Arm positions and angles
+- Hand gestures and positioning
+- Leg position
+- Overall body stance (standing, sitting, leaning, etc.)
+- Camera view (front, side, three-quarter, profile)
+
+FACIAL EXPRESSION & EYES:
+- Exact expression (smile, neutral, angry, sad, surprised, etc.)
+- Eye gaze direction
+- Eyebrow position
+- Mouth shape and openness
+- Lighting on the face (shadows, highlights)
+
+BACKGROUND & ENVIRONMENT:
+- Setting (indoor/outdoor, specific location description)
+- All visible objects in the background
+- Background colors and textures
+- Depth of field (sharp/blurry)
+- Any windows, doors, furniture visible
+
+LIGHTING & ATMOSPHERE:
+- Light direction (front, back, side, from top, etc.)
+- Light type (natural sunlight, artificial, mixed, dramatic, soft, harsh)
+- Shadow positions and intensity
+- Highlights and reflections
+- Overall mood and atmosphere
+- Color temperature (warm/cool/neutral)
+
+COMPOSITION & CAMERA:
+- Camera angle (low, eye-level, high)
+- Shot type (close-up, medium, wide, full body)
+- Framing and crop
+- Aspect ratio (square, portrait, landscape)
+
+OVERALL STYLE & QUALITY:
+- Photography style (portrait, candid, professional, casual)
+- Image quality (sharp, soft focus, motion blur)
+- Color grading or filter applied
+- Overall tone (warm, cool, vibrant, muted)
+
+THEN APPLY ONLY THIS CHANGE: "${editDesc}"
+
+FORMAT YOUR RESPONSE EXACTLY AS:
+ORIGINAL IMAGE: [Detailed description of original with every detail above]
+CHANGE: [ONLY what changes - nothing else changes]
+PRESERVE: Everything from the original except the specific change
+
+CRITICAL RULES:
+- The recreated image must look like the EXACT same photograph/scene/person with ONLY the requested modification
+- Do NOT change the person's identity, face, expression, or pose unless explicitly requested
+- Do NOT change background, lighting, or composition unless explicitly requested
+- Do NOT change clothing/accessories unless explicitly requested
+- Every pixel should match the original except for the requested change
+- No text, words, letters, symbols, typography, or writing in the image
+- Describe with maximum precision and detail - ambiguity will cause the edit to fail`,
     base64, mimeType
   );
 
@@ -1292,7 +1422,7 @@ CRITICAL: No text, words, letters, symbols, typography, labels, captions, or wri
   if (!imagePrompt || imagePrompt.length < 20) {
     // Fallback: construct a better prompt manually
     const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim();
-    imagePrompt = `ORIGINAL IMAGE: A photograph showing a person. CHANGE: ${cleanEdit}. PRESERVE subject identity (face, body, skin, hair), exact same pose, same expression, same background, same lighting, same composition, same camera angle, same clothing (except the specific change), same colors, same overall style EXACTLY IDENTICAL to the original. The result must look like the same photograph/scene with only the described modification. No text, words, letters, or typography in the image.`;
+    imagePrompt = `ORIGINAL IMAGE: A photograph of a subject in a specific setting with particular lighting and composition. CHANGE: ${cleanEdit}. PRESERVE: All other elements EXACTLY IDENTICAL - same subject identity, same facial features, same pose, same expression, same body position, same clothing (except changes), same background, same lighting direction, same camera angle, same composition, same colors, same atmosphere. Make the edited image look like the exact same photograph/scene with only the specific change applied. No text, words, letters, or typography.`;
   }
 
   // Derive response text from the edit request
