@@ -51,6 +51,7 @@ class ChatProvider extends ChangeNotifier {
   bool _isLoading = false;
   bool _isTakingLong = false;
   bool _cancelled = false;
+  final List<Map<String, dynamic>> _messageQueue = [];
   bool get isTakingLong => _isTakingLong;
   ThemeMode _themeMode = ThemeMode.system;
 
@@ -384,7 +385,20 @@ class ChatProvider extends ChangeNotifier {
     }
 
     if (_isLoading) {
-      cancelGeneration();
+      _messageQueue.add({
+        'text': text,
+        'attachments': attach,
+      });
+      final userMsg = ChatMessage(
+        role: 'user',
+        content: text,
+        attachments: List.from(attach),
+      );
+      _currentConversation!.messages.add(userMsg);
+      _currentConversation!.updatedAt = DateTime.now();
+      if (attachments == null) _pendingAttachments.clear();
+      notifyListeners();
+      return;
     }
 
     _cancelled = false;
@@ -423,6 +437,7 @@ class ChatProvider extends ChangeNotifier {
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
           notifyListeners();
+          _processQueue();
           return;
         }
         if (rawContent.isEmpty && imageData.isEmpty && fileData.isEmpty) {
@@ -435,6 +450,7 @@ class ChatProvider extends ChangeNotifier {
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
           notifyListeners();
+          _processQueue();
           return;
         }
         if (rawContent.isNotEmpty || imageData.isNotEmpty || fileData.isNotEmpty) {
@@ -453,6 +469,7 @@ class ChatProvider extends ChangeNotifier {
         _isLoading = false;
         _prefs.saveConversations(_conversations).catchError((_) {});
         notifyListeners();
+        _processQueue();
         return;
       } catch (e) {
         if (_cancelled) break;
@@ -478,6 +495,16 @@ class ChatProvider extends ChangeNotifier {
     _isLoading = false;
     _prefs.saveConversations(_conversations).catchError((_) {});
     notifyListeners();
+    _processQueue();
+  }
+
+  void _processQueue() {
+    if (_messageQueue.isEmpty) return;
+    final next = _messageQueue.removeAt(0);
+    sendMessage(
+      next['text'] as String,
+      attachments: next['attachments'] as List<MessageAttachment>?,
+    );
   }
 
   void _addAssistantMessage(String content) {

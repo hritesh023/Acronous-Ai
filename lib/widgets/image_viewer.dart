@@ -104,19 +104,19 @@ class _ImageViewerState extends State<ImageViewer>
             ),
             Positioned(
               bottom: 56,
-              right: 12,
+              right: 16,
               child: Container(
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(3),
+                  color: Colors.black.withValues(alpha: 0.35),
+                  borderRadius: BorderRadius.circular(4),
                 ),
-                padding: const EdgeInsets.all(2),
+                padding: const EdgeInsets.all(3),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(2),
                   child: Image.asset(
                     'assets/logo.png',
-                    width: 12,
-                    height: 12,
+                    width: 16,
+                    height: 16,
                   ),
                 ),
               ),

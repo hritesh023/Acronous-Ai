@@ -67,6 +67,16 @@ function arrayBufferToBase64(buffer) {
   return btoa(chunks.join(''));
 }
 
+function computeSeed(bytes) {
+  let hash = 5381;
+  const arr = new Uint8Array(bytes.slice(0, Math.min(bytes.byteLength, 10000)));
+  for (let i = 0; i < arr.length; i++) {
+    hash = ((hash << 5) + hash) + arr[i];
+    hash = hash & hash;
+  }
+  return Math.abs(hash) % 1000000;
+}
+
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -665,8 +675,8 @@ function isValidImagePrompt(text, originalUserText) {
   return true;
 }
 
-async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, priority = false } = {}) {
-  const seed = Math.floor(Math.random() * 1000000);
+async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, priority = false, seed: customSeed } = {}) {
+  const seed = customSeed ?? Math.floor(Math.random() * 1000000);
   const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality, watermark, branding, logo, label, title, heading';
   const [w, h] = size.split('x');
   const timeout = priority ? 120000 : 60000;
@@ -776,19 +786,26 @@ async function chatImageHandler(request) {
       let responseText = '';
       try {
         const editContent = buildMultimodalContent(
-          `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION): "${originalDescription}"
-USER EDIT REQUEST: "${editDesc}"
-${isEnhanceRequest ? 'Enhance quality only, change nothing else. Keep the subject, pose, expression, clothing, background, lighting, and composition IDENTICAL.' : 'Apply ONLY the specific change requested below. Keep EVERYTHING else from the original image IDENTICAL — same subject, same pose, same expression, same clothing, same background, same lighting, same composition, same art style.'}
+          `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION — this is the EXACT image that must be edited): "${originalDescription}"
 
-CRITICAL RULES:
-- The original image description above is EXACT. Preserve ALL details that are NOT being changed.
-- Apply ONLY the user's requested change.
-- Do NOT alter the subject's identity, face, body, pose, or expression unless specifically requested.
-- Do NOT change clothing, colors, or accessories unless specifically requested.
-- Do NOT change the background, lighting, or composition unless specifically requested.
-- Keep the same art style, resolution, and overall aesthetic.
+USER WANTS TO CHANGE ONLY: "${editDesc}"
 
-Generate a SINGLE detailed text-to-image prompt that describes the ENTIRE scene with ONLY the requested change applied. Start with the original subject description, then state the change. No text/words/letters in the image. Return ONLY the prompt.`,
+CRITICAL — You are generating a text-to-image prompt that MUST produce an image ALMOST IDENTICAL to the original, with ONLY ONE change:
+
+1. The image MUST show the EXACT same subject (same person/animal/object, same identity, same face, same pose, same expression)
+2. The EXACT same clothing, colors, accessories
+3. The EXACT same background, setting, lighting
+4. The EXACT same composition, camera angle, art style
+5. The ONLY thing different should be: ${editDesc}
+
+How to write the prompt:
+Start with: "A photograph virtually identical to the original image showing [EXACT main subject from description above]"
+Then describe EVERY detail that stays the same (pose, clothing, background, lighting, colors)
+Then say: "The only difference is that [specific change]"
+End with: "Everything else — lighting, background, colors, details — is exactly the same as the original"
+
+Do NOT add any text, words, or letters to the image.
+Return ONLY the prompt, no explanations.`,
           base64, mimeType,
         );
         for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL].filter(Boolean)) {
@@ -805,15 +822,16 @@ Generate a SINGLE detailed text-to-image prompt that describes the ENTIRE scene 
             }
           } catch {}
         }
-        responseText = isEnhanceRequest ? 'Here is your enhanced image.' : 'Here is your edited image.';
+        responseText = isEnhanceRequest ? 'Enhanced!' : 'Edited!';
       } catch {}
 
       if (!imagePrompt || imagePrompt.length < 20) {
-        imagePrompt = `${originalDescription}, ${editDesc}, no text, preserve original composition`;
+        imagePrompt = `Original image of ${originalDescription}, but with ${editDesc}. Everything else is identical — same subject, same pose, same clothing, same background, same lighting, same composition. No text.`;
       }
 
       try {
-        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 1 });
+        const seed = computeSeed(fileBytes);
+        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed });
         const resultBase64 = arrayBufferToBase64(imageBuffer);
 
         return jsonResponse({
@@ -1157,19 +1175,26 @@ async function editImageHandler(request) {
   let responseText = '';
   try {
     const editContent = buildMultimodalContent(
-      `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION): "${originalDescription}"
-USER EDIT REQUEST: "${editDesc}"
-${isEnhance ? 'Enhance quality only, change nothing else. Keep the subject, pose, expression, clothing, background, lighting, and composition IDENTICAL.' : 'Apply ONLY the specific change requested below. Keep EVERYTHING else from the original image IDENTICAL — same subject, same pose, same expression, same clothing, same background, same lighting, same composition, same art style.'}
+      `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION — this is the EXACT image that must be edited): "${originalDescription}"
 
-CRITICAL RULES:
-- The original image description above is EXACT. Preserve ALL details that are NOT being changed.
-- Apply ONLY the user's requested change.
-- Do NOT alter the subject's identity, face, body, pose, or expression unless specifically requested.
-- Do NOT change clothing, colors, or accessories unless specifically requested.
-- Do NOT change the background, lighting, or composition unless specifically requested.
-- Keep the same art style, resolution, and overall aesthetic.
+USER WANTS TO CHANGE ONLY: "${editDesc}"
 
-Generate a SINGLE detailed text-to-image prompt that describes the ENTIRE scene with ONLY the requested change applied. Start with the original subject description, then state the change. No text/words/letters in the image. Return ONLY the prompt.`,
+CRITICAL — You are generating a text-to-image prompt that MUST produce an image ALMOST IDENTICAL to the original, with ONLY ONE change:
+
+1. The image MUST show the EXACT same subject (same person/animal/object, same identity, same face, same pose, same expression)
+2. The EXACT same clothing, colors, accessories
+3. The EXACT same background, setting, lighting
+4. The EXACT same composition, camera angle, art style
+5. The ONLY thing different should be: ${editDesc}
+
+How to write the prompt:
+Start with: "A photograph virtually identical to the original image showing [EXACT main subject from description above]"
+Then describe EVERY detail that stays the same (pose, clothing, background, lighting, colors)
+Then say: "The only difference is that [specific change]"
+End with: "Everything else — lighting, background, colors, details — is exactly the same as the original"
+
+Do NOT add any text, words, or letters to the image.
+Return ONLY the prompt, no explanations.`,
       base64, mimeType,
     );
     for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL].filter(Boolean)) {
@@ -1186,16 +1211,17 @@ Generate a SINGLE detailed text-to-image prompt that describes the ENTIRE scene 
         }
       } catch {}
     }
-    responseText = isEnhance ? 'Here is your enhanced image.' : 'Here is your edited image.';
+    responseText = isEnhance ? 'Enhanced!' : 'Edited!';
   } catch {}
 
   if (!imagePrompt || imagePrompt.length < 20) {
-    imagePrompt = `${originalDescription}, ${editDesc}, no text, preserve original composition`;
+    imagePrompt = `Original image of ${originalDescription}, but with ${editDesc}. Everything else is identical — same subject, same pose, same clothing, same background, same lighting, same composition. No text.`;
   }
 
-  // ── Generate image ──────────────────────────────────
+  // ── Generate image with seed from original bytes ──
   try {
-    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 1 });
+    const seed = computeSeed(fileBytes);
+    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed });
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     return jsonResponse({
       response: responseText,
