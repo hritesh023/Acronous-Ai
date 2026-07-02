@@ -59,7 +59,11 @@ class _ImageViewerState extends State<ImageViewer>
           ),
           actions: [
             IconButton(
-              icon: Icon(Icons.zoom_out_map_rounded, color: Colors.white, size: 24),
+              icon: Icon(
+                Icons.zoom_out_map_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
               onPressed: _resetZoom,
             ),
           ],
@@ -75,6 +79,8 @@ class _ImageViewerState extends State<ImageViewer>
             maxScale: 5.0,
             boundaryMargin: const EdgeInsets.all(100),
             child: Stack(
+              fit: StackFit.loose,
+              alignment: Alignment.bottomRight,
               children: [
                 Hero(
                   tag: 'generated_image_${UniqueKey().toString()}',
@@ -92,8 +98,8 @@ class _ImageViewerState extends State<ImageViewer>
                   ),
                 ),
                 Positioned(
-                  bottom: 8,
-                  right: 8,
+                  bottom: 4,
+                  right: 4,
                   child: Container(
                     decoration: BoxDecoration(
                       color: Colors.black.withValues(alpha: 0.35),
@@ -114,13 +120,17 @@ class _ImageViewerState extends State<ImageViewer>
             ),
           ),
         ),
-      bottomNavigationBar: SafeArea(
+        bottomNavigationBar: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.zoom_in, size: 16, color: Colors.white.withValues(alpha: 0.5)),
+                Icon(
+                  Icons.zoom_in,
+                  size: 16,
+                  color: Colors.white.withValues(alpha: 0.5),
+                ),
                 const SizedBox(width: 6),
                 Text(
                   'Pinch to zoom \u2022 Double-tap to reset',

@@ -305,7 +305,8 @@ class ChatMessageWidget extends StatelessWidget {
                       child: ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 300),
                     child: Stack(
-                      fit: StackFit.expand,
+                      fit: StackFit.loose,
+                      alignment: Alignment.bottomRight,
                       children: [
                         Image.memory(
                           Uint8List.fromList(bytes),
@@ -324,8 +325,8 @@ class ChatMessageWidget extends StatelessWidget {
                           },
                         ),
                         Positioned(
-                          bottom: 8,
-                          right: 8,
+                          bottom: 4,
+                          right: 4,
                           child: Container(
                             decoration: BoxDecoration(
                               color: Colors.black.withValues(alpha: 0.35),

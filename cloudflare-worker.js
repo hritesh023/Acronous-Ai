@@ -737,43 +737,48 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
       } catch {}
     }
 
-    // Try free img2img via image.pollinations.ai with img parameter
-    try {
-      const encodedPrompt = encodeURIComponent(prompt);
-      const encodedImage = encodeURIComponent(effectiveImageUrl);
-      const encodedNegative = encodeURIComponent(negative);
-      const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=flux&negative=${encodedNegative}&seed=${seed}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
-      const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
-      if (resp.ok) {
-        const ct = resp.headers.get('content-type') || '';
-        if (ct.startsWith('image/')) {
-          const buf = await resp.arrayBuffer();
-          if (buf && buf.byteLength > 500) return buf;
-        }
-      }
-    } catch {}
-  }
-
-  // Standard text-to-image via image.pollinations.ai (free, no key)
-  const models = [model, 'flux-schnell', 'turbo'];
-  for (const m of models) {
-    for (let r = 0; r <= retries; r++) {
+    // Try free img2img via image.pollinations.ai with img parameter - multiple attempts
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const encodedPrompt = encodeURIComponent(prompt);
+        const encodedImage = encodeURIComponent(effectiveImageUrl);
         const encodedNegative = encodeURIComponent(negative);
-        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          continue;
-        }
-        const ct = resp.headers.get('content-type') || '';
-        if (!ct.startsWith('image/')) continue;
-        const buf = await resp.arrayBuffer();
-        if (buf && buf.byteLength > 500) {
-          return buf;
+        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=flux&negative=${encodedNegative}&seed=${seed + attempt}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
+        const resp = await fetch(url, { signal: AbortSignal.timeout(45000) });
+        if (resp.ok) {
+          const ct = resp.headers.get('content-type') || '';
+          if (ct.startsWith('image/')) {
+            const buf = await resp.arrayBuffer();
+            if (buf && buf.byteLength > 500) return buf;
+          }
         }
       } catch {}
-      if (r < retries) await new Promise(r2 => setTimeout(r2, 1500 * (r + 1)));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  // Only fallback to text-to-image if no image source was provided
+  if (!effectiveImageUrl) {
+    const models = [model, 'flux-schnell', 'turbo'];
+    for (const m of models) {
+      for (let r = 0; r <= retries; r++) {
+        try {
+          const encodedPrompt = encodeURIComponent(prompt);
+          const encodedNegative = encodeURIComponent(negative);
+          const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
+          const resp = await fetch(url);
+          if (!resp.ok) {
+            continue;
+          }
+          const ct = resp.headers.get('content-type') || '';
+          if (!ct.startsWith('image/')) continue;
+          const buf = await resp.arrayBuffer();
+          if (buf && buf.byteLength > 500) {
+            return buf;
+          }
+        } catch {}
+        if (r < retries) await new Promise(r2 => setTimeout(r2, 1500 * (r + 1)));
+      }
     }
   }
   throw new Error('Image generation failed');
