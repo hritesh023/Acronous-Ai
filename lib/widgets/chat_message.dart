@@ -297,56 +297,54 @@ class ChatMessageWidget extends StatelessWidget {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(14),
-                child: Stack(
-                  children: [
-                    AnimatedOpacity(
-                      opacity: 1.0,
-                      duration: const Duration(milliseconds: 400),
+                child: AnimatedOpacity(
+                  opacity: 1.0,
+                  duration: const Duration(milliseconds: 400),
+                    child: AspectRatio(
+                      aspectRatio: 1,
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 300),
-                        child: Stack(
-                          children: [
-                            Image.memory(
-                              Uint8List.fromList(bytes),
-                              fit: BoxFit.contain,
-                              width: double.infinity,
-                              errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                                if (wasSynchronouslyLoaded) return child;
-                                if (frame == null) {
-                                  return _imagePlaceholder(cs);
-                                }
-                                return AnimatedOpacity(
-                                  opacity: 1.0,
-                                  duration: const Duration(milliseconds: 300),
-                                  child: child,
-                                );
-                              },
+                    constraints: const BoxConstraints(maxHeight: 300),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.memory(
+                          Uint8List.fromList(bytes),
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
+                          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                            if (wasSynchronouslyLoaded) return child;
+                            if (frame == null) {
+                              return _imagePlaceholder(cs);
+                            }
+                            return AnimatedOpacity(
+                              opacity: 1.0,
+                              duration: const Duration(milliseconds: 300),
+                              child: child,
+                            );
+                          },
+                        ),
+                        Positioned(
+                          bottom: 8,
+                          right: 8,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.35),
+                              borderRadius: BorderRadius.circular(4),
                             ),
-                            Positioned(
-                              bottom: 4,
-                              right: 4,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.35),
-                                  borderRadius: BorderRadius.circular(2),
-                                ),
-                                padding: const EdgeInsets.all(1),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(1),
-                                  child: Image.asset(
-                                    'assets/logo.png',
-                                    width: 10,
-                                    height: 10,
-                                  ),
-                                ),
+                            padding: const EdgeInsets.all(2),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(3),
+                              child: Image.asset(
+                                'assets/logo.png',
+                                width: 24,
+                                height: 24,
                               ),
                             ),
-                          ],
+                          ),
                         ),
-                      ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),

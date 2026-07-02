@@ -662,10 +662,10 @@ async function constructEditPrompt(userRequest, originalDescription) {
 
   try {
     const llmMessages = [
-      { role: 'system', content: 'You generate MINIMAL image edit prompts. CRITICAL: ONLY describe what changed — NEVER re-describe the original subject. Begin with "Original image of [brief subject], now with" followed by ONLY the changes. Keep it under 30 words. No text, no typography in the image.' },
-      { role: 'user', content: `Original: "${subject}"\nChange only: "${userRequest}"\n\nGenerate ONE short sentence starting with "Original image of" then ONLY describing what changed.` },
+      { role: 'system', content: 'You generate detailed image edit prompts. Describe the ORIGINAL image/subject in detail first, then specify ONLY what changes. CRITICAL: Every visible detail of the original must be preserved except the specific change. Format: "ORIGINAL IMAGE: [full original description]. CHANGE: [only what changes]. PRESERVE ALL OTHER DETAILS IDENTICAL. No text, no typography."' },
+      { role: 'user', content: `Original: "${subject}"\nChange only: "${userRequest}"\n\nGenerate a prompt that describes the original image fully, then specifies only what changes. Preserve the subject identity, face, body, pose, expression, background, lighting, and composition EXACTLY except for the change.` },
     ];
-    const resp = await callOpenRouter(llmMessages, { model: OPENROUTER_MODEL, stream: false, max_tokens: 200, temperature: 0.1 });
+    const resp = await callOpenRouter(llmMessages, { model: OPENROUTER_MODEL, stream: false, max_tokens: 400, temperature: 0.1 });
     const data = await resp.json();
     const generated = data?.choices?.[0]?.message?.content?.trim();
     if (generated && generated.length > 15 && isValidImagePrompt(generated, userRequest)) {
@@ -679,9 +679,9 @@ async function constructEditPrompt(userRequest, originalDescription) {
     .trim();
 
   if (cleanRequest && cleanRequest.length > 5) {
-    return `Original image of ${subject}, now with ${cleanRequest}`;
+    return `ORIGINAL IMAGE: ${subject}. CHANGE: ${cleanRequest}. PRESERVE subject identity, face, pose, expression, background, lighting, composition IDENTICAL. No text or typography.`;
   }
-  return `Original image of ${subject}`;
+  return `ORIGINAL IMAGE: ${subject}. PRESERVE EVERYTHING IDENTICAL. No text or typography.`;
 }
 
 // Responses are now LLM-generated — no hardcoded templates
@@ -704,27 +704,51 @@ function isValidImagePrompt(text, originalUserText) {
   return true;
 }
 
-async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed, imageUrl } = {}) {
+async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed, imageUrl, imageBase64, imageMime } = {}) {
   const seed = customSeed ?? Math.floor(Math.random() * 1000000);
-  const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality';
+  const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality, different person, different face, different identity, different pose, different expression, different background, different lighting, different composition, different style, different colors, different clothing, different hair, different body type, different age, different gender, different ethnicity, change subject, change identity, change face, change pose, change expression, change background, change lighting, change composition, change style, change colors';
   const [w, h] = size.split('x');
 
-  // Try img2img with gen.pollinations.ai if image URL is provided and API key is available
-  if (imageUrl && typeof POLLINATIONS_API_KEY !== 'undefined' && POLLINATIONS_API_KEY) {
-    try {
-      const imgModels = ['gptimage-large', 'klein', 'flux'];
-      for (const m of imgModels) {
-        const encodedPrompt = encodeURIComponent(prompt);
-        const imgUrl = `https://gen.pollinations.ai/image/${encodedPrompt}?model=${m}&seed=${seed}&image=${encodeURIComponent(imageUrl)}&nojson=1&width=${w}&height=${h}`;
-        const resp = await fetch(imgUrl, {
-          headers: { 'Authorization': `Bearer ${POLLINATIONS_API_KEY}` },
-        });
-        if (resp.ok) {
-          const ct = resp.headers.get('content-type') || '';
-          if (ct.startsWith('image/')) {
-            const buf = await resp.arrayBuffer();
-            if (buf && buf.byteLength > 500) return buf;
+  // Build effective image URL for img2img: prefer provided URL, fallback to data URL
+  const effectiveImageUrl = imageUrl || (imageBase64 ? `data:${imageMime || 'image/jpeg'};base64,${imageBase64}` : null);
+
+  // Try img2img with gen.pollinations.ai if image source is available
+  if (effectiveImageUrl) {
+    // Try with API key first (gen.pollinations.ai)
+    if (typeof POLLINATIONS_API_KEY !== 'undefined' && POLLINATIONS_API_KEY) {
+      try {
+        const imgModels = ['gptimage-large', 'klein', 'flux'];
+        for (const m of imgModels) {
+          const encodedPrompt = encodeURIComponent(prompt);
+          const encodedImage = encodeURIComponent(effectiveImageUrl);
+          const imgUrl = `https://gen.pollinations.ai/image/${encodedPrompt}?model=${m}&seed=${seed}&image=${encodedImage}&nojson=1&width=${w}&height=${h}`;
+          const resp = await fetch(imgUrl, {
+            headers: { 'Authorization': `Bearer ${POLLINATIONS_API_KEY}` },
+            signal: AbortSignal.timeout(60000),
+          });
+          if (resp.ok) {
+            const ct = resp.headers.get('content-type') || '';
+            if (ct.startsWith('image/')) {
+              const buf = await resp.arrayBuffer();
+              if (buf && buf.byteLength > 500) return buf;
+            }
           }
+        }
+      } catch {}
+    }
+
+    // Try free img2img via image.pollinations.ai with img parameter
+    try {
+      const encodedPrompt = encodeURIComponent(prompt);
+      const encodedImage = encodeURIComponent(effectiveImageUrl);
+      const encodedNegative = encodeURIComponent(negative);
+      const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=flux&negative=${encodedNegative}&seed=${seed}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
+      const resp = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (resp.ok) {
+        const ct = resp.headers.get('content-type') || '';
+        if (ct.startsWith('image/')) {
+          const buf = await resp.arrayBuffer();
+          if (buf && buf.byteLength > 500) return buf;
         }
       }
     } catch {}
@@ -790,9 +814,9 @@ function buildEditPromptForGen(originalDesc, editRequest) {
     .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
     .trim();
   if (!cleanEdit || cleanEdit.length < 3) {
-    return `The image shows ${originalDesc}`;
+    return `ORIGINAL IMAGE: ${originalDesc}. CHANGE: None. PRESERVE EVERYTHING IDENTICAL. No text, words, or letters in the image.`;
   }
-  return `The image shows ${originalDesc}. The requested change: ${cleanEdit}. Keep the subject, pose, expression, clothing, background, lighting, and composition IDENTICAL to the described image. ONLY apply the requested change. No text, words, or letters in the image.`;
+  return `ORIGINAL IMAGE: ${originalDesc}. CHANGE: Only apply this specific change — ${cleanEdit}. CRITICAL: Keep the subject identity (face, body, skin, hair), exact same pose, same expression, same background, same lighting, same composition, same camera angle, same clothing (except the specific change), same colors, same overall style EXACTLY IDENTICAL to the original. The result must look like the same photograph/scene with only the described modification. No text, words, letters, or typography in the image.`;
 }
 
 // ── Chat with Image (POST /v1/chat/image) ────────────────────────────────
@@ -847,24 +871,29 @@ async function chatImageHandler(request) {
       let responseText = '';
 
       const multimodalContent = buildMultimodalContent(
-        `Edit this image as: "${editDesc}"
+        `CRITICAL: Generate an image generation prompt to edit this image as: "${editDesc}"
 
-  Study the original image carefully. Generate an image generation prompt that:
-  1. Describes the EXACT original image first — every visible detail
-  2. Applies ONLY the requested change
-  3. Keeps everything else IDENTICAL — subject, pose, expression, clothing, background, lighting
-  4. No text, words, or typography in the image
+Study the ORIGINAL image in EXTREME detail. Your goal is to recreate this EXACT image with ONLY the requested change. Describe EVERY visible aspect:
+- Subject: exact identity, age, gender, skin tone, face shape, eye/hair color, hair style, facial features
+- Pose: exact body position, head angle, arm/leg positions
+- Expression: exact facial expression, eye direction, mouth shape
+- Clothing: exact type, color, fabric, fit, style
+- Background: exact setting, objects, colors, lighting, depth
+- Composition: camera angle, shot distance, framing
+- Lighting: direction, type, quality, shadows
 
-  Start with "The image shows" followed by all original details.`,
+Then apply ONLY: "${editDesc}"
+Keep EVERYTHING else EXACTLY IDENTICAL.
+Format: describe the original image fully, then state only what changes.`,
         base64, mimeType
       );
 
-      const systemMsg = { role: 'system', content: 'You generate precise image prompts. Look at the original image, describe it in full detail, then apply only the requested edit.' };
+      const systemMsg = { role: 'system', content: 'You are an expert image analyst and prompt engineer specializing in image-to-image editing. Your goal is to write prompts that will make an AI image generator recreate the ORIGINAL image EXACTLY with ONLY the requested change applied. Every pixel-level detail matters - preserve subject identity, face, pose, expression, background, lighting, and composition EXACTLY as they are in the original.' };
       const userMsg = { role: 'user', content: multimodalContent };
 
       for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
         try {
-          const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 800, temperature: 0.1 });
+          const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 1500, temperature: 0.1 });
           const data = await resp.json();
           const output = data?.choices?.[0]?.message?.content?.trim();
           if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
@@ -882,7 +911,12 @@ async function chatImageHandler(request) {
 
       try {
         const seed = computeSeed(fileBytes);
-        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 3, seed });
+        const imageBuffer = await pollinationsImage(imagePrompt, {
+          retries: 3,
+          seed,
+          imageBase64: base64,
+          imageMime: mimeType,
+        });
         const resultBase64 = arrayBufferToBase64(imageBuffer);
         return jsonResponse({
           response: responseText,
@@ -1208,25 +1242,39 @@ async function editImageHandler(request) {
   let responseText = '';
 
   // Primary: pass original image + edit request as multimodal to LLM
+  // Use a hyper-detailed prompt to ensure the vision model captures EVERYTHING about the original
   const multimodalContent = buildMultimodalContent(
-    `Edit this image as: "${editDesc}"
+    `CRITICAL: You are generating an image generation prompt for an AI image generator.
+The user wants to edit this image: "${editDesc}"
 
-  Study the original image carefully. Generate an image generation prompt that:
-  1. Describes the EXACT original image first — every visible detail
-  2. Applies ONLY the requested change
-  3. Keeps subject, pose, expression, clothing, background, lighting, composition IDENTICAL
-  4. No text, words, letters, or typography in the image
+Study this ORIGINAL image in EXTREME detail. Your job is to write a prompt that will make the AI image generator recreate this EXACT image with ONLY the requested change applied.
 
-  Start with "The image shows" followed by all original details.`,
+You MUST describe EVERY visible detail with maximum precision:
+- Subject: exact identity, age, gender, ethnicity, skin tone, face shape, eye color/shape, nose shape, lip shape, hair style/color/length, facial hair
+- Pose: exact body position, head angle, arm/leg positions, hand gestures, overall posture
+- Expression: exact facial expression, eye direction, mouth shape, emotional state
+- Clothing: exact type, color (use specific color names), fabric texture, fit, style, layers, accessories
+- Background: exact setting, objects present, colors, textures, depth, lighting direction and quality
+- Composition: camera angle, shot distance (close-up/medium/wide), aspect ratio, framing
+- Lighting: direction (front/side/back), type (natural/studio/dramatic/soft), shadows, highlights
+- Colors: overall color palette, dominant colors, saturation, contrast levels
+- Style: photographic realism / artistic style / specific art movement
+
+Then apply ONLY this change: "${editDesc}"
+Keep EVERYTHING else EXACTLY IDENTICAL - the same person with the same face, same expression, same pose, same background, same lighting, same composition, same everything except the change.
+
+Format your response as a single paragraph starting with "ORIGINAL IMAGE: " followed by the full description, then "CHANGE: " followed ONLY by what changes, then "PRESERVE ALL OTHER DETAILS IDENTICAL."
+
+CRITICAL: No text, words, letters, symbols, typography, labels, captions, or writing of any kind in the generated image.`,
     base64, mimeType
   );
 
-  const systemMsg = { role: 'system', content: 'You generate precise image prompts. Look at the original image, describe it in full detail, then apply only the requested edit. Preserve everything else exactly.' };
+  const systemMsg = { role: 'system', content: 'You are an expert image analyst and prompt engineer. Describe images with EXTREME precision and detail. Your prompts must recreate the original image exactly with only the requested change applied. Every pixel-level detail matters.' };
   const userMsg = { role: 'user', content: multimodalContent };
 
   for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
     try {
-      const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 800, temperature: 0.1 });
+      const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 1500, temperature: 0.1 });
       const data = await resp.json();
       const output = data?.choices?.[0]?.message?.content?.trim();
       if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
@@ -1237,16 +1285,22 @@ async function editImageHandler(request) {
   }
 
   if (!imagePrompt || imagePrompt.length < 20) {
-    imagePrompt = editDesc;
+    // Fallback: construct a better prompt manually
+    imagePrompt = `ORIGINAL IMAGE: A photograph showing a person. CHANGE: ${editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, ').trim()}. PRESERVE subject identity (face, body, skin, hair), exact same pose, same expression, same background, same lighting, same composition, same camera angle, same clothing (except the specific change), same colors, same overall style EXACTLY IDENTICAL to the original. The result must look like the same photograph/scene with only the described modification. No text, words, letters, or typography in the image.`;
   }
 
   // Derive response text from the edit request
   responseText = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
 
-  // ── Phase 2: Generate edited image ──
+  // ── Phase 2: Generate edited image with img2img support ──
   try {
     const seed = computeSeed(fileBytes);
-    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 3, seed });
+    const imageBuffer = await pollinationsImage(imagePrompt, {
+      retries: 3,
+      seed,
+      imageBase64: base64,
+      imageMime: mimeType,
+    });
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     return jsonResponse({
       response: responseText,
@@ -1402,7 +1456,12 @@ Start with "The image shows" followed by all original details.`,
     }
 
     const seed = computeSeed(fileBytes);
-    const imageBuffer = await pollinationsImage(redesignPrompt, { retries: 2, seed });
+    const imageBuffer = await pollinationsImage(redesignPrompt, {
+      retries: 2,
+      seed,
+      imageBase64: base64,
+      imageMime: mimeType,
+    });
     const b64 = arrayBufferToBase64(imageBuffer);
 
     return jsonResponse({ content: b64, error: null, prompt: redesignPrompt, session_id });
