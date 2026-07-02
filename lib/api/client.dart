@@ -602,7 +602,7 @@ class ApiClient {
   }
 
   Future<bool> waitForReady({
-    Duration timeout = const Duration(seconds: 120),
+    Duration timeout = const Duration(seconds: 10),
   }) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {

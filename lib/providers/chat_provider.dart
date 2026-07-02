@@ -118,10 +118,10 @@ class ChatProvider extends ChangeNotifier {
           _api.updateBaseUrl(bestUrl);
           await _prefs.saveServerUrl(bestUrl);
           await _api.wakeup(timeout: const Duration(seconds: 15));
-          final ready = await _api.waitForReady(
+          final ready =           await _api.waitForReady(
             timeout: bestUrl.startsWith('https://')
-                ? const Duration(seconds: 120)
-                : const Duration(seconds: 30),
+                ? const Duration(seconds: 10)
+                : const Duration(seconds: 10),
           );
           if (!ready) {
             final healthy = await _api.healthCheck();
