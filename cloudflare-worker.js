@@ -675,13 +675,11 @@ function isValidImagePrompt(text, originalUserText) {
   return true;
 }
 
-async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, priority = false, seed: customSeed } = {}) {
+async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed, imageBase64 } = {}) {
   const seed = customSeed ?? Math.floor(Math.random() * 1000000);
-  const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality, watermark, branding, logo, label, title, heading';
+  const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality';
   const [w, h] = size.split('x');
-  const timeout = priority ? 120000 : 60000;
 
-  // List of models to try in order
   const models = [model, 'flux-schnell', 'turbo'];
 
   for (const m of models) {
@@ -689,8 +687,11 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
       try {
         const encodedPrompt = encodeURIComponent(prompt);
         const encodedNegative = encodeURIComponent(negative);
-        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1&nologo=1`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+        let url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
+        if (imageBase64) {
+          url += `&image=${encodeURIComponent(imageBase64)}`;
+        }
+        const resp = await fetch(url);
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
           continue;
@@ -698,7 +699,7 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
         const ct = resp.headers.get('content-type') || '';
         if (!ct.startsWith('image/')) continue;
         const buf = await resp.arrayBuffer();
-        if (buf && buf.byteLength > 5000) {
+        if (buf && buf.byteLength > 500) {
           return buf;
         }
       } catch {}
@@ -831,7 +832,8 @@ Return ONLY the prompt, no explanations.`,
 
       try {
         const seed = computeSeed(fileBytes);
-        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed });
+        const imageDataUri = `data:${mimeType};base64,${base64}`;
+        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed, imageBase64: imageDataUri });
         const resultBase64 = arrayBufferToBase64(imageBuffer);
 
         return jsonResponse({
@@ -1079,11 +1081,11 @@ async function generateImageHandler(request) {
     // Try primary pollinations endpoint, fallback to alternative model/flux-schnell if fails
     let imageBuffer;
     try {
-      imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, priority: true });
+      imageBuffer = await pollinationsImage(imagePrompt, { retries: 2 });
     } catch (primaryErr) {
       try {
         // Fallback: try with flux-schnell model
-        imageBuffer = await pollinationsImage(imagePrompt, { model: 'flux-schnell', retries: 1, priority: true });
+        imageBuffer = await pollinationsImage(imagePrompt, { model: 'flux-schnell', retries: 1 });
       } catch (fallbackErr) {
         throw new Error('Image generation service unavailable');
       }
@@ -1221,7 +1223,8 @@ Return ONLY the prompt, no explanations.`,
   // ── Generate image with seed from original bytes ──
   try {
     const seed = computeSeed(fileBytes);
-    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed });
+    const imageDataUri = `data:${mimeType};base64,${base64}`;
+    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed, imageBase64: imageDataUri });
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     return jsonResponse({
       response: responseText,
@@ -1403,7 +1406,8 @@ OUTPUT: Only the image generation prompt — starting with the exact main subjec
       redesignPrompt = await constructEditPrompt(prompt, originalDescription);
     }
 
-    const imageBuffer = await pollinationsImage(redesignPrompt);
+    const imageDataUri = `data:${mimeType};base64,${base64}`;
+    const imageBuffer = await pollinationsImage(redesignPrompt, { imageBase64: imageDataUri });
     const b64 = arrayBufferToBase64(imageBuffer);
 
     return jsonResponse({ content: b64, error: null, prompt: redesignPrompt, session_id });
@@ -2656,3 +2660,4 @@ export default {
     }
   },
 };
+

@@ -1,5 +1,7 @@
+import 'dart:typed_data';
 import 'dart:io';
 import 'dart:html' as html;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -21,6 +23,7 @@ class _ImageViewerState extends State<ImageViewer>
       TransformationController();
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
+  final GlobalKey _repaintKey = GlobalKey();
 
   @override
   void initState() {
@@ -77,7 +80,9 @@ class _ImageViewerState extends State<ImageViewer>
             statusBarIconBrightness: Brightness.light,
           ),
         ),
-        body: Stack(
+        body: RepaintBoundary(
+          key: _repaintKey,
+          child: Stack(
           children: [
             Center(
               child: InteractiveViewer(
@@ -123,6 +128,7 @@ class _ImageViewerState extends State<ImageViewer>
             ),
           ],
         ),
+      ),
         bottomNavigationBar: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -148,8 +154,15 @@ class _ImageViewerState extends State<ImageViewer>
 
   Future<void> _saveToGallery(BuildContext context) async {
     try {
+      final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      if (boundary == null) return;
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) return;
+      final watermarkedBytes = byteData.buffer.asUint8List();
+
       if (kIsWeb) {
-        final blob = html.Blob([widget.imageBytes], 'image/png');
+        final blob = html.Blob([watermarkedBytes], 'image/png');
         final url = html.Url.createObjectUrlFromBlob(blob);
         final anchor = html.document.createElement('a') as html.AnchorElement
           ..href = url
@@ -161,7 +174,7 @@ class _ImageViewerState extends State<ImageViewer>
       } else {
         final dir = await getApplicationDocumentsDirectory();
         final file = File('${dir.path}/acronous_ai_image_${DateTime.now().millisecondsSinceEpoch}.png');
-        await file.writeAsBytes(widget.imageBytes);
+        await file.writeAsBytes(watermarkedBytes);
       }
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
