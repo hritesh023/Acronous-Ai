@@ -662,6 +662,21 @@ class ChatProvider extends ChangeNotifier {
   String? _detectFileGenFormat(String text) {
     final t = text.trim().toLowerCase();
 
+    // ── Code-related queries should NEVER trigger file generation ──
+    // If the user is asking for code, show it inline — never as a PDF/doc
+    final codeKeywords = [
+      'python', 'javascript', 'typescript', 'java', 'c++', 'c#', 'ruby',
+      'php', 'go', 'rust', 'swift', 'kotlin', 'dart', 'scala', 'perl',
+      'shell script', 'bash script', 'batch script', 'powershell',
+      'code', 'script', 'function', 'class', 'method', 'api',
+    ];
+    final codeMatches = codeKeywords.where((kw) => t.contains(kw)).length;
+    final codeActions = ['write', 'create a script', 'build a', 'code a', 'program'];
+    final hasCodeAction = codeActions.any((a) => t.contains(a));
+    if (codeMatches >= 1 && hasCodeAction) return null;
+    // Also catch "write a [language] script" patterns
+    if (RegExp(r'write\s+a\s+\w+\s+script').hasMatch(t)) return null;
+
     // Check for explicit format keyword in the text FIRST
     // Must have a specific format keyword + action to trigger file generation
     final formatKeywords = {
