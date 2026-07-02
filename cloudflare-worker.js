@@ -584,8 +584,8 @@ async function chatHandler(request) {
       }, 400);
     }
 
-    // Build message array
-    const msgs = buildMessages(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
+    // Build message array (use web-augmented messages so the model can use live search)
+    const msgs = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
 
     // Try Pollinations text first (always free, no key needed)
     let content = '';
@@ -985,10 +985,21 @@ CRITICAL:
             if (originalMatch && changeMatch) {
               const originalDesc = originalMatch[1].trim();
               const changeDesc = changeMatch[1].trim();
-              // Build precise prompt emphasizing preservation
-              imagePrompt = `RECREATE EXACTLY: ${originalDesc} WITH ONLY THIS CHANGE: ${changeDesc}`.trim();
+              // Build precise prompt emphasizing preservation and photorealistic output by default
+              const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
+              const styleInstr = prefersArt
+                ? ''
+                : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
+              const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
+              imagePrompt = `RECREATE EXACTLY: ${originalDesc} WITH ONLY THIS CHANGE: ${changeDesc}. ${preserveInstr} ${styleInstr}`.trim();
             } else {
-              imagePrompt = output.trim();
+              // Fallback to the raw LLM output but strengthen preservation instructions
+              const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
+              const styleInstr = prefersArt
+                ? ''
+                : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
+              const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
+              imagePrompt = (output.trim() + ' ' + preserveInstr + ' ' + styleInstr).trim();
             }
             imagePrompt = imagePrompt.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
             break;
@@ -997,7 +1008,12 @@ CRITICAL:
       }
 
       if (!imagePrompt || imagePrompt.length < 30) {
-        imagePrompt = `Edit this exact image by making ONLY this change: ${editDesc}. Preserve everything else identically.`;
+        const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
+        const styleInstr = prefersArt
+          ? ''
+          : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
+        const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
+        imagePrompt = `Edit this exact image by making ONLY this change: ${editDesc}. ${preserveInstr} ${styleInstr} Preserve everything else identically.`;
       }
 
       responseText = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
