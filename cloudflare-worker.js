@@ -137,14 +137,18 @@ async function callOpenRouter(messages, options = {}) {
     stream,
   };
 
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+  };
+  if (OPENROUTER_BASE_URL.includes('openrouter')) {
+    headers['HTTP-Referer'] = 'https://ai.acronous.com';
+    headers['X-Title'] = 'Acronous AI';
+  }
+
   const resp = await fetch(OPENROUTER_BASE_URL + '/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://ai.acronous.com',
-      'X-Title': 'Acronous AI',
-    },
+    headers,
     body: JSON.stringify(body),
   });
 
@@ -2505,11 +2509,11 @@ export default {
   async fetch(request, env) {
     // Load config from env (secrets + vars)
     OPENROUTER_API_KEY = env.OPENROUTER_API_KEY || '';
-    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'gpt-4o';
-    VISION_MODEL = env.VISION_MODEL || 'gpt-4o';
-    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'gpt-4o-mini';
-    FAST_MODEL = env.FAST_MODEL || 'gpt-4o-mini';
-    OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://api.openai.com/v1';
+    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free';
+    VISION_MODEL = env.VISION_MODEL || 'qwen/qwen3-vl-235b-a22b-instruct:free';
+    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'qwen/qwen3-vl-30b-a3b-instruct:free';
+    FAST_MODEL = env.FAST_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free';
+    OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
     PAGES_ORIGIN = env.PAGES_ORIGIN || '';
     ENABLE_WEB = (env.ENABLE_WEB || 'true') === 'true';
     ENABLE_VISION = (env.ENABLE_VISION || 'true') === 'true';

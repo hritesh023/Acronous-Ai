@@ -9,10 +9,10 @@ routes = [
 
 # ── Environment variables (non-secret) ───────────────────────────────────
 [vars]
-OPENROUTER_MODEL = "openrouter/free"
-VISION_MODEL = "openrouter/free"
-FALLBACK_VISION_MODEL = "openrouter/free"
-FAST_MODEL = "openrouter/free"
+OPENROUTER_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free"
+VISION_MODEL = "qwen/qwen3-vl-235b-a22b-instruct:free"
+FALLBACK_VISION_MODEL = "qwen/qwen3-vl-30b-a3b-instruct:free"
+FAST_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"

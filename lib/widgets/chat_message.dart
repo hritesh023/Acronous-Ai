@@ -304,41 +304,45 @@ class ChatMessageWidget extends StatelessWidget {
                       duration: const Duration(milliseconds: 400),
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxHeight: 300),
-                        child: Image.memory(
-                          Uint8List.fromList(bytes),
-                          fit: BoxFit.contain,
-                          width: double.infinity,
-                          errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
-                          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                            if (wasSynchronouslyLoaded) return child;
-                            if (frame == null) {
-                              return _imagePlaceholder(cs);
-                            }
-                            return AnimatedOpacity(
-                              opacity: 1.0,
-                              duration: const Duration(milliseconds: 300),
-                              child: child,
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                    Positioned(
-                      bottom: 8,
-                      right: 10,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.45),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        padding: const EdgeInsets.all(4),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(4),
-                          child: Image.asset(
-                            'assets/logo.png',
-                            width: 22,
-                            height: 22,
-                          ),
+                        child: Stack(
+                          children: [
+                            Image.memory(
+                              Uint8List.fromList(bytes),
+                              fit: BoxFit.contain,
+                              width: double.infinity,
+                              errorBuilder: (_, _, _) => const Icon(Icons.broken_image, size: 48),
+                              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                                if (wasSynchronouslyLoaded) return child;
+                                if (frame == null) {
+                                  return _imagePlaceholder(cs);
+                                }
+                                return AnimatedOpacity(
+                                  opacity: 1.0,
+                                  duration: const Duration(milliseconds: 300),
+                                  child: child,
+                                );
+                              },
+                            ),
+                            Positioned(
+                              bottom: 4,
+                              right: 4,
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.35),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                                padding: const EdgeInsets.all(1),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(1),
+                                  child: Image.asset(
+                                    'assets/logo.png',
+                                    width: 10,
+                                    height: 10,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
