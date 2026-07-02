@@ -1286,7 +1286,8 @@ CRITICAL: No text, words, letters, symbols, typography, labels, captions, or wri
 
   if (!imagePrompt || imagePrompt.length < 20) {
     // Fallback: construct a better prompt manually
-    imagePrompt = `ORIGINAL IMAGE: A photograph showing a person. CHANGE: ${editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, ').trim()}. PRESERVE subject identity (face, body, skin, hair), exact same pose, same expression, same background, same lighting, same composition, same camera angle, same clothing (except the specific change), same colors, same overall style EXACTLY IDENTICAL to the original. The result must look like the same photograph/scene with only the described modification. No text, words, letters, or typography in the image.`;
+    const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim();
+    imagePrompt = `ORIGINAL IMAGE: A photograph showing a person. CHANGE: ${cleanEdit}. PRESERVE subject identity (face, body, skin, hair), exact same pose, same expression, same background, same lighting, same composition, same camera angle, same clothing (except the specific change), same colors, same overall style EXACTLY IDENTICAL to the original. The result must look like the same photograph/scene with only the described modification. No text, words, letters, or typography in the image.`;
   }
 
   // Derive response text from the edit request
