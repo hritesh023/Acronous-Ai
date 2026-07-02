@@ -1,12 +1,7 @@
 import 'dart:typed_data';
-import 'dart:io';
-import 'dart:html' as html;
-import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
 
 class ImageViewer extends StatefulWidget {
   final Uint8List imageBytes;
@@ -23,7 +18,6 @@ class _ImageViewerState extends State<ImageViewer>
       TransformationController();
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
-  final GlobalKey _repaintKey = GlobalKey();
 
   @override
   void initState() {
@@ -65,12 +59,6 @@ class _ImageViewerState extends State<ImageViewer>
           ),
           actions: [
             IconButton(
-              icon: Icon(Icons.download_outlined, color: Colors.white, size: 24),
-              onPressed: () {
-                _saveToGallery(context);
-              },
-            ),
-            IconButton(
               icon: Icon(Icons.zoom_out_map_rounded, color: Colors.white, size: 24),
               onPressed: _resetZoom,
             ),
@@ -80,9 +68,7 @@ class _ImageViewerState extends State<ImageViewer>
             statusBarIconBrightness: Brightness.light,
           ),
         ),
-        body: RepaintBoundary(
-          key: _repaintKey,
-          child: Stack(
+        body: Stack(
           children: [
             Center(
               child: InteractiveViewer(
@@ -128,8 +114,7 @@ class _ImageViewerState extends State<ImageViewer>
             ),
           ],
         ),
-      ),
-        bottomNavigationBar: SafeArea(
+      bottomNavigationBar: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
             child: Row(
@@ -150,53 +135,5 @@ class _ImageViewerState extends State<ImageViewer>
         ),
       ),
     );
-  }
-
-  Future<void> _saveToGallery(BuildContext context) async {
-    try {
-      final boundary = _repaintKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      if (boundary == null) return;
-      final image = await boundary.toImage(pixelRatio: 3.0);
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) return;
-      final watermarkedBytes = byteData.buffer.asUint8List();
-
-      if (kIsWeb) {
-        final blob = html.Blob([watermarkedBytes], 'image/png');
-        final url = html.Url.createObjectUrlFromBlob(blob);
-        final anchor = html.document.createElement('a') as html.AnchorElement
-          ..href = url
-          ..download = 'acronous_ai_image_${DateTime.now().millisecondsSinceEpoch}.png';
-        html.document.body?.children.add(anchor);
-        anchor.click();
-        html.document.body?.children.remove(anchor);
-        html.Url.revokeObjectUrl(url);
-      } else {
-        final dir = await getApplicationDocumentsDirectory();
-        final file = File('${dir.path}/acronous_ai_image_${DateTime.now().millisecondsSinceEpoch}.png');
-        await file.writeAsBytes(watermarkedBytes);
-      }
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Image downloaded successfully'),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text('Failed to download image'),
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
-    }
   }
 }

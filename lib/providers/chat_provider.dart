@@ -923,19 +923,16 @@ class ChatProvider extends ChangeNotifier {
               'type': editType,
             };
           }
-          if (editType == 'error') {
+          // Edit failed — fall through to regular image analysis
+          if (editType == 'error' && response.isNotEmpty) {
             return {
-              'response': response.isNotEmpty ? response : '',
+              'response': response,
               'image_data': '',
-              'type': 'error',
+              'type': 'chat',
             };
           }
         } catch (_) {
-          return {
-            'response': '',
-            'image_data': '',
-            'type': 'error',
-          };
+          // Fall through to regular image analysis
         }
       }
       final history = _buildMessageHistory();

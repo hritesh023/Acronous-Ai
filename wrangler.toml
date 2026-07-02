@@ -12,6 +12,7 @@ routes = [
 OPENROUTER_MODEL = "openrouter/free"
 VISION_MODEL = "openrouter/free"
 FALLBACK_VISION_MODEL = "openrouter/free"
+FAST_MODEL = "openrouter/free"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"

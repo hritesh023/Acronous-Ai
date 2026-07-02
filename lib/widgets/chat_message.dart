@@ -322,20 +322,20 @@ class ChatMessageWidget extends StatelessWidget {
                       ),
                     ),
                     Positioned(
-                      bottom: 6,
-                      right: 8,
+                      bottom: 8,
+                      right: 10,
                       child: Container(
                         decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(4),
+                          color: Colors.black.withValues(alpha: 0.45),
+                          borderRadius: BorderRadius.circular(6),
                         ),
-                        padding: const EdgeInsets.all(2),
+                        padding: const EdgeInsets.all(4),
                         child: ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
+                          borderRadius: BorderRadius.circular(4),
                           child: Image.asset(
                             'assets/logo.png',
-                            width: 14,
-                            height: 14,
+                            width: 22,
+                            height: 22,
                           ),
                         ),
                       ),

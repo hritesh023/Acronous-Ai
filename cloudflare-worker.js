@@ -1,12 +1,11 @@
 // Acronous AI — Cloudflare Worker (API Layer)
-// Replaces the Render-hosted Python backend.
 // Handles all API endpoints by calling external AI providers directly.
 //
 // Required secrets (set via `wrangler secret put <NAME>`):
 //   OPENROUTER_API_KEY   — from .env ACRONOUS_LLM_API_KEY
 //
 // Optional env vars (set in wrangler.toml or dashboard):
-//   OPENROUTER_MODEL     — default: nvidia/nemotron-3-ultra-550b-a55b:free
+//   OPENROUTER_MODEL     — default: openrouter/free
 //   OPENROUTER_BASE_URL  — default: https://openrouter.ai/api/v1
 //   PAGES_ORIGIN         — Cloudflare Pages URL for Flutter web SPA
 //   ENABLE_WEB           — default: true
@@ -24,6 +23,7 @@ let OPENROUTER_API_KEY = '';
 let OPENROUTER_MODEL = 'openrouter/free';
 let VISION_MODEL = 'openrouter/free';
 let FALLBACK_VISION_MODEL = 'openrouter/free';
+let FAST_MODEL = 'openrouter/free';
 let OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 let PAGES_ORIGIN = '';
 let ENABLE_WEB = true;
@@ -142,7 +142,7 @@ async function callOpenRouter(messages, options = {}) {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://acronous.com',
+      'HTTP-Referer': 'https://ai.acronous.com',
       'X-Title': 'Acronous AI',
     },
     body: JSON.stringify(body),
@@ -561,10 +561,19 @@ async function chatHandler(request) {
       messages = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
     }
 
-    const maxTokens = complexity === 'greeting' ? 256 : complexity === 'simple' ? 1024 : complexity === 'moderate' ? 4096 : 16384;
-    const resp = await callOpenRouter(messages, { max_tokens: maxTokens, temperature: 0.7 });
-    const data = await resp.json();
-    const content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+    const maxTokens = complexity === 'greeting' ? 128 : complexity === 'simple' ? 1024 : complexity === 'moderate' ? 4096 : 8192;
+    const temperature = complexity === 'greeting' ? 0.5 : 0.7;
+    const useModel = (complexity === 'greeting' || complexity === 'simple') ? FAST_MODEL : OPENROUTER_MODEL;
+
+    // Retry logic for empty responses
+    let content = '';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const resp = await callOpenRouter(messages, { model: useModel, max_tokens: maxTokens, temperature: attempt === 0 ? temperature : temperature + 0.2 });
+      const data = await resp.json();
+      content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+      if (content) break;
+      if (attempt === 0) await new Promise(r => setTimeout(r, 1000));
+    }
 
     if (!content) {
       return jsonResponse({
@@ -675,7 +684,7 @@ function isValidImagePrompt(text, originalUserText) {
   return true;
 }
 
-async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed, imageBase64 } = {}) {
+async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed } = {}) {
   const seed = customSeed ?? Math.floor(Math.random() * 1000000);
   const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality';
   const [w, h] = size.split('x');
@@ -687,10 +696,7 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
       try {
         const encodedPrompt = encodeURIComponent(prompt);
         const encodedNegative = encodeURIComponent(negative);
-        let url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
-        if (imageBase64) {
-          url += `&image=${encodeURIComponent(imageBase64)}`;
-        }
+        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
         const resp = await fetch(url);
         if (!resp.ok) {
           const errText = await resp.text().catch(() => '');
@@ -707,6 +713,37 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
     }
   }
   throw new Error('Image generation failed');
+}
+
+async function describeImage(base64, mimeType) {
+  const content = buildMultimodalContent(
+    'Describe this image in EXTREME detail. Include: main subject (person/animal/object with exact identity/type), precise pose and position, facial expression and features, all clothing/accessories with exact colors and patterns, hair style and color, skin tone, body type, background details (setting, objects, colors, lighting), camera angle and composition, art style and color palette. Be extremely specific — every visible detail matters. Return ONLY the factual description.',
+    base64, mimeType,
+  );
+  const messages = [
+    { role: 'system', content: 'You are an expert image analyst providing EXTREMELY detailed descriptions for image reconstruction. Be precise about every visible detail — colors, positions, expressions, textures. Do not generalize.' },
+    { role: 'user', content },
+  ];
+  for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
+    try {
+      const resp = await callOpenRouter(messages, { model, stream: false, max_tokens: 1500, temperature: 0.1 });
+      const data = await resp.json();
+      const desc = data?.choices?.[0]?.message?.content?.trim();
+      if (desc && desc.length > 30) return desc;
+    } catch {}
+  }
+  return null;
+}
+
+function buildEditPromptForGen(originalDesc, editRequest) {
+  const cleanEdit = editRequest
+    .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
+    .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
+    .trim();
+  if (!cleanEdit || cleanEdit.length < 3) {
+    return `The image shows ${originalDesc}`;
+  }
+  return `The image shows ${originalDesc}. The requested change: ${cleanEdit}. Keep the subject, pose, expression, clothing, background, lighting, and composition IDENTICAL to the described image. ONLY apply the requested change. No text, words, or letters in the image.`;
 }
 
 // ── Chat with Image (POST /v1/chat/image) ────────────────────────────────
@@ -758,103 +795,46 @@ async function chatImageHandler(request) {
       const isEnhanceRequest = lowerMessage.includes('enhance') || lowerMessage.includes('improve') || lowerMessage.includes('better') || lowerMessage.includes('fix') || lowerMessage.includes('sharpen') || lowerMessage.includes('clarify');
 
       // ── Phase 1: Describe the original image in extreme detail ──
-      let originalDescription = '';
-      const describeContent = buildMultimodalContent(
-        'Describe this image in EXTREME detail for image reconstruction. Include: 1) EXACT main subject (person/animal/object), 2) Precise pose and position, 3) Facial expression and features, 4) ALL clothing/accessories with exact colors and patterns, 5) Hair style and color, 6) Skin tone, 7) Body type and proportions, 8) Background details (setting, objects, colors, lighting), 9) Camera angle and composition, 10) Art style and color palette. Be extremely specific and detailed. Return ONLY the factual description.',
-        base64, mimeType,
-      );
-      const describeMessages = [
-        { role: 'system', content: 'You are an expert image analyst providing EXTREMELY detailed descriptions for image reconstruction. Be precise about every visible detail. Do not generalize - describe exactly what you see.' },
-        { role: 'user', content: describeContent },
-      ];
-      for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
-        try {
-          const resp = await callOpenRouter(describeMessages, { model, stream: false, max_tokens: 1500, temperature: 0.1 });
-          const data = await resp.json();
-          const desc = data?.choices?.[0]?.message?.content?.trim();
-          if (desc && desc.length > 30) {
-            originalDescription = desc;
-            break;
-          }
-        } catch {}
-      }
-      if (!originalDescription) {
-        originalDescription = 'the main subject of the uploaded image';
-      }
+      const originalDescription = await describeImage(base64, mimeType) || 'the main subject of the uploaded image';
+      const editPromptGen = buildEditPromptForGen(originalDescription, editDesc);
 
       // ── Phase 2: Generate edit prompt using the description ──
       let imagePrompt = '';
       let responseText = '';
-      try {
-        const editContent = buildMultimodalContent(
-          `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION — this is the EXACT image that must be edited): "${originalDescription}"
-
-USER WANTS TO CHANGE ONLY: "${editDesc}"
-
-CRITICAL — You are generating a text-to-image prompt that MUST produce an image ALMOST IDENTICAL to the original, with ONLY ONE change:
-
-1. The image MUST show the EXACT same subject (same person/animal/object, same identity, same face, same pose, same expression)
-2. The EXACT same clothing, colors, accessories
-3. The EXACT same background, setting, lighting
-4. The EXACT same composition, camera angle, art style
-5. The ONLY thing different should be: ${editDesc}
-
-How to write the prompt:
-Start with: "A photograph virtually identical to the original image showing [EXACT main subject from description above]"
-Then describe EVERY detail that stays the same (pose, clothing, background, lighting, colors)
-Then say: "The only difference is that [specific change]"
-End with: "Everything else — lighting, background, colors, details — is exactly the same as the original"
-
-Do NOT add any text, words, or letters to the image.
-Return ONLY the prompt, no explanations.`,
-          base64, mimeType,
-        );
-        for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL].filter(Boolean)) {
-          try {
-            const resp = await callOpenRouter(
-              [{ role: 'user', content: editContent }],
-              { model, stream: false, max_tokens: 700, temperature: 0.1 }
-            );
-            const data = await resp.json();
-            const output = data?.choices?.[0]?.message?.content?.trim();
-            if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
-              imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
-              break;
-            }
-          } catch {}
-        }
-        responseText = isEnhanceRequest ? 'Enhanced!' : 'Edited!';
-      } catch {}
+      const systemMsg = { role: 'system', content: 'You generate image generation prompts. CRITICAL: Describe what the image SHOULD look like after the edit. Keep ALL original details identical. No text, words, or letters. Return ONLY the prompt.' };
+      const userMsg = { role: 'user', content: editPromptGen };
+      for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
+        try {
+          const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 500, temperature: 0.1 });
+          const data = await resp.json();
+          const output = data?.choices?.[0]?.message?.content?.trim();
+          if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
+            imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
+            break;
+          }
+        } catch {}
+      }
+      responseText = isEnhanceRequest ? 'Your enhanced image is ready!' : 'Here is your edited image!';
 
       if (!imagePrompt || imagePrompt.length < 20) {
-        imagePrompt = `Original image of ${originalDescription}, but with ${editDesc}. Everything else is identical — same subject, same pose, same clothing, same background, same lighting, same composition. No text.`;
+        imagePrompt = editPromptGen;
       }
 
       try {
         const seed = computeSeed(fileBytes);
-        const imageDataUri = `data:${mimeType};base64,${base64}`;
-        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed, imageBase64: imageDataUri });
+        const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed });
         const resultBase64 = arrayBufferToBase64(imageBuffer);
-
         return jsonResponse({
           response: responseText,
-          session_id,
-          type: 'chat',
-          image_data: resultBase64,
-          image_type: 'png',
-          file_data: '',
-          file_name: '',
-          file_type: '',
+          session_id, type: 'chat', image_data: resultBase64,
+          image_type: 'png', file_data: '', file_name: '', file_type: '',
         });
       } catch (genError) {
+        const friendlyText = `I couldn't edit this image right now, but here's what I'd do: ${editDesc}. The image shows ${originalDescription.slice(0, 300)}.`;
         return jsonResponse({
-          response: responseText || 'Image generation service is busy. Please try again.',
-          session_id,
-          type: 'chat',
-          image_data: '',
-          image_type: '',
-          file_name: '',
-          file_type: '',
+          response: friendlyText,
+          session_id, type: 'chat', image_data: '',
+          image_type: '', file_data: '', file_name: '', file_type: '',
         });
       }
     }
@@ -1148,63 +1128,19 @@ async function editImageHandler(request) {
   const isEnhance = /enhance|improve|better|fix/.test(message.toLowerCase());
 
   // ── Phase 1: Describe the original image in extreme detail ──
-  let originalDescription = '';
-  const describeContent = buildMultimodalContent(
-    'Describe this image in EXTREME detail for image reconstruction. Include: 1) EXACT main subject (person/animal/object), 2) Precise pose and position, 3) Facial expression and features, 4) ALL clothing/accessories with exact colors and patterns, 5) Hair style and color, 6) Skin tone, 7) Body type and proportions, 8) Background details (setting, objects, colors, lighting), 9) Camera angle and composition, 10) Art style and color palette. Be extremely specific and detailed. Return ONLY the factual description.',
-    base64, mimeType,
-  );
-  const describeMessages = [
-    { role: 'system', content: 'You are an expert image analyst providing EXTREMELY detailed descriptions for image reconstruction. Be precise about every visible detail. Do not generalize - describe exactly what you see.' },
-    { role: 'user', content: describeContent },
-  ];
-  for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
-    try {
-      const resp = await callOpenRouter(describeMessages, { model, stream: false, max_tokens: 1500, temperature: 0.1 });
-      const data = await resp.json();
-      const desc = data?.choices?.[0]?.message?.content?.trim();
-      if (desc && desc.length > 30) {
-        originalDescription = desc;
-        break;
-      }
-    } catch {}
-  }
-  if (!originalDescription) {
-    originalDescription = 'the main subject of the uploaded image';
-  }
+  const originalDescription = await describeImage(base64, mimeType) || 'the main subject of the uploaded image';
 
-  // ── Phase 2: Generate edit prompt using the description ──
+  // ── Phase 2: Build a text prompt for the edit ──
   let imagePrompt = '';
   let responseText = '';
+  const editPromptGen = buildEditPromptForGen(originalDescription, editDesc);
+
   try {
-    const editContent = buildMultimodalContent(
-      `ORIGINAL IMAGE (EXTREMELY DETAILED DESCRIPTION — this is the EXACT image that must be edited): "${originalDescription}"
-
-USER WANTS TO CHANGE ONLY: "${editDesc}"
-
-CRITICAL — You are generating a text-to-image prompt that MUST produce an image ALMOST IDENTICAL to the original, with ONLY ONE change:
-
-1. The image MUST show the EXACT same subject (same person/animal/object, same identity, same face, same pose, same expression)
-2. The EXACT same clothing, colors, accessories
-3. The EXACT same background, setting, lighting
-4. The EXACT same composition, camera angle, art style
-5. The ONLY thing different should be: ${editDesc}
-
-How to write the prompt:
-Start with: "A photograph virtually identical to the original image showing [EXACT main subject from description above]"
-Then describe EVERY detail that stays the same (pose, clothing, background, lighting, colors)
-Then say: "The only difference is that [specific change]"
-End with: "Everything else — lighting, background, colors, details — is exactly the same as the original"
-
-Do NOT add any text, words, or letters to the image.
-Return ONLY the prompt, no explanations.`,
-      base64, mimeType,
-    );
-    for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL].filter(Boolean)) {
+    const systemMsg = { role: 'system', content: 'You generate image generation prompts. CRITICAL: Describe what the image SHOULD look like after the edit. Start with the exact subject and all the details that stay the same, then describe ONLY the change. Keep the subject, pose, expression, clothing, background, lighting, composition IDENTICAL to the original. No text, words, or letters in the image. Return ONLY the prompt, no explanations.' };
+    const userMsg = { role: 'user', content: editPromptGen };
+    for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
       try {
-        const resp = await callOpenRouter(
-          [{ role: 'user', content: editContent }],
-          { model, stream: false, max_tokens: 700, temperature: 0.1 }
-        );
+        const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 500, temperature: 0.1 });
         const data = await resp.json();
         const output = data?.choices?.[0]?.message?.content?.trim();
         if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
@@ -1213,18 +1149,17 @@ Return ONLY the prompt, no explanations.`,
         }
       } catch {}
     }
-    responseText = isEnhance ? 'Enhanced!' : 'Edited!';
+    responseText = isEnhance ? 'Your enhanced image is ready!' : 'Here is your edited image!';
   } catch {}
 
   if (!imagePrompt || imagePrompt.length < 20) {
-    imagePrompt = `Original image of ${originalDescription}, but with ${editDesc}. Everything else is identical — same subject, same pose, same clothing, same background, same lighting, same composition. No text.`;
+    imagePrompt = editPromptGen;
   }
 
-  // ── Generate image with seed from original bytes ──
+  // ── Generate edited image ──
   try {
     const seed = computeSeed(fileBytes);
-    const imageDataUri = `data:${mimeType};base64,${base64}`;
-    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed, imageBase64: imageDataUri });
+    const imageBuffer = await pollinationsImage(imagePrompt, { retries: 2, seed });
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     return jsonResponse({
       response: responseText,
@@ -1232,8 +1167,10 @@ Return ONLY the prompt, no explanations.`,
       image_type: 'png', file_data: '', file_name: '', file_type: '',
     });
   } catch (genError) {
+    // Fallback: return a friendly text describing what the edit would look like
+    const friendlyText = `I couldn't edit this image right now, but here's what I'd do: ${editDesc}. The image shows ${originalDescription.slice(0, 300)}.`;
     return jsonResponse({
-      response: responseText || 'Image generation service is busy. Please try again.',
+      response: friendlyText,
       session_id, type: 'chat', image_data: '',
       image_type: '', file_data: '', file_name: '', file_type: '',
     });
@@ -1406,8 +1343,7 @@ OUTPUT: Only the image generation prompt — starting with the exact main subjec
       redesignPrompt = await constructEditPrompt(prompt, originalDescription);
     }
 
-    const imageDataUri = `data:${mimeType};base64,${base64}`;
-    const imageBuffer = await pollinationsImage(redesignPrompt, { imageBase64: imageDataUri });
+    const imageBuffer = await pollinationsImage(redesignPrompt, { retries: 2 });
     const b64 = arrayBufferToBase64(imageBuffer);
 
     return jsonResponse({ content: b64, error: null, prompt: redesignPrompt, session_id });
@@ -2562,10 +2498,11 @@ export default {
   async fetch(request, env) {
     // Load config from env (secrets + vars)
     OPENROUTER_API_KEY = env.OPENROUTER_API_KEY || '';
-    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'openrouter/free';
-    VISION_MODEL = env.VISION_MODEL || 'openrouter/free';
-    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'openrouter/free';
-    OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+    OPENROUTER_MODEL = env.OPENROUTER_MODEL || 'gpt-4o';
+    VISION_MODEL = env.VISION_MODEL || 'gpt-4o';
+    FALLBACK_VISION_MODEL = env.FALLBACK_VISION_MODEL || 'gpt-4o-mini';
+    FAST_MODEL = env.FAST_MODEL || 'gpt-4o-mini';
+    OPENROUTER_BASE_URL = env.OPENROUTER_BASE_URL || 'https://api.openai.com/v1';
     PAGES_ORIGIN = env.PAGES_ORIGIN || '';
     ENABLE_WEB = (env.ENABLE_WEB || 'true') === 'true';
     ENABLE_VISION = (env.ENABLE_VISION || 'true') === 'true';
