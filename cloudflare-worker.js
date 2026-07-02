@@ -66,8 +66,10 @@ function isCodeRequest(text) {
   
   // Only if BOTH code action + language, or explicit "code" request
   return (hasCodeAction && hasLanguage) || lower.includes('write code') || lower.includes('code example') || lower.includes('show me the code');
-}`
-  const bytes = new Uint8Array(buffer);
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
   const len = bytes.length;
   const chunks = [];
   let i = 0;
@@ -886,7 +888,7 @@ async function chatImageHandler(request) {
       let responseText = '';
 
       const multimodalContent = buildMultimodalContent(
-        `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator.
+        `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator. Default style MUST be: Photorealistic, natural, authentic. NEVER make it cartoon/artistic unless explicitly requested.
 
 The user wants to edit this image like this: "${editDesc}"
 
@@ -970,7 +972,7 @@ CRITICAL:
         base64, mimeType
       );
 
-      const systemMsg = { role: 'system', content: 'You are an expert image analyst specializing in precision image-to-image editing. Your ONLY goal is to write prompts that make an AI image generator recreate the ORIGINAL image EXACTLY, changing ONLY what was specifically requested. You MUST preserve: subject identity, face features, pose, expression, background, lighting, composition, and all other details. CRITICAL: Only modify the specific requested element. Never redesign or reimagine the entire image.' };
+      const systemMsg = { role: 'system', content: 'You are an expert image analyst specializing in precision image-to-image editing. Your ONLY goal is to write prompts that make an AI image generator recreate the ORIGINAL image EXACTLY, changing ONLY what was specifically requested. You MUST preserve: subject identity, face features, pose, expression, background, lighting, composition, shadows, colors, and all other details. Default style: photorealistic, natural lighting, authentic appearance. CRITICAL: Only modify the specific requested element. Never redesign or reimagine the entire image. Preserve 99% of the original.' };
       const userMsg = { role: 'user', content: multimodalContent };
 
       for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
@@ -991,7 +993,7 @@ CRITICAL:
                 ? ''
                 : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
               const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
-              imagePrompt = `RECREATE EXACTLY: ${originalDesc} WITH ONLY THIS CHANGE: ${changeDesc}. ${preserveInstr} ${styleInstr}`.trim();
+              imagePrompt = `RECREATE EXACTLY: ${originalDesc} WITH ONLY THIS CHANGE: ${changeDesc}. ${preserveInstr} ${styleInstr} Keep same lighting, background, composition, pose, and all other details.`.trim();
             } else {
               // Fallback to the raw LLM output but strengthen preservation instructions
               const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
@@ -1020,12 +1022,35 @@ CRITICAL:
 
       try {
         const seed = computeSeed(fileBytes);
-        const imageBuffer = await pollinationsImage(imagePrompt, {
-          retries: 3,
-          seed,
-          imageBase64: base64,
-          imageMime: mimeType,
-        });
+        let imageBuffer;
+        try {
+          imageBuffer = await pollinationsImage(imagePrompt, {
+            retries: 3,
+            seed,
+            imageBase64: base64,
+            imageMime: mimeType,
+          });
+        } catch (primaryError) {
+          // Fallback: Try with simpler, more direct prompt
+          const fallbackPrompt = `Recreate this image with ONLY this change: ${editDesc}. Preserve everything else identically. Realistic photographic style.`;
+          try {
+            imageBuffer = await pollinationsImage(fallbackPrompt, {
+              retries: 2,
+              seed: seed + 1,
+              imageBase64: base64,
+              imageMime: mimeType,
+            });
+          } catch (secondaryError) {
+            // Last resort: Try text-to-image-like approach
+            const lastResortPrompt = `${editDesc}. Photo quality. Realistic.`;
+            imageBuffer = await pollinationsImage(lastResortPrompt, {
+              retries: 2,
+              seed: seed + 2,
+              imageBase64: base64,
+              imageMime: mimeType,
+            });
+          }
+        }
         const resultBase64 = arrayBufferToBase64(imageBuffer);
         return jsonResponse({
           response: responseText,
@@ -1034,7 +1059,7 @@ CRITICAL:
         });
       } catch (genError) {
         return jsonResponse({
-          response: 'Could not process the image edit. Please try again.',
+          response: 'Unable to process that image edit right now. Please try: 1) A simpler edit (e.g., change color/clothing), 2) A different image, or 3) Asking me to generate a new image instead.',
           session_id, type: 'chat', image_data: '',
           image_type: '', file_data: '', file_name: '', file_type: '',
         });

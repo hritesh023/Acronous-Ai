@@ -344,23 +344,23 @@ class ChatMessageWidget extends StatelessWidget {
                               },
                         ),
                         Positioned(
-                          bottom: 10,
-                          right: 10,
+                          bottom: 6,
+                          right: 6,
                           child: Container(
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.5),
-                              borderRadius: BorderRadius.circular(6),
+                              color: Colors.black.withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(3),
                             ),
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 3,
+                              horizontal: 2,
+                              vertical: 2,
                             ),
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
+                              borderRadius: BorderRadius.circular(2),
                               child: Image.asset(
                                 'assets/logo.png',
-                                width: 18,
-                                height: 18,
+                                width: 12,
+                                height: 12,
                               ),
                             ),
                           ),
