@@ -100,7 +100,7 @@ class ChatProvider extends ChangeNotifier {
     _fetchLocationInfo();
   }
 
-  Future<void> _discoverServer({int retries = 3, String? savedUrl}) async {
+  Future<void> _discoverServer({int retries = 2, String? savedUrl}) async {
     _isServerConnected = false;
     _isConnecting = true;
     _serverCheckDone = false;
@@ -150,10 +150,7 @@ class ChatProvider extends ChangeNotifier {
       }
 
       if (attempt < retries) {
-        final delay = lastUrl?.startsWith('https://') == true
-            ? attempt * 10
-            : attempt * 3;
-        await Future.delayed(Duration(seconds: delay));
+        await Future.delayed(Duration(seconds: 3));
       }
     }
     _isServerConnected = false;
@@ -163,9 +160,9 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void _startKeepAlive() {
-    Future.delayed(const Duration(seconds: 20), () async {
+    Future.delayed(const Duration(seconds: 10), () async {
       try {
-        await _api.wakeup(timeout: const Duration(seconds: 15));
+        await _api.wakeup(timeout: const Duration(seconds: 10));
         final healthy = await _api.healthCheck();
         _isServerConnected = healthy['status'] == 'ok';
       } catch (_) {
