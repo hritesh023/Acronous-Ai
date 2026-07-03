@@ -689,6 +689,80 @@ function isImageMimeType(mimeType) {
   return (mimeType || '').startsWith('image/');
 }
 
+// ── Hugging Face Free Inference API for Image Editing ──────────────────
+// Uses instruct-pix2pix and other free models via Hugging Face's serverless inference.
+// No API key needed — free tier with rate limits.
+
+async function base64ToBlob(base64, mimeType) {
+  const binaryStr = atob(base64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) {
+    bytes[i] = binaryStr.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mimeType || 'image/jpeg' });
+}
+
+async function callHuggingFaceImageEdit(imageBase64, editInstruction, imageMime) {
+  const models = [
+    'timbrooks/instruct-pix2pix',
+    'stabilityai/stable-diffusion-2-1',
+    'runwayml/stable-diffusion-v1-5',
+  ];
+
+  for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // Try JSON format with base64 (works with most HF models)
+      try {
+        const resp = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            inputs: imageBase64,
+            parameters: {
+              prompt: editInstruction,
+              negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+            },
+          }),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (resp.ok) {
+          const ct = resp.headers.get('content-type') || '';
+          if (ct.startsWith('image/')) {
+            const buf = await resp.arrayBuffer();
+            if (buf && buf.byteLength > 500) return buf;
+          }
+        }
+      } catch {}
+
+      // Try raw bytes format (alternative)
+      try {
+        const blob = await base64ToBlob(imageBase64, imageMime);
+        const params = new URLSearchParams({
+          prompt: editInstruction,
+          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality',
+        });
+        const resp = await fetch(
+          `https://api-inference.huggingface.co/models/${model}?${params.toString()}`,
+          {
+            method: 'POST',
+            body: blob,
+            signal: AbortSignal.timeout(120000),
+          }
+        );
+        if (resp.ok) {
+          const ct = resp.headers.get('content-type') || '';
+          if (ct.startsWith('image/')) {
+            const buf = await resp.arrayBuffer();
+            if (buf && buf.byteLength > 500) return buf;
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
 async function constructEditPrompt(userRequest, originalDescription) {
   const subject = originalDescription && originalDescription.length > 20
     ? originalDescription
@@ -1186,24 +1260,41 @@ CRITICAL:
       }
       const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
 
-      // Use TTI with extremely detailed preservation prompt (Pollinations free img2img is unreliable)
+      // ── Generate edited image with fallback chain ──
       const seed = computeSeed(fileBytes);
       let imageBuffer;
-      const ttiModels = ['flux', 'turbo', 'flux-schnell'];
       let lastError;
-      for (let attempt = 0; attempt < 9; attempt++) {
-        if (imageBuffer) break;
-        const model = ttiModels[attempt % ttiModels.length];
-        const ttiPrompt = imgDesc && imgDesc.length > 20
-          ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
-          : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+      const hfInstruction = cleanEdit || editDesc;
+
+      // Priority 1: Hugging Face InstructPix2Pix (best for instruction-based editing)
+      if (!imageBuffer) {
         try {
-          imageBuffer = await pollinationsImage(ttiPrompt, {
-            retries: 2, seed: seed + attempt * 37, model,
-            imageBase64: base64, imageMime: mimeType,
-          });
+          const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
+          if (hfResult && hfResult.byteLength > 500) {
+            imageBuffer = hfResult;
+          }
         } catch (err) {
           lastError = err;
+        }
+      }
+
+      // Priority 2: Pollinations img2img with preservation prompts
+      if (!imageBuffer) {
+        const ttiModels = ['flux', 'turbo', 'flux-schnell'];
+        for (let attempt = 0; attempt < 9; attempt++) {
+          if (imageBuffer) break;
+          const model = ttiModels[attempt % ttiModels.length];
+          const ttiPrompt = imgDesc && imgDesc.length > 20
+            ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
+            : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+          try {
+            imageBuffer = await pollinationsImage(ttiPrompt, {
+              retries: 2, seed: seed + attempt * 37, model,
+              imageBase64: base64, imageMime: mimeType,
+            });
+          } catch (err) {
+            lastError = err;
+          }
         }
       }
 
@@ -1663,21 +1754,38 @@ CRITICAL RULES:
 
   const seed = computeSeed(fileBytes);
   let imageBuffer;
-  const ttiModels = ['flux', 'turbo', 'flux-schnell'];
   let lastError;
-  for (let attempt = 0; attempt < 9; attempt++) {
-    if (imageBuffer) break;
-    const model = ttiModels[attempt % ttiModels.length];
-    const ttiPrompt = imgDesc && imgDesc.length > 20
-      ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
-      : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+  const hfInstruction = cleanEdit || editDesc;
+
+  // Priority 1: Hugging Face InstructPix2Pix (best for instruction-based editing)
+  if (!imageBuffer) {
     try {
-      imageBuffer = await pollinationsImage(ttiPrompt, {
-        retries: 2, seed: seed + attempt * 37, model,
-        imageBase64: base64, imageMime: mimeType,
-      });
+      const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
+      if (hfResult && hfResult.byteLength > 500) {
+        imageBuffer = hfResult;
+      }
     } catch (err) {
       lastError = err;
+    }
+  }
+
+  // Priority 2: Pollinations img2img with preservation prompts
+  if (!imageBuffer) {
+    const ttiModels = ['flux', 'turbo', 'flux-schnell'];
+    for (let attempt = 0; attempt < 9; attempt++) {
+      if (imageBuffer) break;
+      const model = ttiModels[attempt % ttiModels.length];
+      const ttiPrompt = imgDesc && imgDesc.length > 20
+        ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
+        : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+      try {
+        imageBuffer = await pollinationsImage(ttiPrompt, {
+          retries: 2, seed: seed + attempt * 37, model,
+          imageBase64: base64, imageMime: mimeType,
+        });
+      } catch (err) {
+        lastError = err;
+      }
     }
   }
 
@@ -1961,21 +2069,38 @@ CRITICAL RULES:
 
     const seed = computeSeed(fileBytes);
     let imageBuffer;
-    const ttiModels = ['flux', 'turbo', 'flux-schnell'];
     let lastError;
-    for (let attempt = 0; attempt < 9; attempt++) {
-      if (imageBuffer) break;
-      const model = ttiModels[attempt % ttiModels.length];
-      const ttiPrompt = imgDesc && imgDesc.length > 20
-        ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
-        : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+    const hfInstruction = cleanEdit || editDesc;
+
+    // Priority 1: Hugging Face InstructPix2Pix (best for instruction-based editing)
+    if (!imageBuffer) {
       try {
-      imageBuffer = await pollinationsImage(ttiPrompt, {
-        retries: 2, seed: seed + attempt * 37, model,
-        imageBase64: base64, imageMime: mimeType,
-      });
-    } catch (err) {
-      lastError = err;
+        const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
+        if (hfResult && hfResult.byteLength > 500) {
+          imageBuffer = hfResult;
+        }
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    // Priority 2: Pollinations img2img with preservation prompts
+    if (!imageBuffer) {
+      const ttiModels = ['flux', 'turbo', 'flux-schnell'];
+      for (let attempt = 0; attempt < 9; attempt++) {
+        if (imageBuffer) break;
+        const model = ttiModels[attempt % ttiModels.length];
+        const ttiPrompt = imgDesc && imgDesc.length > 20
+          ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
+          : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+        try {
+        imageBuffer = await pollinationsImage(ttiPrompt, {
+          retries: 2, seed: seed + attempt * 37, model,
+          imageBase64: base64, imageMime: mimeType,
+        });
+      } catch (err) {
+        lastError = err;
+      }
     }
   }
   if (!responseText || responseText.length < 3) responseText = await friendlyEditAck(editDesc);
