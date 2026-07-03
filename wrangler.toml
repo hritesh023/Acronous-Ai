@@ -1,18 +1,12 @@
-[pages]
-binding = "Pages"
-directory = "build/web"
-pages_build_output_dir = "build/web"
-
 name = "acronous-ai"
-compatibility_date = "2026-05-30"
+compatibility_date = "2026-07-03"
 main = "cloudflare-worker.js"
 
-# Routes for the Worker API
+# Worker routes - use separate subdomain for API
 routes = [
-  { pattern = "ai.acronous.com", custom_domain = true },
+  { pattern = "api.acronous.com", custom_domain = true },
 ]
 
-# Environment variables
 [vars]
 OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 VISION_MODEL = "google/gemini-2.5-flash-lite"
@@ -24,11 +18,9 @@ ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
 
-# KV namespaces
 [[kv_namespaces]]
 binding = "AUTH_USERS"
 id = "eb112976703e4447af69c13dd5f8824c"
 
-# AI binding for Workers AI
 [ai]
 binding = "AI"
