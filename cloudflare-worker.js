@@ -1197,83 +1197,64 @@ async function llmReasonEditApproach(editDesc) {
 }
 
 async function editImageWithInstruct(imageBase64, editDesc, mimeType, fileBytes) {
-  
-  const enhancedEditDesc = `
-    USER'S EDIT REQUEST: "${editDesc}"
-    
-    This is a DETAILED editing request where the user wants to modify an existing image.
-    IMPORTANT RULES:
-    1. PRESERVE: Everything that should stay EXACTLY as is — do NOT recreate from scratch
-    2. MODIFY: ONLY apply the specific changes requested by the user
-    3. CUT/REPLACE: If user asks to "cut a part and replace with X", remove source and insert X precisely where requested
-    4. DETAILED: Use the power of current AI knowledge and internet research to understand and execute the edit perfectly
-    
-    USER'S EXACT EDIT COMMAND: ${editDesc}
-    
-    If this is a "cut and replace" request, I need to:
-    - FIRST: Use web search to understand the best technique for this specific edit
-    - SECOND: Get current AI models to analyze the cut/replace process
-    - THIRD: Extract and analyze the user's replacement request
-    - FOURTH: Apply the edit with MAXIMUM precision, focusing on the user's specific content
-    
-    Execute this edit now with all available AI tools and internet knowledge.
-  `;
+  // Primary approach: Vision analysis + LLM + Pollinations generation
+  const visionResult = await tryVisionEdit(imageBase64, editDesc, mimeType);
+  if (visionResult) return visionResult;
 
-  // Priority 1: Enhanced instruct-pix2pix with detailed context
+  // Fallback: Quick HuggingFace instruct-pix2pix
   try {
-    const hfResult = await callHuggingFaceInstructEdit(imageBase64, enhancedEditDesc, mimeType);
+    const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
     if (hfResult && hfResult.byteLength > 100) return hfResult;
   } catch {}
 
-  // Priority 2: Enhanced LLM reasoning with web search for complex edits
-  if (!editDesc.toLowerCase().includes('just') && !editDesc.toLowerCase().includes('simple')) {
-    try {
-      const searchTerms = editDesc.includes('replace') ? `${editDesc} cut replace image editing technique` : `${editDesc} image editing tutorial technique`;
-      const searchResults = await searchWeb(searchTerms);
-      if (searchResults) {
-        const webEnhancedEdit = editDesc + ' ' + searchResults.slice(0, 300) + ' Use current AI techniques to implement this edit precisely.';
-        
-        const hfResult = await callHuggingFaceInpainting(imageBase64, webEnhancedEdit, mimeType);
-        if (hfResult && hfResult.byteLength > 100) return hfResult;
-      }
-    } catch {}
-  }
-
-  // Priority 3: Enhanced inpainting with detailed user's cut/replace request
+  // Fallback: Quick HuggingFace inpainting
   try {
-    const detailedEdit = `User wants to "${editDesc}". This is a precise edit request. Apply ONLY these changes to the existing image without recreating anything. Preserve all original elements and make the exact modifications requested.`;
-    const hfResult = await callHuggingFaceInpainting(imageBase64, detailedEdit, mimeType);
+    const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
     if (hfResult && hfResult.byteLength > 100) return hfResult;
   } catch {}
 
-  // Priority 4: Use multiple AI approaches with knowledge enhancement
-  const knowledgeEnhancement = await getEditKnowledgeEnhancement(editDesc);
-  if (knowledgeEnhancement) {
-    const enhancedInstruction = editDesc + ' ' + knowledgeEnhancement;
-    try {
-      const hfResult = await callHuggingFaceInstructEdit(imageBase64, enhancedInstruction, mimeType);
-      if (hfResult && hfResult.byteLength > 100) return hfResult;
-    } catch {}
-  }
-
-  // Priority 5: Try free Pollinations img2img with edit instruction for final attempt
+  // Last resort: Pollinations img2img
   try {
-    const editPrompt = `Edit this image: ${editDesc}. Apply only the requested changes, preserve everything else.`;
-    const editResult = await pollinationsImage(editPrompt, { retries: 1, imageBase64, imageMime: mimeType });
+    const editPrompt = `Edit this image: ${editDesc}`;
+    const editResult = await pollinationsImage(editPrompt, { retries: 2, imageBase64, imageMime: mimeType });
     if (editResult && editResult.byteLength > 100) return editResult;
   } catch {}
 
-  // Final fallback: Provide guidance to user
   return null;
 }
 
-async function getEditKnowledgeEnhancement(editDesc) {
+async function tryVisionEdit(imageBase64, editDesc, mimeType) {
+  if (!OPENROUTER_API_KEY) return null;
   try {
-    const searchTerms = `${editDesc} how to edit this type of image with current AI tools`;
-    const searchResults = await searchWeb(searchTerms);
-    if (searchResults && searchResults.length > 100) {
-      return 'Based on current AI techniques: ' + searchResults.slice(0, 500);
-    }
+    // Step 1: Analyze the original image with vision model
+    const visionPrompt = `Describe this image in detail. Focus on: main subject, colors, composition, setting, lighting, style, and key visual elements. Be specific about what can be seen.`;
+    const visionContent = buildMultimodalContent(visionPrompt, imageBase64, mimeType);
+    const visionMsgs = [
+      { role: 'system', content: 'You are an expert image analyst. Describe images in precise detail.' },
+      { role: 'user', content: visionContent },
+    ];
+    const visionResp = await callOpenRouter(visionMsgs, { model: VISION_MODEL, stream: false, max_tokens: 512, temperature: 0.2 });
+    const visionData = await visionResp.json();
+    const imageDescription = sanitizeText(visionData?.choices?.[0]?.message?.content || '');
+    if (!imageDescription || imageDescription.length < 20) return null;
+
+    // Step 2: Generate an edit prompt based on the description + user's edit request
+    const editPromptMsgs = [
+      { role: 'system', content: 'You are an expert image editing prompt engineer. Given an original image description and an edit request, create a detailed text-to-image prompt that produces the edited version. Focus on visual details. NEVER include text, words, letters, or typography in the prompt. Return ONLY the prompt, no explanations.' },
+      { role: 'user', content: `Original image: ${imageDescription}\n\nEdit request: ${editDesc}\n\nCreate a detailed image generation prompt that shows the image after this edit is applied. Describe ONLY the resulting edited scene.` },
+    ];
+    const editPromptResp = await callOpenRouter(editPromptMsgs, { model: OPENROUTER_MODEL, stream: false, max_tokens: 500, temperature: 0.4 });
+    const editPromptData = await editPromptResp.json();
+    let generatedPrompt = sanitizeText(editPromptData?.choices?.[0]?.message?.content || '');
+    if (!generatedPrompt || generatedPrompt.length < 20) return null;
+    generatedPrompt = generatedPrompt
+      .replace(/\b(Acronous|acronous|ACRONOUS)\b/gi, '')
+      .replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography)\s*[,.]*/gi, '')
+      .replace(/\s+/g, ' ').trim();
+
+    // Step 3: Generate the image via Pollinations
+    const imageBuffer = await pollinationsImage(generatedPrompt, { retries: 3 });
+    if (imageBuffer && imageBuffer.byteLength > 500) return imageBuffer;
   } catch {}
   return null;
 }
@@ -1727,55 +1708,23 @@ async function ultraEditImageHandler(request) {
       return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 400);
     }
 
-    // Run multiple editing strategies in parallel
-    const strategies = [
-      // Strategy 1: instruct-pix2pix
-      (async () => {
-        try {
-          const result = await callHuggingFaceInstructEdit(base64, editDesc, mimeType);
-          if (result && result.byteLength > 200) return result;
-        } catch {}
-        return null;
-      })(),
-      // Strategy 2: inpainting
-      (async () => {
-        try {
-          const result = await callHuggingFaceInpainting(base64, editDesc, mimeType);
-          if (result && result.byteLength > 200) return result;
-        } catch {}
-        return null;
-      })(),
-      // Strategy 3: web search enhanced instruct
-      (async () => {
-        try {
-          const searchTerms = `${editDesc} image editing technique`;
-          const searchResults = await searchWeb(searchTerms);
-          const enhanced = searchResults ? `${editDesc} ${searchResults.slice(0, 300)}` : editDesc;
-          const result = await callHuggingFaceInstructEdit(base64, enhanced, mimeType);
-          if (result && result.byteLength > 200) return result;
-        } catch {}
-        return null;
-      })(),
-      // Strategy 4: web search enhanced inpainting
-      (async () => {
-        try {
-          const searchTerms = `${editDesc} cut replace image editing tutorial`;
-          const searchResults = await searchWeb(searchTerms);
-          const enhanced = searchResults ? `${editDesc} ${searchResults.slice(0, 300)}` : editDesc;
-          const result = await callHuggingFaceInpainting(base64, enhanced, mimeType);
-          if (result && result.byteLength > 200) return result;
-        } catch {}
-        return null;
-      })(),
-    ];
-
-    const results = await Promise.allSettled(strategies);
+    // Run editing attempts in priority order
     let imageBuffer = null;
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) {
-        imageBuffer = r.value;
-        break;
-      }
+    imageBuffer = await tryVisionEdit(base64, editDesc, mimeType);
+    if (!imageBuffer) {
+      try {
+        imageBuffer = await callHuggingFaceInstructEdit(base64, editDesc, mimeType);
+      } catch {}
+    }
+    if (!imageBuffer) {
+      try {
+        imageBuffer = await callHuggingFaceInpainting(base64, editDesc, mimeType);
+      } catch {}
+    }
+    if (!imageBuffer) {
+      try {
+        imageBuffer = await pollinationsImage(`Edit this image: ${editDesc}`, { retries: 2, imageBase64: base64, imageMime: mimeType });
+      } catch {}
     }
 
     if (imageBuffer) {
@@ -2552,7 +2501,14 @@ async function generateNaturalResponseHandler(request) {
     const body = await request.json();
     const prompt = body.prompt || '';
     if (!prompt) return jsonResponse({ response: '' });
-    const content = await generateNaturalResponse(prompt);
+    let content = await generateNaturalResponse(prompt);
+    if (!content) {
+      const msgs = [
+        { role: 'system', content: 'You are Acronous AI. Respond briefly and naturally.' },
+        { role: 'user', content: prompt },
+      ];
+      content = sanitizeText(await callPollinationsText(msgs, { timeout: 30000 }));
+    }
     return jsonResponse({ response: content || '' });
   } catch {
     return jsonResponse({ response: '' });
@@ -2566,7 +2522,14 @@ async function generateFriendlyMessageHandler(request) {
     const body = await request.json();
     const prompt = body.prompt || '';
     if (!prompt) return jsonResponse({ response: '' });
-    const content = await generateNaturalResponse(prompt);
+    let content = await generateNaturalResponse(prompt);
+    if (!content) {
+      const msgs = [
+        { role: 'system', content: 'You are Acronous AI. Respond briefly and naturally with a friendly tone.' },
+        { role: 'user', content: prompt },
+      ];
+      content = sanitizeText(await callPollinationsText(msgs, { timeout: 30000 }));
+    }
     return jsonResponse({ response: content || '' });
   } catch {
     return jsonResponse({ response: '' });
