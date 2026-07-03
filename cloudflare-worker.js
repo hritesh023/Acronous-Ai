@@ -1045,47 +1045,19 @@ async function base64ToBlob(base64, mimeType) {
 }
 
 async function callHuggingFaceInstructEdit(imageBase64, editInstruction, imageMime) {
-  // instruct-pix2pix: send raw image bytes + prompt as query param
   const model = 'timbrooks/instruct-pix2pix';
-  try {
-    const binaryStr = atob(imageBase64);
-    const bytes = new Uint8Array(binaryStr.length);
-    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-    const url = `https://api-inference.huggingface.co/models/${model}?prompt=${encodeURIComponent(editInstruction)}`;
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: bytes,
-      signal: AbortSignal.timeout(120000),
-    });
-    if (resp.ok) {
-      const ct = resp.headers.get('content-type') || '';
-      if (ct.startsWith('image/')) {
-        const buf = await resp.arrayBuffer();
-        if (buf && buf.byteLength > 500) return buf;
-      }
-    }
-  } catch {}
-  return null;
-}
-
-async function callHuggingFaceInpainting(imageBase64, editInstruction, imageMime) {
-  // Inpainting models: send image + prompt, model handles the edit
-  const models = [
-    'stabilityai/stable-diffusion-2-inpainting',
-    'runwayml/stable-diffusion-inpainting',
-  ];
   const binaryStr = atob(imageBase64);
   const bytes = new Uint8Array(binaryStr.length);
   for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
-  for (const model of models) {
+  const maxRetries = 5;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const url = `https://api-inference.huggingface.co/models/${model}?prompt=${encodeURIComponent(editInstruction)}&negative_prompt=${encodeURIComponent('text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs')}`;
+      const url = `https://api-inference.huggingface.co/models/${model}?prompt=${encodeURIComponent(editInstruction)}`;
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: bytes,
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(180000),
       });
       if (resp.ok) {
         const ct = resp.headers.get('content-type') || '';
@@ -1093,8 +1065,50 @@ async function callHuggingFaceInpainting(imageBase64, editInstruction, imageMime
           const buf = await resp.arrayBuffer();
           if (buf && buf.byteLength > 500) return buf;
         }
+      } else if (resp.status === 503 || resp.status === 429) {
+        const delay = Math.min(5000 * Math.pow(2, attempt), 60000);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
       }
     } catch {}
+    if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 3000));
+  }
+  return null;
+}
+
+async function callHuggingFaceInpainting(imageBase64, editInstruction, imageMime) {
+  const models = [
+    'stabilityai/stable-diffusion-2-inpainting',
+    'runwayml/stable-diffusion-inpainting',
+  ];
+  const binaryStr = atob(imageBase64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+  const maxRetries = 3;
+  for (const model of models) {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const url = `https://api-inference.huggingface.co/models/${model}?prompt=${encodeURIComponent(editInstruction)}&negative_prompt=${encodeURIComponent('text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs')}`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: bytes,
+          signal: AbortSignal.timeout(180000),
+        });
+        if (resp.ok) {
+          const ct = resp.headers.get('content-type') || '';
+          if (ct.startsWith('image/')) {
+            const buf = await resp.arrayBuffer();
+            if (buf && buf.byteLength > 500) return buf;
+          }
+        } else if (resp.status === 503 || resp.status === 429) {
+          const delay = Math.min(5000 * Math.pow(2, attempt), 60000);
+          await new Promise(r => setTimeout(r, delay));
+          continue;
+        }
+      } catch {}
+      if (attempt < maxRetries - 1) await new Promise(r => setTimeout(r, 3000));
+    }
   }
   return null;
 }
@@ -1176,8 +1190,10 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
     // ── Priority 3: Free image.pollinations.ai with short prompt + img ──
     const negative = 'text, letters, deformed, distorted, blurry, low quality, pixelated, artifacts, extra limbs, missing limbs, malformed';
     const freeModels = ['flux', 'turbo', 'flux-schnell'];
+    const maxPollUrlLen = 7500;
+    const safeFormats = imageFormats.filter(f => f.length < maxPollUrlLen);
     for (const fm of freeModels) {
-      for (const imgFormat of imageFormats) {
+      for (const imgFormat of safeFormats) {
         for (let attempt = 0; attempt < 3; attempt++) {
           try {
             const encodedPrompt = encodeURIComponent(shortPrompt);
@@ -1201,7 +1217,7 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
     // ── Priority 4: Free img2img with preservation-focused prompt ──
     const preservePrompt = shortPrompt + ' IDENTICAL RECONSTRUCTION: Preserve the exact same subject, face, body, pose, expression, background, lighting, composition. Only apply the described change. No text.';
     for (const fm of freeModels) {
-      for (const imgFormat of imageFormats) {
+      for (const imgFormat of safeFormats) {
         try {
           const encodedPrompt = encodeURIComponent(preservePrompt);
           const encodedImage = encodeURIComponent(imgFormat);
@@ -1325,16 +1341,18 @@ async function callWorkersAIImageEdit(imageBytes, editDesc, mimeType) {
 
 // ── Enhanced Pollinations img2img with optimized prompts ─────────────────
 async function pollinationsImg2img(imageBase64, editDesc, mimeType) {
-  // Build a preservation-focused edit prompt
+  const dataUri = `data:${mimeType || 'image/jpeg'};base64,${imageBase64}`;
+  const maxUrlLen = 7500;
+  if (dataUri.length >= maxUrlLen) return null;
+
   const editPrompt = `${editDesc}. IMPORTANT: Preserve the original subject, face, body, pose, expression, background, and composition. Only apply the described change. No text, no words, no letters.`;
   
-  // Try with multiple models and retries
   const freeModels = ['flux', 'flux-schnell', 'turbo'];
   for (const fm of freeModels) {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const encodedPrompt = encodeURIComponent(editPrompt.substring(0, 500));
-        const encodedImage = encodeURIComponent(`data:${mimeType || 'image/jpeg'};base64,${imageBase64}`);
+        const encodedImage = encodeURIComponent(dataUri);
         const negative = encodeURIComponent('text, words, letters, deformed, distorted, blurry, low quality, pixelated, artifacts, extra limbs, missing limbs, malformed, watermark, signature');
         const seed = Math.floor(Math.random() * 1000000) + attempt * 7;
         const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=${fm}&negative=${negative}&seed=${seed}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
@@ -1355,38 +1373,40 @@ async function pollinationsImg2img(imageBase64, editDesc, mimeType) {
 }
 
 async function editImageWithInstruct(imageBase64, editDesc, mimeType, fileBytes) {
-  // Priority 1: Cloudflare Workers AI img2img (free, reliable within plan)
+  // Priority 1: HuggingFace instruct-pix2pix (true instruction-based editing via POST, no URL limits)
+  const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
+  if (hfResult && hfResult.byteLength > 500) return hfResult;
+
+  // Priority 2: Cloudflare Workers AI img2img (free, reliable within plan)
   if (globalThis.AI) {
     const waifResult = await callWorkersAIImageEdit(fileBytes, editDesc, mimeType);
     if (waifResult && waifResult.byteLength > 500) return waifResult;
   }
-  
-  // Priority 2: Enhanced Pollinations img2img (free, unlimited)
-  const pollResult = await pollinationsImg2img(imageBase64, editDesc, mimeType);
-  if (pollResult && pollResult.byteLength > 500) return pollResult;
-  
-  // Priority 3: Vision + LLM + Pollinations generation
+
+  // Priority 3: HuggingFace inpainting (for structural edits like add/remove/replace)
+  const hfInpaintResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
+  if (hfInpaintResult && hfInpaintResult.byteLength > 500) return hfInpaintResult;
+
+  // Priority 4: Pollinations img2img — only if base64 is URL-safe
+  const maxUrlLen = 7500;
+  const dataUriLength = `data:${mimeType || 'image/jpeg'};base64,${imageBase64}`.length;
+  if (dataUriLength < maxUrlLen) {
+    const pollResult = await pollinationsImg2img(imageBase64, editDesc, mimeType);
+    if (pollResult && pollResult.byteLength > 500) return pollResult;
+  }
+
+  // Priority 5: Pollinations free API — bypass URL limit by using gen.pollinations.ai POST if API key exists
+  if (typeof POLLINATIONS_API_KEY !== 'undefined' && POLLINATIONS_API_KEY) {
+    try {
+      const editResult = await pollinationsImage(`Edit this image: ${editDesc}`, { retries: 2, imageBase64, imageMime: mimeType });
+      if (editResult && editResult.byteLength > 500) return editResult;
+    } catch {}
+  }
+
+  // Priority 6: Vision + LLM + text-to-image (last resort — describes image then regenerates)
   const visionResult = await tryVisionEdit(imageBase64, editDesc, mimeType);
   if (visionResult && visionResult.byteLength > 500) return visionResult;
-  
-  // Priority 4: HuggingFace instruct-pix2pix
-  try {
-    const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
-    if (hfResult && hfResult.byteLength > 500) return hfResult;
-  } catch {}
-  
-  // Priority 5: HuggingFace inpainting
-  try {
-    const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
-    if (hfResult && hfResult.byteLength > 500) return hfResult;
-  } catch {}
-  
-  // Priority 6: Pollinations img2img with original approach
-  try {
-    const editResult = await pollinationsImage(`Edit this image: ${editDesc}`, { retries: 2, imageBase64, imageMime: mimeType });
-    if (editResult && editResult.byteLength > 500) return editResult;
-  } catch {}
-  
+
   return null;
 }
 
