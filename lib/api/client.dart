@@ -564,23 +564,6 @@ class ApiClient {
     });
   }
 
-  Future<Map<String, dynamic>> ultraEditImage({
-    required Uint8List imageBytes,
-    required String fileName,
-    required String editPrompt,
-    String? sessionId,
-  }) async {
-    final fields = <String, String>{'prompt': editPrompt};
-    if (sessionId != null) fields['session_id'] = sessionId;
-    final resp = await _multipartPost(
-      '/v1/image/ultra-edit',
-      fields,
-      imageBytes,
-      fileName,
-    );
-    return resp;
-  }
-
   Future<Map<String, dynamic>> generateNaturalResponse(
     String prompt,
   ) async {

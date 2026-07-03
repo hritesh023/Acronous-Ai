@@ -1698,6 +1698,122 @@ async function editImageHandler(request) {
   });
 }
 
+// ── Ultra Image Edit (POST /v1/image/ultra-edit) ─────────────────────────
+
+async function ultraEditImageHandler(request) {
+  let editDesc = '', session_id = 'default';
+  try {
+    const formData = await request.formData();
+    const file = formData.get('file');
+    const prompt = formData.get('prompt') || '';
+    session_id = formData.get('session_id') || 'default';
+
+    if (!file) {
+      return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 400);
+    }
+
+    const fileBytes = await file.arrayBuffer();
+    if (fileBytes.byteLength > 20 * 1024 * 1024) {
+      return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 413);
+    }
+
+    const fileName = file.name || 'image.jpg';
+    const rawMime = file.type || '';
+    const mimeType = normalizeImageMime(rawMime, fileName);
+    const base64 = arrayBufferToBase64(fileBytes);
+    editDesc = prompt?.trim() || '';
+
+    if (!editDesc) {
+      return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 400);
+    }
+
+    // Run multiple editing strategies in parallel
+    const strategies = [
+      // Strategy 1: instruct-pix2pix
+      (async () => {
+        try {
+          const result = await callHuggingFaceInstructEdit(base64, editDesc, mimeType);
+          if (result && result.byteLength > 200) return result;
+        } catch {}
+        return null;
+      })(),
+      // Strategy 2: inpainting
+      (async () => {
+        try {
+          const result = await callHuggingFaceInpainting(base64, editDesc, mimeType);
+          if (result && result.byteLength > 200) return result;
+        } catch {}
+        return null;
+      })(),
+      // Strategy 3: web search enhanced instruct
+      (async () => {
+        try {
+          const searchTerms = `${editDesc} image editing technique`;
+          const searchResults = await searchWeb(searchTerms);
+          const enhanced = searchResults ? `${editDesc} ${searchResults.slice(0, 300)}` : editDesc;
+          const result = await callHuggingFaceInstructEdit(base64, enhanced, mimeType);
+          if (result && result.byteLength > 200) return result;
+        } catch {}
+        return null;
+      })(),
+      // Strategy 4: web search enhanced inpainting
+      (async () => {
+        try {
+          const searchTerms = `${editDesc} cut replace image editing tutorial`;
+          const searchResults = await searchWeb(searchTerms);
+          const enhanced = searchResults ? `${editDesc} ${searchResults.slice(0, 300)}` : editDesc;
+          const result = await callHuggingFaceInpainting(base64, enhanced, mimeType);
+          if (result && result.byteLength > 200) return result;
+        } catch {}
+        return null;
+      })(),
+    ];
+
+    const results = await Promise.allSettled(strategies);
+    let imageBuffer = null;
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        imageBuffer = r.value;
+        break;
+      }
+    }
+
+    if (imageBuffer) {
+      const resultBase64 = arrayBufferToBase64(imageBuffer);
+      const responseText = await generateNaturalResponse(
+        `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
+      );
+      return jsonResponse({
+        image_data: resultBase64,
+        response: responseText,
+        session_id, type: 'chat',
+        image_type: 'png', file_data: '', file_name: '', file_type: '',
+      });
+    }
+
+    const responseText = await generateNaturalResponse(
+      `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
+    );
+    return jsonResponse({
+      image_data: '',
+      response: responseText,
+      session_id, type: 'chat',
+      image_type: '', file_data: '', file_name: '', file_type: '',
+    });
+  } catch (e) {
+    const errMsg = await generateNaturalResponse(
+      `I tried to edit an image but couldn't complete it. Respond naturally in 1 sentence.`
+    ).catch(() => '');
+    return jsonResponse({
+      image_data: '',
+      response: errMsg,
+      session_id: session_id || 'default',
+      type: 'chat',
+      image_type: '', file_data: '', file_name: '', file_type: '',
+    });
+  }
+}
+
 // ── API Chat (POST /api/chat) ────────────────────────────────────────────
 
 async function apiChatHandler(request) {
@@ -1919,15 +2035,8 @@ async function searchHandler(request) {
     const body = await request.json();
     const { query, max_results = 5 } = body;
     if (!query) {
-          return jsonResponse({ results: [] });
-        }
-
-        if (!results || results.length === 0) {
-          return jsonResponse({
-            results: [],
-            message: 'No results found for this topic. Try a more specific search.'
-          });
-        }
+      return jsonResponse({ results: [] });
+    }
 
     const results = [];
 
@@ -2433,6 +2542,34 @@ async function generateFileHandler(request) {
     });
   } catch (e) {
     return jsonResponse({ error: 'File generation failed' }, 500);
+  }
+}
+
+// ── Generate Natural Response (POST /v1/chat/generate-natural-response) ──
+
+async function generateNaturalResponseHandler(request) {
+  try {
+    const body = await request.json();
+    const prompt = body.prompt || '';
+    if (!prompt) return jsonResponse({ response: '' });
+    const content = await generateNaturalResponse(prompt);
+    return jsonResponse({ response: content || '' });
+  } catch {
+    return jsonResponse({ response: '' });
+  }
+}
+
+// ── Generate Friendly Message (POST /v1/chat/generate-friendly-message) ──
+
+async function generateFriendlyMessageHandler(request) {
+  try {
+    const body = await request.json();
+    const prompt = body.prompt || '';
+    if (!prompt) return jsonResponse({ response: '' });
+    const content = await generateNaturalResponse(prompt);
+    return jsonResponse({ response: content || '' });
+  } catch {
+    return jsonResponse({ response: '' });
   }
 }
 
@@ -3031,10 +3168,13 @@ export default {
       if (path === '/v1/chat' && method === 'POST') return chatHandler(request);
       if (path === '/v1/chat/image' && method === 'POST') return chatImageHandler(request);
       if (path === '/v1/chat/file' && method === 'POST') return chatFileHandler(request);
+      if (path === '/v1/chat/generate-natural-response' && method === 'POST') return generateNaturalResponseHandler(request);
+      if (path === '/v1/chat/generate-friendly-message' && method === 'POST') return generateFriendlyMessageHandler(request);
 
       // ── Image ───────────────────────────────────────────────────────
       if (path === '/v1/image/generate' && (method === 'GET' || method === 'POST')) return generateImageHandler(request);
       if (path === '/v1/image/edit' && method === 'POST') return editImageHandler(request);
+      if (path === '/v1/image/ultra-edit' && method === 'POST') return ultraEditImageHandler(request);
 
       // ── API ─────────────────────────────────────────────────────────
       if (path === '/api/chat' && method === 'POST') return apiChatHandler(request);
