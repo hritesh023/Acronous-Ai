@@ -245,6 +245,20 @@ class ChatMessageWidget extends StatelessWidget {
                             },
                           ),
                         ),
+                        if (message.imageData.isNotEmpty) ...[
+                          SizedBox(width: AppDimens.gapSM),
+                          Tooltip(
+                            message: 'Download image',
+                            waitDuration: const Duration(milliseconds: 300),
+                            child: _ActionIcon(
+                              icon: Icons.download_rounded,
+                              size: AppDimens.iconSmall,
+                              onTap: () => _downloadGeneratedImage(
+                                context, message.imageData,
+                              ),
+                            ),
+                          ),
+                        ],
                         if (_hasCodeBlocks(message.content))
                           const SizedBox.shrink(),
                         SizedBox(width: AppDimens.gapSM),
@@ -344,23 +358,23 @@ class ChatMessageWidget extends StatelessWidget {
                               },
                         ),
                         Positioned(
-                          bottom: 6,
-                          right: 6,
+                          bottom: 4,
+                          right: 4,
                           child: Container(
                             decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.25),
-                              borderRadius: BorderRadius.circular(3),
+                              color: Colors.black.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(2),
                             ),
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 2,
-                              vertical: 2,
+                              horizontal: 1,
+                              vertical: 1,
                             ),
                             child: ClipRRect(
-                              borderRadius: BorderRadius.circular(2),
+                              borderRadius: BorderRadius.circular(1),
                               child: Image.asset(
                                 'assets/logo.png',
-                                width: 12,
-                                height: 12,
+                                width: 8,
+                                height: 8,
                               ),
                             ),
                           ),
@@ -485,6 +499,25 @@ class ChatMessageWidget extends StatelessWidget {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Could not save file'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _downloadGeneratedImage(BuildContext context, String b64) {
+    try {
+      final bytes = base64Decode(b64);
+      final name = 'acronous_image_${DateTime.now().millisecondsSinceEpoch}.png';
+      if (kIsWeb) {
+        _downloadOnWeb(bytes, name);
+      } else {
+        _saveToDisk(context, bytes, name);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not download image'),
           behavior: SnackBarBehavior.floating,
         ),
       );

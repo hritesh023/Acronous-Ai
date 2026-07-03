@@ -721,16 +721,13 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
   const negative = 'text, letters, words, signature, caption, writing, typography, deformed, distorted, blurry, low quality, worse quality, low res, pixelated, artifacts, different person, different face, different identity, different body, different pose, different posture, different expression, different emotion, different background, different setting, different lighting, different shadows, different composition, different camera angle, different style, different colors, different clothing, different hair, different hair color, different hair style, different body type, different age, different gender, different ethnicity, different skin tone, change subject, change identity, change face, change pose, change expression, change background, change lighting, change composition, change style, change colors, partial body, cropped, cut off, incomplete, mutated, extra limbs, missing limbs, malformed';
   const [w, h] = size.split('x');
 
-  // Build effective image URL for img2img: prefer provided URL, fallback to data URL
   const effectiveImageUrl = imageUrl || (imageBase64 ? `data:${imageMime || 'image/jpeg'};base64,${imageBase64}` : null);
 
-  // Try img2img with gen.pollinations.ai if image source is available
   if (effectiveImageUrl) {
-    // Try with API key first (gen.pollinations.ai)
+    // Try gen.pollinations.ai with API key
     if (typeof POLLINATIONS_API_KEY !== 'undefined' && POLLINATIONS_API_KEY) {
-      try {
-        const imgModels = ['gptimage-large', 'klein', 'flux'];
-        for (const m of imgModels) {
+      for (const m of ['gptimage-large', 'klein', 'flux']) {
+        try {
           const encodedPrompt = encodeURIComponent(prompt);
           const encodedImage = encodeURIComponent(effectiveImageUrl);
           const imgUrl = `https://gen.pollinations.ai/image/${encodedPrompt}?model=${m}&seed=${seed}&image=${encodedImage}&nojson=1&width=${w}&height=${h}`;
@@ -745,54 +742,55 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
               if (buf && buf.byteLength > 500) return buf;
             }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
 
-    // Try free img2img via image.pollinations.ai with img parameter - multiple attempts
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const encodedPrompt = encodeURIComponent(prompt);
-        const encodedImage = encodeURIComponent(effectiveImageUrl);
-        const encodedNegative = encodeURIComponent(negative);
-        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=flux&negative=${encodedNegative}&seed=${seed + attempt}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
-        const resp = await fetch(url, { signal: AbortSignal.timeout(45000) });
-        if (resp.ok) {
-          const ct = resp.headers.get('content-type') || '';
-          if (ct.startsWith('image/')) {
-            const buf = await resp.arrayBuffer();
-            if (buf && buf.byteLength > 500) return buf;
+    // Try free img2img with multiple models
+    const freeModels = ['flux', 'turbo', 'flux-schnell'];
+    for (const fm of freeModels) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const encodedPrompt = encodeURIComponent(prompt);
+          const encodedImage = encodeURIComponent(effectiveImageUrl);
+          const encodedNegative = encodeURIComponent(negative);
+          const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${fm}&negative=${encodedNegative}&seed=${seed + attempt}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
+          const resp = await fetch(url, { signal: AbortSignal.timeout(45000) });
+          if (resp.ok) {
+            const ct = resp.headers.get('content-type') || '';
+            if (ct.startsWith('image/')) {
+              const buf = await resp.arrayBuffer();
+              if (buf && buf.byteLength > 500) return buf;
+            }
           }
-        }
-      } catch {}
-      if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+        } catch {}
+        if (attempt < 1) await new Promise(r => setTimeout(r, 2000));
+      }
     }
   }
 
-  // Only fallback to text-to-image if no image source was provided
+  // Text-to-image: ONLY when no source image was provided (prevents silent TTI fallback
+  // that generates a completely different image instead of editing the original)
   if (!effectiveImageUrl) {
-    const models = [model, 'flux-schnell', 'turbo'];
-    for (const m of models) {
+    const ttiModels = ['flux', 'flux-schnell', 'turbo'];
+    for (const m of ttiModels) {
       for (let r = 0; r <= retries; r++) {
         try {
           const encodedPrompt = encodeURIComponent(prompt);
           const encodedNegative = encodeURIComponent(negative);
-          const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r}&nofeed=1&nojson=1&wait=1`;
+          const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${m}&negative=${encodedNegative}&seed=${seed + r + 100}&nofeed=1&nojson=1&wait=1`;
           const resp = await fetch(url);
-          if (!resp.ok) {
-            continue;
-          }
+          if (!resp.ok) continue;
           const ct = resp.headers.get('content-type') || '';
           if (!ct.startsWith('image/')) continue;
           const buf = await resp.arrayBuffer();
-          if (buf && buf.byteLength > 500) {
-            return buf;
-          }
+          if (buf && buf.byteLength > 500) return buf;
         } catch {}
         if (r < retries) await new Promise(r2 => setTimeout(r2, 1500 * (r + 1)));
       }
     }
   }
+
   throw new Error('Image generation failed');
 }
 
@@ -1031,25 +1029,25 @@ CRITICAL:
             imageMime: mimeType,
           });
         } catch (primaryError) {
-          // Fallback: Try with simpler, more direct prompt
-          const fallbackPrompt = `Recreate this image with ONLY this change: ${editDesc}. Preserve everything else identically. Realistic photographic style.`;
-          try {
-            imageBuffer = await pollinationsImage(fallbackPrompt, {
-              retries: 2,
-              seed: seed + 1,
-              imageBase64: base64,
-              imageMime: mimeType,
-            });
-          } catch (secondaryError) {
-            // Last resort: Try text-to-image-like approach
-            const lastResortPrompt = `${editDesc}. Photo quality. Realistic.`;
-            imageBuffer = await pollinationsImage(lastResortPrompt, {
-              retries: 2,
-              seed: seed + 2,
-              imageBase64: base64,
-              imageMime: mimeType,
-            });
+          // img2img failed - use vision description to construct detailed TTI prompt
+          let imageDescription = '';
+          const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|WITH ONLY THIS CHANGE:|$)/i);
+          if (origMatch && origMatch[1].trim().length > 20) {
+            imageDescription = origMatch[1].trim();
+          } else {
+            try {
+              imageDescription = await describeImage(base64, mimeType, fileName) || editDesc;
+            } catch {
+              imageDescription = editDesc;
+            }
           }
+          // Strip edit prefixes from editDesc for cleaner prompt
+          const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
+          const ttiPrompt = `ORIGINAL IMAGE: ${imageDescription}. APPLY ONLY THIS CHANGE: ${cleanChange}. CRITICAL: Preserve the subject identity (face, features, skin, hair, expression, pose), background, lighting, composition, camera angle EXACTLY. Only modify the specific element requested. Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading. No text, words, letters, symbols, or typography.`;
+          imageBuffer = await pollinationsImage(ttiPrompt, {
+            retries: 3,
+            seed: seed + 1,
+          });
         }
         const resultBase64 = arrayBufferToBase64(imageBuffer);
         return jsonResponse({
@@ -1490,15 +1488,37 @@ CRITICAL RULES:
   // Derive response text from the edit request
   responseText = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
 
-  // ── Phase 2: Generate edited image with img2img support ──
+  // ── Phase 2: Generate edited image ──
   try {
     const seed = computeSeed(fileBytes);
-    const imageBuffer = await pollinationsImage(imagePrompt, {
-      retries: 3,
-      seed,
-      imageBase64: base64,
-      imageMime: mimeType,
-    });
+    let imageBuffer;
+    try {
+      imageBuffer = await pollinationsImage(imagePrompt, {
+        retries: 3,
+        seed,
+        imageBase64: base64,
+        imageMime: mimeType,
+      });
+    } catch (img2imgError) {
+      // img2img failed - use vision description for TTI fallback
+      let imageDescription = '';
+      const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
+      if (origMatch && origMatch[1].trim().length > 20) {
+        imageDescription = origMatch[1].trim();
+      } else {
+        try {
+          imageDescription = await describeImage(base64, mimeType, fileName) || editDesc;
+        } catch {
+          imageDescription = editDesc;
+        }
+      }
+      const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
+      const ttiPrompt = `ORIGINAL IMAGE: ${imageDescription}. APPLY ONLY THIS CHANGE: ${cleanChange}. CRITICAL: Preserve subject identity, face, expression, pose, background, lighting, composition EXACTLY. Only modify the specific element requested. Photorealistic, natural. No text or typography.`;
+      imageBuffer = await pollinationsImage(ttiPrompt, {
+        retries: 3,
+        seed: seed + 1,
+      });
+    }
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     return jsonResponse({
       response: responseText,
@@ -1654,12 +1674,24 @@ Start with "The image shows" followed by all original details.`,
     }
 
     const seed = computeSeed(fileBytes);
-    const imageBuffer = await pollinationsImage(redesignPrompt, {
-      retries: 2,
-      seed,
-      imageBase64: base64,
-      imageMime: mimeType,
-    });
+    let imageBuffer;
+    try {
+      imageBuffer = await pollinationsImage(redesignPrompt, {
+        retries: 2,
+        seed,
+        imageBase64: base64,
+        imageMime: mimeType,
+      });
+    } catch (img2imgError) {
+      // img2img failed - get description and use TTI
+      let imgDesc = '';
+      try { imgDesc = await describeImage(base64, mimeType, fileName) || prompt; } catch { imgDesc = prompt; }
+      const ttiPrompt = `ORIGINAL IMAGE: ${imgDesc}. APPLY ONLY: ${prompt}. Preserve subject identity, face, expression, pose, background, lighting, composition EXACTLY. Only change the requested element. Photorealistic. No text.`;
+      imageBuffer = await pollinationsImage(ttiPrompt, {
+        retries: 2,
+        seed: seed + 1,
+      });
+    }
     const b64 = arrayBufferToBase64(imageBuffer);
 
     return jsonResponse({ content: b64, error: null, prompt: redesignPrompt, session_id });
