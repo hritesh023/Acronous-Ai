@@ -18,7 +18,9 @@ function fixSubdomainLinks() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  fixSubdomainLinks();
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    fixSubdomainLinks();
+  }
 
   const navToggle = document.querySelector('.nav-toggle');
   const navLinks = document.querySelector('.nav-links');

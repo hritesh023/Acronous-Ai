@@ -9,7 +9,11 @@ const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.AUTH_PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'acronous-auth-secret-change-in-prod';
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is required');
+  process.exit(1);
+}
+const JWT_SECRET = process.env.JWT_SECRET;
 const TOKEN_NAME = 'acronous_token';
 const USERS_FILE = path.join(__dirname, 'users.json');
 
