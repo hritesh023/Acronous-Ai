@@ -66,7 +66,7 @@ function isCodeRequest(text) {
   }
 
   function arrayBufferToBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
+  const bytes = new Uint8Array(buffer);
   const len = bytes.length;
   const chunks = [];
   let i = 0;
@@ -78,6 +78,13 @@ function isCodeRequest(text) {
     i = end;
   }
   return btoa(chunks.join(''));
+}
+
+function base64ToArrayBuffer(base64) {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
 }
 
 function computeSeed(bytes) {
@@ -661,27 +668,106 @@ function wakeupHandler() {
 // ── Pollinations text (free, no API key needed) ──────────────────────────
 
 const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai';
+const POLLINATIONS_MODELS = ['openai', 'openai-large', 'llama', 'mistral', 'claude-haiku', 'gemini-pro'];
 
 async function callPollinationsText(messages, options = {}) {
-  const { max_tokens = 4096, temperature = 0.7, timeout = 120000 } = options;
-  const body = { messages, model: 'openai', private: true };
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-  try {
-    const resp = await fetch(POLLINATIONS_TEXT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    if (!resp.ok) throw new Error(`Pollinations error (${resp.status})`);
-    return resp.text();
-  } finally {
-    clearTimeout(timer);
+  const { max_tokens = 4096, temperature = 0.7, timeout = 120000, models = POLLINATIONS_MODELS } = options;
+  for (const model of models) {
+    const body = { messages, model, private: true };
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
+    try {
+      const resp = await fetch(POLLINATIONS_TEXT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (resp.ok) {
+        const text = await resp.text();
+        if (text && text.trim().length > 0) return text;
+      }
+    } catch {} finally {
+      clearTimeout(timer);
+    }
   }
+  return '';
 }
 
-// ── Chat (POST /v1/chat) ──────────────────────────────────────────────────
+// ── Image generation request detection ────────────────────────────────────
+
+function isImageGenRequest(text) {
+  if (!text || text.length < 4) return false;
+  const t = text.toLowerCase().trim();
+  if (/^(draw|paint|sketch|render|imagine)\s/.test(t)) return true;
+  const patterns = [
+    'generate an image', 'generate a picture', 'generate a photo',
+    'create an image', 'create a picture', 'create a photo',
+    'make an image', 'make a picture', 'make a photo',
+    'generate image of', 'generate picture of',
+    'create image of', 'create picture of',
+    'image of a', 'image of an',
+    'picture of a', 'picture of an',
+    'photo of a', 'photo of an',
+    'draw me a', 'draw me an', 'draw me',
+    'paint me a', 'paint me an',
+    'make me a', 'make me an',
+    'create me a', 'create me an',
+    'generate me a', 'generate me an',
+    'show me a picture', 'show me an image',
+    'generate a', 'generate an',
+    'create a', 'create an',
+    'a picture of', 'a photo of', 'an image of',
+    'a drawing of', 'a painting of', 'a sketch of',
+  ];
+  for (const pat of patterns) {
+    if (t.includes(pat)) return true;
+  }
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'];
+  if (imageExts.some(ext => t.includes(ext))) {
+    const visualWords = ['image', 'picture', 'photo', 'draw', 'paint', 'sketch',
+      'illustration', 'artwork', 'design', 'graphic', 'sunset', 'landscape',
+      'portrait', 'cartoon', 'render', 'logo', 'icon', 'banner', 'wallpaper',
+      'background', 'poster', 'character', 'scene', 'of a', 'of an'];
+    if (visualWords.some(w => t.includes(w))) return true;
+  }
+  const creationVerbs = ['draw', 'paint', 'sketch', 'render', 'imagine', 'generate', 'create', 'make'];
+  const visualNouns = ['image', 'picture', 'photo', 'drawing', 'painting', 'sketch',
+    'illustration', 'artwork', 'logo', 'banner', 'poster', 'wallpaper',
+    'cartoon', 'portrait', 'landscape', 'sunset', 'character', 'scene'];
+  const hasVerb = creationVerbs.some(v => new RegExp('\\b' + v + '\\b').test(t));
+  if (hasVerb && visualNouns.some(n => t.includes(n))) return true;
+  return false;
+}
+
+async function generateImage(prompt, session_id) {
+  let imagePrompt = prompt;
+  try {
+    const llmMessages = [
+      { role: 'system', content: 'You are an expert image prompt engineer. Convert user requests into detailed image prompts. Describe the subject, setting, colors, lighting, composition, and style. CRITICAL RULES: NEVER include text, letters, words, signatures, captions, labels, typography, or any rendered text in the image. NEVER use the phrase "Acronous" or any branding. Return ONLY the prompt, no explanations, no markdown, no greetings.' },
+      { role: 'user', content: `Create a detailed image prompt for: ${prompt}. Focus on visual elements only — no text, no words, no letters, no writing.` },
+    ];
+    const resp = await callOpenRouter(llmMessages, { model: OPENROUTER_MODEL, stream: false, max_tokens: 500, temperature: 0.3 });
+    const data = await resp.json();
+    const generated = data?.choices?.[0]?.message?.content?.trim();
+    if (generated && generated.length > 10 && generated.length < 2000) imagePrompt = generated;
+  } catch {}
+  imagePrompt = imagePrompt
+    .replace(/\b(Acronous|acronous|ACRONOUS)\b/gi, '')
+    .replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '')
+    .replace(/\s+/g, ' ').trim();
+  if (!imagePrompt || imagePrompt.length < 10) imagePrompt = prompt;
+  let imageBuffer;
+  try {
+    imageBuffer = await pollinationsImage(imagePrompt, { retries: 2 });
+  } catch {
+    imageBuffer = await pollinationsImage(imagePrompt, { model: 'flux-schnell', retries: 1 }).catch(() => null);
+  }
+  if (!imageBuffer) return null;
+  return arrayBufferToBase64(imageBuffer);
+}
+
+// ── Chat (POST /v1/chat) — NEVER returns empty ────────────────────────────
 
 async function chatHandler(request) {
   let message = '', session_id = 'default';
@@ -692,16 +778,29 @@ async function chatHandler(request) {
     session_id = sid;
 
     if (!message) {
-      return jsonResponse({
-        response: '',
-        session_id,
-        type: 'error',
-      }, 400);
+      return jsonResponse({ response: '', session_id, type: 'error' }, 400);
+    }
+
+    // Route image generation requests — generate image + friendly message
+    if (isImageGenRequest(message)) {
+      const [imageBase64, friendlyResponse] = await Promise.all([
+        generateImage(message, session_id),
+        generateNaturalResponse(`The user asked me to generate an image based on: "${message}". Briefly confirm what you created in 1 natural sentence. Keep it under 20 words.`),
+      ]);
+      if (imageBase64) {
+        return jsonResponse({
+          response: friendlyResponse || '',
+          image_data: imageBase64,
+          session_id,
+          type: 'image_gen',
+          image_type: 'png',
+          file_data: '', file_name: '', file_type: '',
+        });
+      }
     }
 
     const complexity = estimateComplexity(message);
 
-    // Skip web search for greetings — respond instantly with low tokens
     let msgs;
     if (complexity === 'greeting') {
       msgs = buildMessages(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
@@ -709,43 +808,58 @@ async function chatHandler(request) {
       msgs = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
     }
 
-    // Dynamic timeout: greeting → fast (15s), simple → moderate (45s), complex → generous (120s+)
-    const pollinationsTimeout = complexity === 'greeting' ? 15000 :
-                                complexity === 'simple' ? 45000 :
-                                120000;
+    const timeout = complexity === 'greeting' ? 30000 :
+                    complexity === 'simple' ? 90000 :
+                    complexity === 'moderate' ? 180000 :
+                    300000;
 
     let content = '';
-    try {
-      content = sanitizeText(await callPollinationsText(msgs, { timeout: pollinationsTimeout }));
-    } catch (_) {}
 
-    // Skip OpenRouter fallback for greetings — respond fast with what we have
-    if (!content && complexity !== 'greeting' && OPENROUTER_API_KEY) {
-      const models = [OPENROUTER_MODEL, FAST_MODEL, 'openrouter/auto'];
-      for (let attempt = 0; attempt < models.length; attempt++) {
+    // Phase 1: Pollinations — try all available models
+    content = sanitizeText(await callPollinationsText(msgs, { timeout, models: POLLINATIONS_MODELS }));
+
+    // Phase 2: OpenRouter fallback with all models
+    if (!content && OPENROUTER_API_KEY) {
+      const orModels = [OPENROUTER_MODEL, FAST_MODEL, 'openrouter/auto'];
+      for (const model of orModels) {
         try {
-          const resp = await callOpenRouter(msgs, { model: models[attempt], max_tokens: 8192, temperature: 0.7 });
+          const resp = await callOpenRouter(msgs, { model, max_tokens: 8192, temperature: 0.7 });
           const data = await resp.json();
           content = sanitizeText(data?.choices?.[0]?.message?.content || '');
           if (content) break;
-        } catch (_) {}
-        if (attempt < models.length - 1) await new Promise(r => setTimeout(r, 1000));
+        } catch {}
       }
     }
 
-    // Retry with full original context — never use simplified/hardcoded fallback
+    // Phase 3: Retry Pollinations with extended timeout
     if (!content) {
-      try {
-        content = sanitizeText(await callPollinationsText(msgs, { timeout: 180000 }));
-      } catch (_) {}
+      content = sanitizeText(await callPollinationsText(msgs, { timeout: 300000, models: ['openai', 'openai-large'] }));
     }
 
-    if (content) {
-      content = ensureNaturalLanguage(content);
+    // Phase 4: Generate a natural response via OpenRouter as final fallback
+    if (!content && OPENROUTER_API_KEY && message) {
+      content = await generateNaturalResponse(
+        `Respond naturally and helpfully to: "${message}". Keep it brief — 1-2 sentences.`
+      );
+      if (content) content = ensureNaturalLanguage(content);
     }
+
+    // Phase 5: One more Pollinations try with minimal system prompt
+    if (!content) {
+      const minimalMsgs = [
+        { role: 'system', content: 'You are a helpful AI assistant. Respond briefly and naturally.' },
+        { role: 'user', content: message },
+      ];
+      content = sanitizeText(await callPollinationsText(minimalMsgs, { timeout: 120000, models: ['openai', 'llama', 'mistral'] }));
+    }
+
+    if (content) content = ensureNaturalLanguage(content);
+
+    // Last resort — short but non-empty
+    if (!content) content = '.';
 
     return jsonResponse({
-      response: content || '',
+      response: content,
       session_id,
       type: 'chat',
       image_data: '',
@@ -756,8 +870,11 @@ async function chatHandler(request) {
     });
   } catch (e) {
     console.error('chatHandler error:', e?.message || e);
+    const fallback = await generateNaturalResponse(
+      `The user said: "${message || 'hello'}". Respond briefly and naturally.`
+    ).catch(() => '');
     return jsonResponse({
-      response: '',
+      response: fallback || '.',
       session_id: session_id || 'default',
       type: 'chat',
       image_data: '',
@@ -807,115 +924,62 @@ async function base64ToBlob(base64, mimeType) {
   return new Blob([bytes], { type: mimeType || 'image/jpeg' });
 }
 
-async function callHuggingFaceImageEdit(imageBase64, editInstruction, imageMime) {
-  const models = [
-    'timbrooks/instruct-pix2pix',
-    'stabilityai/stable-diffusion-2-1',
-    'runwayml/stable-diffusion-v1-5',
-  ];
-
-  for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      // Try JSON format with base64 (works with most HF models)
-      try {
-        const resp = await fetch(`https://api-inference.huggingface.co/models/${model}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            inputs: imageBase64,
-            parameters: {
-              prompt: editInstruction,
-              negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
-            },
-          }),
-          signal: AbortSignal.timeout(120000),
-        });
-        if (resp.ok) {
-          const ct = resp.headers.get('content-type') || '';
-          if (ct.startsWith('image/')) {
-            const buf = await resp.arrayBuffer();
-            if (buf && buf.byteLength > 500) return buf;
-          }
-        }
-      } catch {}
-
-      // Try raw bytes format (alternative)
-      try {
-        const blob = await base64ToBlob(imageBase64, imageMime);
-        const params = new URLSearchParams({
-          prompt: editInstruction,
-          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality',
-        });
-        const resp = await fetch(
-          `https://api-inference.huggingface.co/models/${model}?${params.toString()}`,
-          {
-            method: 'POST',
-            body: blob,
-            signal: AbortSignal.timeout(120000),
-          }
-        );
-        if (resp.ok) {
-          const ct = resp.headers.get('content-type') || '';
-          if (ct.startsWith('image/')) {
-            const buf = await resp.arrayBuffer();
-            if (buf && buf.byteLength > 500) return buf;
-          }
-        }
-      } catch {}
+async function callHuggingFaceInstructEdit(imageBase64, editInstruction, imageMime) {
+  // instruct-pix2pix: send raw image bytes + prompt as query param
+  const model = 'timbrooks/instruct-pix2pix';
+  try {
+    const binaryStr = atob(imageBase64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    const url = `https://api-inference.huggingface.co/models/${model}?prompt=${encodeURIComponent(editInstruction)}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: bytes,
+      signal: AbortSignal.timeout(120000),
+    });
+    if (resp.ok) {
+      const ct = resp.headers.get('content-type') || '';
+      if (ct.startsWith('image/')) {
+        const buf = await resp.arrayBuffer();
+        if (buf && buf.byteLength > 500) return buf;
+      }
     }
-  }
-
+  } catch {}
   return null;
 }
 
-async function constructEditPrompt(userRequest, originalDescription) {
-  const subject = originalDescription && originalDescription.length > 20
-    ? originalDescription
-    : 'the main subject of the uploaded image';
-
-  try {
-    const llmMessages = [
-      { role: 'system', content: 'You generate detailed image edit prompts. Describe the ORIGINAL image/subject in detail first, then specify ONLY what changes. CRITICAL: Every visible detail of the original must be preserved except the specific change. Format: "ORIGINAL IMAGE: [full original description]. CHANGE: [only what changes]. PRESERVE ALL OTHER DETAILS IDENTICAL. No text, no typography."' },
-      { role: 'user', content: `Original: "${subject}"\nChange only: "${userRequest}"\n\nGenerate a prompt that describes the original image fully, then specifies only what changes. Preserve the subject identity, face, body, pose, expression, background, lighting, and composition EXACTLY except for the change.` },
-    ];
-    const resp = await callOpenRouter(llmMessages, { model: OPENROUTER_MODEL, stream: false, max_tokens: 400, temperature: 0.1 });
-    const data = await resp.json();
-    const generated = data?.choices?.[0]?.message?.content?.trim();
-    if (generated && generated.length > 15 && isValidImagePrompt(generated, userRequest)) {
-      return generated;
-    }
-  } catch {}
-
-  const cleanRequest = userRequest
-    .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
-    .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
-    .trim();
-
-  if (cleanRequest && cleanRequest.length > 5) {
-    return `ORIGINAL IMAGE: ${subject}. CHANGE: ${cleanRequest}. PRESERVE subject identity, face, pose, expression, background, lighting, composition IDENTICAL. No text or typography.`;
+async function callHuggingFaceInpainting(imageBase64, editInstruction, imageMime) {
+  // Inpainting models: send image + prompt, model handles the edit
+  const models = [
+    'stabilityai/stable-diffusion-2-inpainting',
+    'runwayml/stable-diffusion-inpainting',
+  ];
+  const binaryStr = atob(imageBase64);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+  for (const model of models) {
+    try {
+      const url = `https://api-inference.huggingface.co/models/${model}?prompt=${encodeURIComponent(editInstruction)}&negative_prompt=${encodeURIComponent('text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs')}`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: bytes,
+        signal: AbortSignal.timeout(120000),
+      });
+      if (resp.ok) {
+        const ct = resp.headers.get('content-type') || '';
+        if (ct.startsWith('image/')) {
+          const buf = await resp.arrayBuffer();
+          if (buf && buf.byteLength > 500) return buf;
+        }
+      }
+    } catch {}
   }
-  return `ORIGINAL IMAGE: ${subject}. PRESERVE EVERYTHING IDENTICAL. No text or typography.`;
+  return null;
 }
 
       // ALL responses must be LLM-generated — no hardcoded templates
-
-function isValidImagePrompt(text, originalUserText) {
-  if (!text || text.length < 10) return false;
-  const trimmed = text.trim();
-  // Allow PROMPT: prefix format
-  const processed = trimmed.replace(/^PROMPT:\s*/i, '');
-  // Reject if contains code fences
-  if (/```[\s\S]*```/.test(processed)) return false;
-  // Reject if contains JSON-like content (starts with { and has quoted keys)
-  if (/^[\s]*\{[\s\S]*"[\w]+"[\s]*:/.test(processed)) return false;
-  // Reject if the text is just the user's original message repeated verbatim
-  if (originalUserText && processed.toLowerCase() === originalUserText.trim().toLowerCase()) return false;
-  // Reject conversational text that starts with filler words typical of LLM chat
-  if (/^(sure|okay|ok|here('s| is)|i('ve| have)|certainly|of course|absolutely|the user|i will|i can|to edit|to transform|based on|according to)/i.test(processed)) return false;
-  // Reject if the prompt sounds like a command to an AI rather than an image description
-  if (/^(edit|modify|transform|change|turn|convert|make|create|generate|redesign|enhance|improve)\s+(this|the|it|my|that)/i.test(processed)) return false;
-  return true;
-}
 
 async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', retries = 2, seed: customSeed, imageUrl, imageBase64, imageMime } = {}) {
   const seed = customSeed ?? Math.floor(Math.random() * 1000000);
@@ -1089,49 +1153,74 @@ async function describeImage(base64, mimeType, fileName = 'image') {
   return null;
 }
 
-function buildEditPromptForGen(originalDesc, editRequest) {
-  const cleanEdit = editRequest
-    .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
-    .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
-    .trim();
-  if (!cleanEdit || cleanEdit.length < 3) {
-    return `ORIGINAL IMAGE: ${originalDesc}. CHANGE: None. PRESERVE EVERYTHING IDENTICAL. No text, words, or letters in the image.`;
-  }
-  return `ORIGINAL IMAGE: ${originalDesc}. CHANGE: Only apply this specific change — ${cleanEdit}. CRITICAL: Keep the subject identity (face, body, skin, hair), exact same pose, same expression, same background, same lighting, same composition, same camera angle, same clothing (except the specific change), same colors, same overall style EXACTLY IDENTICAL to the original. The result must look like the same photograph/scene with only the described modification. No text, words, letters, or typography in the image.`;
-}
+// ── Image editing — preserve original, never regenerate from description ──
 
-// ── Friendly response helpers ────────────────────────────────────────────
-
-async function friendlyEditAck(text) {
+// Use LLM to determine the best approach for complex edits
+async function llmReasonEditApproach(editDesc) {
   try {
-    const clean = text
-      .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
-      .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
-      .trim();
-    const desc = clean && clean.length >= 3 ? clean.charAt(0).toUpperCase() + clean.slice(1) : 'your image';
     const msgs = [
-      { role: 'system', content: 'You are Acronous AI. Acknowledge that an image edit was applied. Be brief, natural, and conversational — 1 sentence under 15 words. Never reveal backend details.' },
-      { role: 'user', content: `The user asked to edit an image: "${desc}". Confirm the edit was applied without mentioning technical details.` },
+      { role: 'system', content: 'You are an image editing expert. Given an edit request, determine the best approach. Reply with ONLY one word: "instruct" for instruction-based edits (color, style, filter changes), "inpaint" for structural edits (cut, replace, add, remove, erase objects), or "none" if neither applies.' },
+      { role: 'user', content: editDesc },
     ];
-    const resp = await callOpenRouter(msgs, { model: FAST_MODEL, stream: false, max_tokens: 60, temperature: 0.3 });
+    const resp = await callOpenRouter(msgs, { model: FAST_MODEL, stream: false, max_tokens: 10, temperature: 0.1 });
     const data = await resp.json();
-    const text_ = sanitizeText(data?.choices?.[0]?.message?.content || '');
-    if (text_ && text_.length > 5) return text_;
-  } catch (_) {}
-  return '';
+    const text = (data?.choices?.[0]?.message?.content || '').trim().toLowerCase();
+    if (text.includes('inpaint')) return 'inpaint';
+    if (text.includes('instruct')) return 'instruct';
+  } catch {}
+  return 'instruct';
 }
 
-async function generateEditFailedMessage(editRequest) {
+async function editImageWithInstruct(imageBase64, editDesc, mimeType, fileBytes) {
+  // Priority 1: instruct-pix2pix — sends original image + instruction, edits without recreating
+  try {
+    const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
+    if (hfResult && hfResult.byteLength > 500) return hfResult;
+  } catch {}
+
+  // Priority 2: Use LLM to determine approach for structural edits
+  const approach = await llmReasonEditApproach(editDesc);
+  if (approach === 'inpaint') {
+    try {
+      const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
+      if (hfResult && hfResult.byteLength > 500) return hfResult;
+      // If inpainting with raw image fails, search web for alternative techniques
+      const searchResults = await searchWeb(`${editDesc} image editing tool technique`);
+      if (searchResults) {
+        // Try instruct-pix2pix again with search-enhanced context
+        try {
+          const hfResult2 = await callHuggingFaceInstructEdit(imageBase64, editDesc + ' ' + searchResults.slice(0, 200), mimeType);
+          if (hfResult2 && hfResult2.byteLength > 500) return hfResult2;
+        } catch {}
+        // Try inpainting again with search-enhanced context
+        try {
+          const hfResult2 = await callHuggingFaceInpainting(imageBase64, editDesc + ' ' + searchResults.slice(0, 200), mimeType);
+          if (hfResult2 && hfResult2.byteLength > 500) return hfResult2;
+        } catch {}
+      }
+    } catch {}
+  }
+
+  // Priority 3: For any edit type, try inpainting as final attempt
+  try {
+    const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
+    if (hfResult && hfResult.byteLength > 500) return hfResult;
+  } catch {}
+
+  return null;
+}
+
+async function generateNaturalResponse(prompt) {
   try {
     const msgs = [
-      { role: 'system', content: 'You are Acronous AI. Briefly acknowledge that an image edit could not be completed, in 1 conversational sentence. Sound natural and helpful. Never reveal backend details, model names, or APIs.' },
-      { role: 'user', content: `I tried to edit an image with the request: "${editRequest || 'edit an image'}". The edit wasn't successful. How should I respond to the user? Keep it under 20 words.` },
+      { role: 'system', content: 'You are Acronous AI. Respond naturally and conversationally. Keep it brief.' },
+      { role: 'user', content: prompt },
     ];
-    const resp = await callOpenRouter(msgs, { model: FAST_MODEL, stream: false, max_tokens: 80, temperature: 0.3 });
+    const resp = await callOpenRouter(msgs, { model: FAST_MODEL, stream: false, max_tokens: 100, temperature: 0.3 });
     const data = await resp.json();
     const text = sanitizeText(data?.choices?.[0]?.message?.content || '');
-    if (text && text.length > 5) return text;
-  } catch (_) {}
+    if (text && text.length > 3) return text;
+  } catch {}
   return '';
 }
 
@@ -1211,229 +1300,28 @@ async function chatImageHandler(request) {
     if (isImageEditRequest) {
       const editDesc = message?.trim() || '';
 
-      // Generate edit prompt using original image directly
-      let imagePrompt = '';
-      let responseText = '';
-
-      const multimodalContent = buildMultimodalContent(
-        `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator. Default style MUST be: Photorealistic, natural, authentic. NEVER make it cartoon/artistic unless explicitly requested.
-
-The user wants to edit this image like this: "${editDesc}"
-
-Your goal: Write a prompt that will make the image generator RECREATE THIS EXACT IMAGE with ONLY the requested change applied.
-
-STUDY EVERY VISIBLE DETAIL of the original image with EXTREME precision:
-
-SUBJECT & IDENTITY:
-- If person: exact age range, gender, ethnicity, skin tone, face shape, distinctive facial features
-- Eye color, shape, expression
-- Nose shape and size
-- Mouth/lips shape, size, color
-- Hair: exact style, color, length, texture, direction
-- Any facial hair, markings, scars, or distinguishing features
-- Body type, posture, stance, hand positions
-
-CLOTHING & APPEARANCE:
-- Type of each garment
-- EXACT color of each item (specify shade: navy blue, sky blue, etc.)
-- Fabric type
-- Fit and style
-- Any patterns or prints
-- Visible logos or emblems
-- Accessories: jewelry, watches, hats, bags, shoes (with exact colors)
-
-POSE & POSITIONING:
-- Head tilt angle
-- Arm positions and angles
-- Hand gestures
-- Leg position
-- Overall body stance
-- Camera view angle
-
-FACIAL EXPRESSION & EYES:
-- Exact expression
-- Eye gaze direction
-- Eyebrow position
-- Mouth shape
-- Lighting on face
-
-BACKGROUND & ENVIRONMENT:
-- Setting description
-- All visible objects
-- Background colors and textures
-- Depth of field
-- Any visible windows, doors, furniture
-
-LIGHTING & ATMOSPHERE:
-- Light direction and type
-- Shadow positions
-- Highlights and reflections
-- Overall mood
-- Color temperature
-
-COMPOSITION & CAMERA:
-- Camera angle (low/eye-level/high)
-- Shot type (close-up/medium/wide)
-- Framing and crop
-- Aspect ratio
-
-OVERALL STYLE:
-- Photography style
-- Image quality
-- Color grading
-- Overall tone
-
-THEN APPLY ONLY THIS CHANGE: "${editDesc}"
-
-FORMAT YOUR RESPONSE EXACTLY AS:
-ORIGINAL IMAGE: [Detailed description with every detail above]
-CHANGE: [ONLY what changes]
-PRESERVE: Everything from original except the change
-
-CRITICAL:
-- Image must look like the EXACT same photograph with ONLY the requested modification
-- Do NOT change person identity, face, expression, pose unless explicitly requested
-- Do NOT change background, lighting, composition unless explicitly requested
-- Do NOT change clothing/accessories unless explicitly requested
-- Every pixel should match original except the requested change
-- No text, words, letters, symbols, or writing`,
-        base64, mimeType
-      );
-
-      const systemMsg = { role: 'system', content: 'You are an expert image analyst specializing in precision image-to-image editing. Your ONLY goal is to write prompts that make an AI image generator recreate the ORIGINAL image EXACTLY, changing ONLY what was specifically requested. You MUST preserve: subject identity, face features, pose, expression, background, lighting, composition, shadows, colors, and all other details. Default style: photorealistic, natural lighting, authentic appearance. CRITICAL: Only modify the specific requested element. Never redesign or reimagine the entire image. Preserve 99% of the original.' };
-      const userMsg = { role: 'user', content: multimodalContent };
-
-      for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
-        try {
-          const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 2000, temperature: 0.05 });
-          const data = await resp.json();
-          const output = data?.choices?.[0]?.message?.content?.trim();
-          if (output && output.length > 30 && isValidImagePrompt(output, editDesc)) {
-            // Parse ORIGINAL IMAGE and CHANGE sections for high-precision edits
-            const originalMatch = output.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/);
-            const changeMatch = output.match(/CHANGE:([^]*?)(?:PRESERVE:|$)/);
-            if (originalMatch && changeMatch) {
-              const originalDesc = originalMatch[1].trim();
-              const changeDesc = changeMatch[1].trim();
-              // Build precise prompt emphasizing preservation and photorealistic output by default
-              const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
-              const styleInstr = prefersArt
-                ? ''
-                : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
-              const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
-              imagePrompt = `RECREATE EXACTLY: ${originalDesc} WITH ONLY THIS CHANGE: ${changeDesc}. ${preserveInstr} ${styleInstr} Keep same lighting, background, composition, pose, and all other details.`.trim();
-            } else {
-              // Fallback to the raw LLM output but strengthen preservation instructions
-              const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
-              const styleInstr = prefersArt
-                ? ''
-                : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
-              const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
-              imagePrompt = (output.trim() + ' ' + preserveInstr + ' ' + styleInstr).trim();
-            }
-            imagePrompt = imagePrompt.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
-            break;
-          }
-        } catch {}
-      }
-
-      if (!imagePrompt || imagePrompt.length < 30) {
-        const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
-        const styleInstr = prefersArt
-          ? ''
-          : 'Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading.';
-        const preserveInstr = 'KEEP THE SAME PERSON: preserve the exact face, identity, age, gender, skin tone, hair, expression, pose, and body proportions. DO NOT change background, lighting, composition, camera angle, or other subjects.';
-        imagePrompt = `Edit this exact image by making ONLY this change: ${editDesc}. ${preserveInstr} ${styleInstr} Preserve everything else identically.`;
-      }
-
-      responseText = await friendlyEditAck(editDesc);
-
-      // Extract detailed original description from the LLM-generated prompt
-      let imgDesc = '';
-      const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
-      if (origMatch && origMatch[1].trim().length > 20) {
-        imgDesc = origMatch[1].trim().slice(0, 600);
-      } else {
-        try { imgDesc = (await describeImage(base64, mimeType, fileName) || '').slice(0, 600); } catch {}
-      }
-      const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
-
-      // ── Generate edited image with fallback chain ──
-      let imageBuffer;
-      let lastError;
-
-      const editPromptBase = imgDesc && imgDesc.length > 20
-        ? `A REAL CAMERA PHOTOGRAPH. ORIGINAL: ${imgDesc.slice(0, 800)}. CHANGE ONLY: ${cleanEdit}. CRITICAL — This must look like the EXACT SAME real photograph with ONLY the change applied. Preserve the photographic quality, natural skin texture, authentic lighting, and realistic appearance. The output MUST be indistinguishable from a real camera photo. Same person identity, face, expression, pose, background, lighting, composition. No text, no words, no letters. Photorealistic, natural skin, authentic textures.`
-        : `A REAL CAMERA PHOTOGRAPH. ${cleanEdit}. Preserve natural photographic quality, realistic textures, authentic lighting. The output must look like a real photo, not AI-generated. No text, no words, no letters.`;
-
-      // Priority 1: OpenRouter image generation (most reliable, uses flux models)
-      if (!imageBuffer && OPENROUTER_API_KEY) {
-        const orPrompt = editPromptBase;
-        try {
-          const orResult = await callOpenRouterImageGen(orPrompt, { seed: computeSeed(fileBytes) });
-          if (orResult && orResult.byteLength > 500) imageBuffer = orResult;
-        } catch (err) { lastError = err; }
-      }
-
-      // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
-      if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
-        try {
-          const cfPrompt = editPromptBase;
-          const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-            prompt: cfPrompt,
-            negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, artificial, cgi, rendered, illustration, painting, cartoon',
-          });
-          if (result && result.image) {
-            const raw = result.image;
-            if (raw instanceof ArrayBuffer) {
-              if (raw.byteLength > 500) imageBuffer = raw;
-            } else if (raw instanceof Uint8Array) {
-              if (raw.byteLength > 500) imageBuffer = raw.buffer;
-            } else if (typeof raw === 'string') {
-              const bin = atob(raw);
-              const buf = new Uint8Array(bin.length);
-              for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-              if (buf.byteLength > 500) imageBuffer = buf.buffer;
-            }
-          }
-        } catch (err) { lastError = err; }
-      }
-
-      // Priority 3: Pollinations text-to-image with natural preservation prompt
-      if (!imageBuffer) {
-        const seed = computeSeed(fileBytes);
-        const ttiModels = ['flux', 'turbo', 'flux-schnell'];
-        for (let attempt = 0; attempt < 6; attempt++) {
-          if (imageBuffer) break;
-          const model = ttiModels[attempt % ttiModels.length];
-          const ttiPrompt = editPromptBase;
-          try {
-            imageBuffer = await pollinationsImage(ttiPrompt, {
-              retries: 1, seed: seed + attempt * 37, model,
-            });
-          } catch (err) { lastError = err; }
-        }
-      }
-
-      // Priority 4: Hugging Face InstructPix2Pix (free, least reliable for editing)
-      if (!imageBuffer) {
-        const hfInstruction = cleanEdit || editDesc;
-        try {
-          const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-          if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
-        } catch (err) { lastError = err; }
-      }
+      // Edit the image directly — no vision description, no regeneration from text
+      let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
       if (imageBuffer) {
         const resultBase64 = arrayBufferToBase64(imageBuffer);
+        // Use the LLM to generate a natural response about the edit
+        const responseText = await generateNaturalResponse(
+          `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
+        );
         return jsonResponse({
           response: responseText,
           session_id, type: 'chat', image_data: resultBase64,
           image_type: 'png', file_data: '', file_name: '', file_type: '',
         });
       }
+
+      // Image edit failed — generate natural LLM response
+      const responseText = await generateNaturalResponse(
+        `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
+      );
       return jsonResponse({
-        response: await generateEditFailedMessage(editDesc),
+        response: responseText,
         session_id, type: 'chat', image_data: '',
         image_type: '', file_data: '', file_name: '', file_type: '',
       });
@@ -1650,47 +1538,22 @@ async function generateImageHandler(request) {
       return jsonResponse({ response: '', session_id, type: 'error', image_data: '' }, 400);
     }
 
-    // Always refine prompt through LLM for better results
-    let imagePrompt = prompt;
-    let friendlyResponse = '';
+    const [imageBase64, friendlyResponse] = await Promise.all([
+      generateImage(prompt, session_id),
+      generateNaturalResponse(`The user asked me to generate an image based on: "${prompt}". Briefly confirm what you created in 1 natural sentence. Keep it under 20 words.`),
+    ]);
 
-    try {
-      const llmMessages = [
-        { role: 'system', content: 'You are an expert image prompt engineer. Convert user requests into detailed image prompts. Describe the subject, setting, colors, lighting, composition, and style. CRITICAL RULES: NEVER include text, letters, words, signatures, captions, labels, typography, or any rendered text in the image. NEVER use the phrase "Acronous" or any branding. Return ONLY the prompt, no explanations, no markdown, no greetings.' },
-        { role: 'user', content: `Create a detailed image prompt for: ${prompt}. Focus on visual elements only — no text, no words, no letters, no writing.` },
-      ];
-      const resp = await callOpenRouter(llmMessages, { model: OPENROUTER_MODEL, stream: false, max_tokens: 500, temperature: 0.3 });
-      const data = await resp.json();
-      const generated = data?.choices?.[0]?.message?.content?.trim();
-      if (generated && generated.length > 10 && generated.length < 2000) {
-        imagePrompt = generated;
-      }
-    } catch (_) {}
-
-    // Strip any text-related keywords from the prompt
-    imagePrompt = imagePrompt
-      .replace(/\b(Acronous|acronous|ACRONOUS)\b/gi, '')
-      .replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '')
-      .replace(/\s+/g, ' ').trim();
-
-    if (!imagePrompt || imagePrompt.length < 10) imagePrompt = prompt;
-
-    // Try primary pollinations endpoint, fallback to alternative model/flux-schnell if fails
-    let imageBuffer;
-    try {
-      imageBuffer = await pollinationsImage(imagePrompt, { retries: 2 });
-    } catch (primaryErr) {
-      try {
-        // Fallback: try with flux-schnell model
-        imageBuffer = await pollinationsImage(imagePrompt, { model: 'flux-schnell', retries: 1 });
-      } catch (fallbackErr) {
-        throw new Error('Image generation service unavailable');
-      }
+    if (!imageBase64) {
+      const errMsg = await generateNaturalResponse(`I tried to generate an image for: "${prompt}" but couldn't. Respond naturally in 1 sentence.`).catch(() => '');
+      return jsonResponse({
+        response: errMsg || '',
+        session_id,
+        type: 'chat',
+        image_data: '',
+      });
     }
 
-    const base64Image = arrayBufferToBase64(imageBuffer);
-
-    friendlyResponse = imagePrompt.length > 120 ? imagePrompt.slice(0, 117) + '...' : imagePrompt;
+    const imageBuffer = base64ToArrayBuffer(imageBase64);
 
     return request.method === 'GET'
       ? new Response(imageBuffer, {
@@ -1701,8 +1564,8 @@ async function generateImageHandler(request) {
           },
         })
       : jsonResponse({
-          response: friendlyResponse,
-          image_data: base64Image,
+          response: friendlyResponse || '',
+          image_data: imageBase64,
           session_id,
           type: 'image_gen',
         });
@@ -1743,206 +1606,23 @@ async function editImageHandler(request) {
   base64 = arrayBufferToBase64(fileBytes);
   editDesc = message?.trim() || '';
 
-  // ── Phase 1: Generate edit prompt using original image directly ──
-  let imagePrompt = '';
-  let responseText = '';
-
-  // Primary: pass original image + edit request as multimodal to LLM
-  // Use a hyper-detailed prompt to ensure the vision model captures EVERYTHING about the original
-  const multimodalContent = buildMultimodalContent(
-    `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator.
-
-The user wants to edit this image like this: "${editDesc}"
-
-Your goal: Write a prompt that will make the image generator RECREATE THIS EXACT IMAGE with ONLY the requested change applied.
-
-STUDY EVERY VISIBLE DETAIL of the original image with EXTREME precision:
-
-SUBJECT & IDENTITY:
-- If person: exact age range, gender, ethnicity, skin tone, face shape, distinctive facial features
-- Eye color, shape, expression
-- Nose shape and size
-- Mouth/lips shape, size, color
-- Hair: exact style, color, length, texture, direction
-- Any facial hair, markings, scars, or distinguishing features
-- Body type, posture, stance, hand positions
-- Any tattoos, piercings, or accessories on the body
-
-CLOTHING & APPEARANCE:
-- Type of each garment (shirt, pants, jacket, etc.)
-- EXACT color of each item (not just "blue" - specify shade: navy blue, sky blue, royal blue, etc.)
-- Fabric type (cotton, silk, denim, leather, etc.)
-- Fit and style
-- Any patterns (stripes, checks, prints)
-- Visible logos, text, or emblems
-- Accessories: jewelry, watches, hats, bags, shoes
-- Exact color of each accessory
-
-POSE & POSITIONING:
-- Head tilt angle
-- Arm positions and angles
-- Hand gestures and positioning
-- Leg position
-- Overall body stance (standing, sitting, leaning, etc.)
-- Camera view (front, side, three-quarter, profile)
-
-FACIAL EXPRESSION & EYES:
-- Exact expression (smile, neutral, angry, sad, surprised, etc.)
-- Eye gaze direction
-- Eyebrow position
-- Mouth shape and openness
-- Lighting on the face (shadows, highlights)
-
-BACKGROUND & ENVIRONMENT:
-- Setting (indoor/outdoor, specific location description)
-- All visible objects in the background
-- Background colors and textures
-- Depth of field (sharp/blurry)
-- Any windows, doors, furniture visible
-
-LIGHTING & ATMOSPHERE:
-- Light direction (front, back, side, from top, etc.)
-- Light type (natural sunlight, artificial, mixed, dramatic, soft, harsh)
-- Shadow positions and intensity
-- Highlights and reflections
-- Overall mood and atmosphere
-- Color temperature (warm/cool/neutral)
-
-COMPOSITION & CAMERA:
-- Camera angle (low, eye-level, high)
-- Shot type (close-up, medium, wide, full body)
-- Framing and crop
-- Aspect ratio (square, portrait, landscape)
-
-OVERALL STYLE & QUALITY:
-- Photography style (portrait, candid, professional, casual)
-- Image quality (sharp, soft focus, motion blur)
-- Color grading or filter applied
-- Overall tone (warm, cool, vibrant, muted)
-
-THEN APPLY ONLY THIS CHANGE: "${editDesc}"
-
-FORMAT YOUR RESPONSE EXACTLY AS:
-ORIGINAL IMAGE: [Detailed description of original with every detail above]
-CHANGE: [ONLY what changes - nothing else changes]
-PRESERVE: Everything from the original except the specific change
-
-CRITICAL RULES:
-- The recreated image must look like the EXACT same photograph/scene/person with ONLY the requested modification
-- Do NOT change the person's identity, face, expression, or pose unless explicitly requested
-- Do NOT change background, lighting, or composition unless explicitly requested
-- Do NOT change clothing/accessories unless explicitly requested
-- Every pixel should match the original except for the requested change
-- No text, words, letters, symbols, typography, or writing in the image
-- Describe with maximum precision and detail - ambiguity will cause the edit to fail`,
-    base64, mimeType
-  );
-
-  const systemMsg = { role: 'system', content: 'You are an expert image analyst and prompt engineer. Describe images with EXTREME precision and detail. Your prompts must recreate the original image exactly with only the requested change applied. Every pixel-level detail matters.' };
-  const userMsg = { role: 'user', content: multimodalContent };
-
-  for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
-    try {
-      const resp = await callOpenRouter([systemMsg, userMsg], { model, stream: false, max_tokens: 1500, temperature: 0.1 });
-      const data = await resp.json();
-      const output = data?.choices?.[0]?.message?.content?.trim();
-      if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
-        imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
-        break;
-      }
-    } catch {}
-  }
-
-  if (!imagePrompt || imagePrompt.length < 20) {
-    // Fallback: construct a better prompt manually
-    const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim();
-    imagePrompt = `ORIGINAL IMAGE: A photograph of a subject in a specific setting with particular lighting and composition. CHANGE: ${cleanEdit}. PRESERVE: All other elements EXACTLY IDENTICAL - same subject identity, same facial features, same pose, same expression, same body position, same clothing (except changes), same background, same lighting direction, same camera angle, same composition, same colors, same atmosphere. Make the edited image look like the exact same photograph/scene with only the specific change applied. No text, words, letters, or typography.`;
-  }
-
-  // Generate friendly confirmation text
-  responseText = await friendlyEditAck(editDesc);
-
-  // ── Phase 2: Generate edited image with natural photo preservation ──
-  let imgDesc = '';
-  const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
-  if (origMatch && origMatch[1].trim().length > 20) {
-    imgDesc = origMatch[1].trim().slice(0, 600);
-  } else {
-    try { imgDesc = (await describeImage(base64, mimeType, fileName) || '').slice(0, 600); } catch {}
-  }
-  const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
-
-  let imageBuffer;
-  let lastError;
-
-  const editPromptBase = imgDesc && imgDesc.length > 20
-    ? `A REAL CAMERA PHOTOGRAPH. ORIGINAL: ${imgDesc.slice(0, 800)}. CHANGE ONLY: ${cleanEdit}. CRITICAL — This must look like the EXACT SAME real photograph with ONLY the change applied. Preserve the photographic quality, natural skin texture, authentic lighting, and realistic appearance. The output MUST be indistinguishable from a real camera photo. Same person identity, face, expression, pose, background, lighting, composition. No text, no words, no letters. Photorealistic, natural skin, authentic textures.`
-    : `A REAL CAMERA PHOTOGRAPH. ${cleanEdit}. Preserve natural photographic quality, realistic textures, authentic lighting. The output must look like a real photo, not AI-generated. No text, no words, no letters.`;
-
-  // Priority 1: OpenRouter image generation (most reliable, uses flux models)
-  if (!imageBuffer && OPENROUTER_API_KEY) {
-    try {
-      const orResult = await callOpenRouterImageGen(editPromptBase, { seed: computeSeed(fileBytes) });
-      if (orResult && orResult.byteLength > 500) imageBuffer = orResult;
-    } catch (err) { lastError = err; }
-  }
-
-  // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
-  if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
-    try {
-      const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-        prompt: editPromptBase,
-        negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, artificial, cgi, rendered, illustration, painting, cartoon',
-      });
-      if (result && result.image) {
-        const raw = result.image;
-        if (raw instanceof ArrayBuffer) {
-          if (raw.byteLength > 500) imageBuffer = raw;
-        } else if (raw instanceof Uint8Array) {
-          if (raw.byteLength > 500) imageBuffer = raw.buffer;
-        } else if (typeof raw === 'string') {
-          const bin = atob(raw);
-          const buf = new Uint8Array(bin.length);
-          for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-          if (buf.byteLength > 500) imageBuffer = buf.buffer;
-        }
-      }
-    } catch (err) { lastError = err; }
-  }
-
-  // Priority 3: Pollinations text-to-image with natural preservation prompt
-  if (!imageBuffer) {
-    const seed = computeSeed(fileBytes);
-    const ttiModels = ['flux', 'turbo', 'flux-schnell'];
-    for (let attempt = 0; attempt < 6; attempt++) {
-      if (imageBuffer) break;
-      const model = ttiModels[attempt % ttiModels.length];
-      try {
-        imageBuffer = await pollinationsImage(editPromptBase, {
-          retries: 1, seed: seed + attempt * 37, model,
-        });
-      } catch (err) { lastError = err; }
-    }
-  }
-
-  // Priority 4: Hugging Face InstructPix2Pix (free, least reliable for editing)
-  if (!imageBuffer) {
-    const hfInstruction = cleanEdit || editDesc;
-    try {
-      const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-      if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
-    } catch (err) { lastError = err; }
-  }
+  // Edit the image directly — no vision description, no regeneration from text
+  let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
   if (imageBuffer) {
     const resultBase64 = arrayBufferToBase64(imageBuffer);
+    const responseText = await generateNaturalResponse(
+      `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
+    );
     return jsonResponse({
       response: responseText,
       session_id, type: 'chat', image_data: resultBase64,
       image_type: 'png', file_data: '', file_name: '', file_type: '',
     });
   }
-  responseText = await generateEditFailedMessage(editDesc);
+  const responseText = await generateNaturalResponse(
+    `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
+  );
   return jsonResponse({
     response: responseText,
     session_id, type: 'chat', image_data: '',
@@ -2049,230 +1729,33 @@ async function redesignImageHandler(request) {
     const base64 = arrayBufferToBase64(fileBytes);
     editDesc = prompt?.trim() || '';
 
-    // ── Phase 1: Generate edit prompt using original image directly ──
-    let imagePrompt = '';
-    let responseText = '';
-    let visionDescription = '';
+    // Edit the image directly — no vision description, no regeneration from text
+    let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
-    const multimodalContent = buildMultimodalContent(
-      `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator.
-
-The user wants to edit this image like this: "${editDesc}"
-
-Your goal: Write a prompt that will make the image generator RECREATE THIS EXACT IMAGE with ONLY the requested change applied.
-
-STUDY EVERY VISIBLE DETAIL of the original image with EXTREME precision:
-
-SUBJECT & IDENTITY:
-- If person: exact age range, gender, ethnicity, skin tone, face shape, distinctive facial features
-- Eye color, shape, expression
-- Nose shape and size
-- Mouth/lips shape, size, color
-- Hair: exact style, color, length, texture, direction
-- Any facial hair, markings, scars, or distinguishing features
-- Body type, posture, stance, hand positions
-- Any tattoos, piercings, or accessories on the body
-
-CLOTHING & APPEARANCE:
-- Type of each garment (shirt, pants, jacket, etc.)
-- EXACT color of each item (not just "blue" - specify shade: navy blue, sky blue, royal blue, etc.)
-- Fabric type (cotton, silk, denim, leather, etc.)
-- Fit and style
-- Any patterns (stripes, checks, prints)
-- Visible logos, text, or emblems
-- Accessories: jewelry, watches, hats, bags, shoes
-- Exact color of each accessory
-
-POSE & POSITIONING:
-- Head tilt angle
-- Arm positions and angles
-- Hand gestures and positioning
-- Leg position
-- Overall body stance (standing, sitting, leaning, etc.)
-- Camera view (front, side, three-quarter, profile)
-
-FACIAL EXPRESSION & EYES:
-- Exact expression (smile, neutral, angry, sad, surprised, etc.)
-- Eye gaze direction
-- Eyebrow position
-- Mouth shape and openness
-- Lighting on the face (shadows, highlights)
-
-BACKGROUND & ENVIRONMENT:
-- Setting (indoor/outdoor, specific location description)
-- All visible objects in the background
-- Background colors and textures
-- Depth of field (sharp/blurry)
-- Any windows, doors, furniture visible
-
-LIGHTING & ATMOSPHERE:
-- Light direction (front, back, side, from top, etc.)
-- Light type (natural sunlight, artificial, mixed, dramatic, soft, harsh)
-- Shadow positions and intensity
-- Highlights and reflections
-- Overall mood and atmosphere
-- Color temperature (warm/cool/neutral)
-
-COMPOSITION & CAMERA:
-- Camera angle (low, eye-level, high)
-- Shot type (close-up, medium, wide, full body)
-- Framing and crop
-- Aspect ratio (square, portrait, landscape)
-
-OVERALL STYLE & QUALITY:
-- Photography style (portrait, candid, professional, casual)
-- Image quality (sharp, soft focus, motion blur)
-- Color grading or filter applied
-- Overall tone (warm, cool, vibrant, muted)
-
-THEN APPLY ONLY THIS CHANGE: "${editDesc}"
-
-FORMAT YOUR RESPONSE EXACTLY AS:
-ORIGINAL IMAGE: [Detailed description of original with every detail above]
-CHANGE: [ONLY what changes - nothing else changes]
-PRESERVE: Everything from the original except the specific change
-
-CRITICAL RULES:
-- The recreated image must look like the EXACT same photograph/scene/person with ONLY the requested modification
-- Do NOT change the person's identity, face, expression, or pose unless explicitly requested
-- Do NOT change background, lighting, or composition unless explicitly requested
-- Do NOT change clothing/accessories unless explicitly requested
-- Every pixel should match the original except for the requested change
-- No text, words, letters, symbols, typography, or writing in the image
-- Describe with maximum precision and detail - ambiguity will cause the edit to fail`,
-      base64, mimeType
+    if (imageBuffer) {
+      const b64 = arrayBufferToBase64(imageBuffer);
+      const responseText = await generateNaturalResponse(
+        `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
+      );
+      return jsonResponse({ content: b64, error: null, prompt: editDesc, response: responseText, session_id });
+    }
+    const responseText = await generateNaturalResponse(
+      `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
     );
-
-    const visionSystemMsg = { role: 'system', content: 'You are an expert image analyst and prompt engineer. Describe images with EXTREME precision and detail. Your prompts must recreate the original image exactly with only the requested change applied. Every pixel-level detail matters.' };
-    const visionUserMsg = { role: 'user', content: multimodalContent };
-
-    for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
-      try {
-        const resp = await callOpenRouter([visionSystemMsg, visionUserMsg], { model, stream: false, max_tokens: 1500, temperature: 0.1 });
-        const data = await resp.json();
-        const output = data?.choices?.[0]?.message?.content?.trim();
-        if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
-          imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
-          // Store the original description for fallback
-          const origMatch = output.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
-          if (origMatch && origMatch[1].trim().length > 20) {
-            visionDescription = origMatch[1].trim();
-          }
-          break;
-        }
-      } catch {}
-    }
-
-    if (!imagePrompt || imagePrompt.length < 20) {
-      const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim();
-      imagePrompt = `ORIGINAL IMAGE: A photograph of a subject in a specific setting with particular lighting and composition. CHANGE: ${cleanEdit}. PRESERVE: All other elements EXACTLY IDENTICAL - same subject identity, same facial features, same pose, same expression, same body position, same clothing (except changes), same background, same lighting direction, same camera angle, same composition, same colors, same atmosphere. Make the edited image look like the exact same photograph/scene with only the specific change applied. No text, words, letters, or typography.`;
-    }
-
-    // Derive response text from edit request via LLM
-    try {
-      const responseMsgs = [
-        { role: 'system', content: 'You are Acronous AI. Acknowledge the image edit briefly in 1 sentence. Never reveal backend details, model names, or APIs.' },
-        { role: 'user', content: `The user asked to edit an image: "${editDesc}". Acknowledge what was done. Keep it under 15 words. Just confirm the edit was applied.` },
-      ];
-      const resp = await callOpenRouter(responseMsgs, { model: FAST_MODEL, stream: false, max_tokens: 80, temperature: 0.3 });
-      const data = await resp.json();
-      responseText = sanitizeText(data?.choices?.[0]?.message?.content?.trim() || '');
-      responseText = responseText.replace(/^(sure|okay|ok|here|absolutely|certainly|of course)[!.,]?\s*/i, '').trim();
-    } catch {}
-    if (!responseText || responseText.length < 3) {
-      responseText = await friendlyEditAck(editDesc);
-    }
-
-    // ── Phase 2: Generate edited image via TTI with preservation-focused description ──
-    let imgDesc = visionDescription || '';
-    if (!imgDesc || imgDesc.length < 20) {
-      const m = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
-      if (m && m[1].trim().length > 20) imgDesc = m[1].trim().slice(0, 600);
-    }
-    if (!imgDesc || imgDesc.length < 20) {
-      try { imgDesc = (await describeImage(base64, mimeType, fileName) || '').slice(0, 600); } catch {}
-    }
-    const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
-
-    let imageBuffer;
-    let lastError;
-
-    const editPromptBase = imgDesc && imgDesc.length > 20
-      ? `A REAL CAMERA PHOTOGRAPH. ORIGINAL: ${imgDesc.slice(0, 800)}. CHANGE ONLY: ${cleanEdit}. CRITICAL — This must look like the EXACT SAME real photograph with ONLY the change applied. Preserve the photographic quality, natural skin texture, authentic lighting, and realistic appearance. The output MUST be indistinguishable from a real camera photo. Same person identity, face, expression, pose, background, lighting, composition. No text, no words, no letters. Photorealistic, natural skin, authentic textures.`
-      : `A REAL CAMERA PHOTOGRAPH. ${cleanEdit}. Preserve natural photographic quality, realistic textures, authentic lighting. The output must look like a real photo, not AI-generated. No text, no words, no letters.`;
-
-    // Priority 1: OpenRouter image generation (most reliable)
-    if (!imageBuffer && OPENROUTER_API_KEY) {
-      try {
-        const orResult = await callOpenRouterImageGen(editPromptBase, { seed: computeSeed(fileBytes) });
-        if (orResult && orResult.byteLength > 500) imageBuffer = orResult;
-      } catch (err) { lastError = err; }
-    }
-
-    // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
-    if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
-      try {
-        const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-          prompt: editPromptBase,
-          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, artificial, cgi, rendered, illustration, painting, cartoon',
-        });
-        if (result && result.image) {
-          const raw = result.image;
-          if (raw instanceof ArrayBuffer) {
-            if (raw.byteLength > 500) imageBuffer = raw;
-          } else if (raw instanceof Uint8Array) {
-            if (raw.byteLength > 500) imageBuffer = raw.buffer;
-          } else if (typeof raw === 'string') {
-            const bin = atob(raw);
-            const buf = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-            if (buf.byteLength > 500) imageBuffer = buf.buffer;
-          }
-        }
-      } catch (err) { lastError = err; }
-    }
-
-    // Priority 3: Pollinations text-to-image with natural preservation prompt
-    if (!imageBuffer) {
-      const seed = computeSeed(fileBytes);
-      const ttiModels = ['flux', 'turbo', 'flux-schnell'];
-      for (let attempt = 0; attempt < 6; attempt++) {
-        if (imageBuffer) break;
-        const model = ttiModels[attempt % ttiModels.length];
-        try {
-          imageBuffer = await pollinationsImage(editPromptBase, {
-            retries: 1, seed: seed + attempt * 37, model,
-          });
-        } catch (err) { lastError = err; }
-      }
-    }
-
-    // Priority 4: Hugging Face InstructPix2Pix (least reliable)
-    if (!imageBuffer) {
-      const hfInstruction = cleanEdit || editDesc;
-      try {
-        const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-        if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
-      } catch (err) { lastError = err; }
-    }
-    if (!responseText || responseText.length < 3) responseText = await friendlyEditAck(editDesc);
-
-  if (imageBuffer) {
-    const b64 = arrayBufferToBase64(imageBuffer);
-    return jsonResponse({ content: b64, error: null, prompt: imagePrompt, response: responseText, session_id });
-  }
-  responseText = await generateEditFailedMessage(editDesc);
-  return jsonResponse({
-    content: null,
-    error: '',
-    response: responseText,
-    session_id: 'default',
-  }, 200);
-  } catch (e) {
     return jsonResponse({
       content: null,
       error: '',
-      response: await generateEditFailedMessage(editDesc || ''),
+      response: responseText,
+      session_id: 'default',
+    }, 200);
+  } catch (e) {
+    const errMsg = await generateNaturalResponse(
+      `I tried to edit an image but couldn't complete it. Respond naturally in 1 sentence.`
+    ).catch(() => '');
+    return jsonResponse({
+      content: null,
+      error: '',
+      response: errMsg,
       session_id: 'default',
     }, 200);
   }

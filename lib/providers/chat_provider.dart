@@ -111,14 +111,12 @@ class ChatProvider extends ChangeNotifier {
     _serverCheckDone = false;
     notifyListeners();
 
-    String? lastUrl;
     for (var attempt = 1; attempt <= retries; attempt++) {
       try {
         final bestUrl = await ApiClient.detectBaseUrl(
           configuredUrl: AppConfig.instance.apiBaseUrl,
           savedUrl: savedUrl,
         );
-        lastUrl = bestUrl;
         if (bestUrl.isNotEmpty) {
           _api.updateBaseUrl(bestUrl);
           await _prefs.saveServerUrl(bestUrl);
@@ -502,12 +500,6 @@ class ChatProvider extends ChangeNotifier {
     sendMessage(
       next['text'] as String,
       attachments: next['attachments'] as List<MessageAttachment>?,
-    );
-  }
-
-  void _addAssistantMessage(String content) {
-    _currentConversation!.messages.add(
-      ChatMessage(role: 'assistant', content: content),
     );
   }
 
