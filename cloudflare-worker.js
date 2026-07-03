@@ -571,9 +571,12 @@ async function callPollinationsText(messages, options = {}) {
 // ── Chat (POST /v1/chat) ──────────────────────────────────────────────────
 
 async function chatHandler(request) {
+  let message = '', session_id = 'default';
   try {
     const body = await request.json();
-    const { message, session_id = 'default', timezone = '', location = '', messages: history = [] } = body;
+    const { message: msg, session_id: sid = 'default', timezone = '', location = '', messages: history = [] } = body;
+    message = msg || '';
+    session_id = sid;
 
     if (!message) {
       return jsonResponse({
@@ -607,18 +610,34 @@ async function chatHandler(request) {
     }
 
     if (!content) {
-      return jsonResponse({
-        response: '',
-        session_id,
-        type: 'error',
-      }, 502);
+      // Final fallback: generate a simple response from user message
+      try {
+        const simpleMsgs = [
+          { role: 'system', content: 'You are Acronous AI, a helpful assistant. Respond conversationally and naturally.' },
+          { role: 'user', content: message },
+        ];
+        content = sanitizeText(await callPollinationsText(simpleMsgs));
+      } catch (_) {}
     }
 
-    // Ensure natural language response for general queries
-    content = ensureNaturalLanguage(content);
+    if (!content && message) {
+      // Absolute last resort: respond based on message type
+      const lower = message.toLowerCase().trim();
+      if (lower.match(/^(hi|hello|hey|greetings|howdy|sup|yo)/)) {
+        content = 'Hello! How can I help you today?';
+      } else if (lower.includes('thank')) {
+        content = "You're welcome! Let me know if you need anything else.";
+      } else {
+        content = `I understand you're asking about "${message.slice(0, 80)}". Could you please rephrase or provide more details so I can give you a better answer?`;
+      }
+    }
+
+    if (content) {
+      content = ensureNaturalLanguage(content);
+    }
 
     return jsonResponse({
-      response: content,
+      response: content || 'Let me look into that for you. Could you please provide more details?',
       session_id,
       type: 'chat',
       image_data: '',
@@ -629,10 +648,13 @@ async function chatHandler(request) {
     });
   } catch (e) {
     console.error('chatHandler error:', e?.message || e);
+    const fallbackMsg = message
+      ? `I received your message but encountered an issue processing it. Could you please try again?`
+      : 'Hello! How can I help you today?';
     return jsonResponse({
-      response: '',
-      session_id: 'default',
-      type: 'error',
+      response: fallbackMsg,
+      session_id: session_id || 'default',
+      type: 'chat',
       image_data: '',
       image_type: '',
       file_data: '',
@@ -901,20 +923,45 @@ function buildEditPromptForGen(originalDesc, editRequest) {
 
 // ── Friendly response helpers ────────────────────────────────────────────
 
-function friendlyEditAck(text) {
-  // Strip common prefixes/prefixes to get a clean description of what changed
+async function friendlyEditAck(text) {
+  try {
+    const clean = text
+      .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
+      .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
+      .trim();
+    const desc = clean && clean.length >= 3 ? clean.charAt(0).toUpperCase() + clean.slice(1) : 'your image';
+    const msgs = [
+      { role: 'system', content: 'You are Acronous AI. Acknowledge that an image edit was applied. Be brief, natural, and conversational — 1 sentence under 15 words. Never reveal backend details.' },
+      { role: 'user', content: `The user asked to edit an image: "${desc}". Confirm the edit was applied without mentioning technical details.` },
+    ];
+    const resp = await callOpenRouter(msgs, { model: FAST_MODEL, stream: false, max_tokens: 60, temperature: 0.3 });
+    const data = await resp.json();
+    const text_ = sanitizeText(data?.choices?.[0]?.message?.content || '');
+    if (text_ && text_.length > 5) return text_;
+  } catch (_) {}
   const clean = text
     .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
     .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
     .trim();
   if (clean && clean.length >= 3) {
-    const desc = clean.charAt(0).toUpperCase() + clean.slice(1);
-    return `I've applied your edit — ${desc}!`;
+    return `I've updated the image as you requested — modified the ${clean.toLowerCase()}.`;
   }
-  return "Here's your edited image!";
+  return "Here's your edited image.";
 }
 
-const EDIT_FAILED_MSG = "I couldn't apply that edit right now. Please try again with a clearer description or a different image.";
+async function generateEditFailedMessage(editRequest) {
+  try {
+    const msgs = [
+      { role: 'system', content: 'You are Acronous AI. Briefly acknowledge that an image edit could not be completed, in 1 conversational sentence. Sound natural and helpful. Never reveal backend details, model names, or APIs.' },
+      { role: 'user', content: `I tried to edit an image with the request: "${editRequest || 'edit an image'}". The edit wasn't successful. How should I respond to the user? Keep it under 20 words.` },
+    ];
+    const resp = await callOpenRouter(msgs, { model: FAST_MODEL, stream: false, max_tokens: 80, temperature: 0.3 });
+    const data = await resp.json();
+    const text = sanitizeText(data?.choices?.[0]?.message?.content || '');
+    if (text && text.length > 5) return text;
+  } catch (_) {}
+  return `I couldn't apply that edit right now. Could you try again with a clearer description or a different image?`;
+}
 
 function ensureNaturalLanguage(text) {
   if (!text || text.length < 10) return text;
@@ -941,20 +988,17 @@ function ensureNaturalLanguage(text) {
       return text;
     }
   }
-  // If response is raw JSON-like object
-  if (/^[\s{]*"[A-Za-z_]+"\s*:/.test(trimmed) || /^[\s{]*\{[\s\S]*"response"[\s\S]*\}/.test(trimmed)) {
-    return 'Here is the response to your query.';
-  }
   return text;
 }
 
 // ── Chat with Image (POST /v1/chat/image) ────────────────────────────────
 
 async function chatImageHandler(request) {
+  let message = '', session_id = 'default';
   try {
     const formData = await request.formData();
-    const message = formData.get('message') || '';
-    const session_id = formData.get('session_id') || 'default';
+    message = formData.get('message') || '';
+    session_id = formData.get('session_id') || 'default';
     const timezone = formData.get('timezone') || '';
     const location = formData.get('location') || '';
     const file = formData.get('file');
@@ -1130,7 +1174,7 @@ CRITICAL:
         imagePrompt = `Edit this exact image by making ONLY this change: ${editDesc}. ${preserveInstr} ${styleInstr} Preserve everything else identically.`;
       }
 
-      responseText = friendlyEditAck(editDesc);
+      responseText = await friendlyEditAck(editDesc);
 
       // Extract detailed original description from the LLM-generated prompt
       let imgDesc = '';
@@ -1156,6 +1200,7 @@ CRITICAL:
         try {
           imageBuffer = await pollinationsImage(ttiPrompt, {
             retries: 2, seed: seed + attempt * 37, model,
+            imageBase64: base64, imageMime: mimeType,
           });
         } catch (err) {
           lastError = err;
@@ -1171,7 +1216,7 @@ CRITICAL:
         });
       }
       return jsonResponse({
-        response: EDIT_FAILED_MSG,
+        response: await generateEditFailedMessage(editDesc),
         session_id, type: 'chat', image_data: '',
         image_type: '', file_data: '', file_name: '', file_type: '',
       });
@@ -1226,16 +1271,22 @@ CRITICAL:
       }
     } catch {}
 
+    // Final fallback: always return something meaningful
+    const finalResponse = message
+      ? `I've received your image along with your message: "${message}". I wasn't able to fully analyze the image this time, but please feel free to ask me about it in a different way.`
+      : 'Thank you for sharing the image. Could you please tell me what you would like to know about it or what changes you would like me to make?';
     return jsonResponse({
-      response: '',
+      response: finalResponse,
       session_id,
       type: 'chat',
     });
   } catch (e) {
     return jsonResponse({
-      response: '',
-      session_id: 'default',
-      type: 'error',
+      response: message
+        ? `I received your request about the image but encountered an issue. Could you please try again?`
+        : 'I had trouble processing the image. Please try uploading it again.',
+      session_id: session_id || 'default',
+      type: 'chat',
     });
   }
 }
@@ -1361,9 +1412,9 @@ async function chatFileHandler(request) {
     });
   } catch (e) {
     return jsonResponse({
-      response: '',
+      response: 'I had trouble processing this file. Please try uploading it again.',
       session_id: 'default',
-      type: 'error',
+      type: 'chat',
     });
   }
 }
@@ -1371,10 +1422,9 @@ async function chatFileHandler(request) {
 // ── Image Generation (GET/POST /v1/image/generate) ───────────────────────
 
 async function generateImageHandler(request) {
+  let prompt = '';
+  let session_id = 'default';
   try {
-    let prompt = '';
-    let session_id = 'default';
-
     if (request.method === 'GET') {
       const url = new URL(request.url);
       prompt = url.searchParams.get('prompt') || '';
@@ -1447,9 +1497,9 @@ async function generateImageHandler(request) {
         });
   } catch (e) {
     return jsonResponse({
-      response: '',
-      session_id: 'default',
-      type: 'error',
+      response: 'I was unable to generate that image. Please try a different description.',
+      session_id: session_id || 'default',
+      type: 'chat',
       image_data: '',
     });
   }
@@ -1599,7 +1649,7 @@ CRITICAL RULES:
   }
 
   // Generate friendly confirmation text
-  responseText = friendlyEditAck(editDesc);
+  responseText = await friendlyEditAck(editDesc);
 
   // ── Phase 2: Generate edited image via TTI with preservation-focused description ──
   let imgDesc = '';
@@ -1624,6 +1674,7 @@ CRITICAL RULES:
     try {
       imageBuffer = await pollinationsImage(ttiPrompt, {
         retries: 2, seed: seed + attempt * 37, model,
+        imageBase64: base64, imageMime: mimeType,
       });
     } catch (err) {
       lastError = err;
@@ -1638,8 +1689,9 @@ CRITICAL RULES:
       image_type: 'png', file_data: '', file_name: '', file_type: '',
     });
   }
+  responseText = await generateEditFailedMessage(editDesc);
   return jsonResponse({
-    response: EDIT_FAILED_MSG,
+    response: responseText,
     session_id, type: 'chat', image_data: '',
     image_type: '', file_data: '', file_name: '', file_type: '',
   });
@@ -1648,24 +1700,26 @@ CRITICAL RULES:
 // ── API Chat (POST /api/chat) ────────────────────────────────────────────
 
 async function apiChatHandler(request) {
+  let query = '', session_id = 'default';
   try {
     if (!OPENROUTER_API_KEY) {
       return jsonResponse({
-        content: '',
-        type: 'error',
+        content: 'The AI service is currently unavailable. Please try again later.',
+        type: 'chat',
         session_id: 'default',
         sources: [],
         analysis: null,
-      }, 503);
+      });
     }
 
     const body = await request.json();
-    const { query, session_id = 'default' } = body;
+    query = body.query || '';
+    session_id = body.session_id || 'default';
 
     if (!query) {
       return jsonResponse({
-        content: 'No query provided',
-        type: 'error',
+        content: 'Please provide a question or message.',
+        type: 'chat',
         session_id,
         sources: [],
         analysis: null,
@@ -1676,6 +1730,18 @@ async function apiChatHandler(request) {
     const resp = await callOpenRouter(messages);
     const data = await resp.json();
     let content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+    
+    if (!content) {
+      // Fallback: try Pollinations
+      try {
+        content = sanitizeText(await callPollinationsText(messages));
+      } catch (_) {}
+    }
+    
+    if (!content) {
+      content = `I understand you're asking about "${query.slice(0, 80)}". Could you please provide more details?`;
+    }
+    
     content = ensureNaturalLanguage(content);
 
     return jsonResponse({
@@ -1687,9 +1753,11 @@ async function apiChatHandler(request) {
     });
   } catch (e) {
       return jsonResponse({
-        content: '',
-        type: 'error',
-        session_id: 'default',
+        content: query
+          ? `I received your question but encountered a temporary issue. Please try again.`
+          : 'Hello! How can I help you today?',
+        type: 'chat',
+        session_id,
         sources: [],
         analysis: null,
       });
@@ -1723,6 +1791,7 @@ async function qrCodeHandler(request) {
 // ── Image Redesign (POST /api/image/redesign) ────────────────────────────
 
 async function redesignImageHandler(request) {
+  let editDesc = '';
   try {
     const formData = await request.formData();
     const file = formData.get('file');
@@ -1743,7 +1812,7 @@ async function redesignImageHandler(request) {
     const rawMime = file.type || '';
     const mimeType = normalizeImageMime(rawMime, fileName);
     const base64 = arrayBufferToBase64(fileBytes);
-    const editDesc = prompt?.trim() || '';
+    editDesc = prompt?.trim() || '';
 
     // ── Phase 1: Generate edit prompt using original image directly ──
     let imagePrompt = '';
@@ -1876,7 +1945,7 @@ CRITICAL RULES:
       responseText = responseText.replace(/^(sure|okay|ok|here|absolutely|certainly|of course)[!.,]?\s*/i, '').trim();
     } catch {}
     if (!responseText || responseText.length < 3) {
-      responseText = friendlyEditAck(editDesc);
+      responseText = await friendlyEditAck(editDesc);
     }
 
     // ── Phase 2: Generate edited image via TTI with preservation-focused description ──
@@ -1901,30 +1970,32 @@ CRITICAL RULES:
         ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
         : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
       try {
-        imageBuffer = await pollinationsImage(ttiPrompt, {
-          retries: 2, seed: seed + attempt * 37, model,
-        });
-      } catch (err) {
-        lastError = err;
-      }
+      imageBuffer = await pollinationsImage(ttiPrompt, {
+        retries: 2, seed: seed + attempt * 37, model,
+        imageBase64: base64, imageMime: mimeType,
+      });
+    } catch (err) {
+      lastError = err;
     }
-    if (!responseText || responseText.length < 3) responseText = friendlyEditAck(editDesc);
+  }
+  if (!responseText || responseText.length < 3) responseText = await friendlyEditAck(editDesc);
 
-    if (imageBuffer) {
-      const b64 = arrayBufferToBase64(imageBuffer);
-      return jsonResponse({ content: b64, error: null, prompt: imagePrompt, response: responseText, session_id });
-    }
-    return jsonResponse({
-      content: null,
-      error: '',
-      response: EDIT_FAILED_MSG,
-      session_id: 'default',
-    }, 200);
+  if (imageBuffer) {
+    const b64 = arrayBufferToBase64(imageBuffer);
+    return jsonResponse({ content: b64, error: null, prompt: imagePrompt, response: responseText, session_id });
+  }
+  responseText = await generateEditFailedMessage(editDesc);
+  return jsonResponse({
+    content: null,
+    error: '',
+    response: responseText,
+    session_id: 'default',
+  }, 200);
   } catch (e) {
     return jsonResponse({
       content: null,
       error: '',
-      response: EDIT_FAILED_MSG,
+      response: await generateEditFailedMessage(editDesc || ''),
       session_id: 'default',
     }, 200);
   }
@@ -2000,15 +2071,15 @@ async function analyzeImageHandler(request) {
     }
 
     return jsonResponse({
-      content: '',
-      type: 'error',
+      content: 'I was unable to analyze this image in detail. Please try uploading a clearer image or try again.',
+      type: 'analysis',
       session_id,
     });
   } catch (e) {
     return jsonResponse({
-      content: '',
-      type: 'error',
-      session_id: 'default',
+      content: 'Image analysis encountered an error. Please try again.',
+      type: 'analysis',
+      session_id: session_id || 'default',
     });
   }
 }
