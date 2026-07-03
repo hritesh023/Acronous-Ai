@@ -463,6 +463,23 @@ class ApiClient {
     return _multipartPost('/v1/image/edit', fields, imageBytes, fileName);
   }
 
+  Future<Map<String, dynamic>> ultraEditImage({
+    required Uint8List imageBytes,
+    required String fileName,
+    required String editPrompt,
+    String? sessionId,
+  }) async {
+    final fields = <String, String>{'prompt': editPrompt};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    final resp = await _multipartPost(
+      '/v1/image/ultra-edit',
+      fields,
+      imageBytes,
+      fileName,
+    );
+    return resp;
+  }
+
   Future<Map<String, dynamic>> redesignImage(
     File file,
     String prompt, {
@@ -544,6 +561,39 @@ class ApiClient {
     return _post('/api/tools/search', {
       'query': query,
       'max_results': maxResults,
+    });
+  }
+
+  Future<Map<String, dynamic>> ultraEditImage({
+    required Uint8List imageBytes,
+    required String fileName,
+    required String editPrompt,
+    String? sessionId,
+  }) async {
+    final fields = <String, String>{'prompt': editPrompt};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    final resp = await _multipartPost(
+      '/v1/image/ultra-edit',
+      fields,
+      imageBytes,
+      fileName,
+    );
+    return resp;
+  }
+
+  Future<Map<String, dynamic>> generateNaturalResponse(
+    String prompt,
+  ) async {
+    return _post('/v1/chat/generate-natural-response', {
+      'prompt': prompt,
+    });
+  }
+
+  Future<Map<String, dynamic>> generateFriendlyMessage(
+    String prompt,
+  ) async {
+    return _post('/v1/chat/generate-friendly-message', {
+      'prompt': prompt,
     });
   }
 

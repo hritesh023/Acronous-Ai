@@ -462,6 +462,28 @@ class ChatProvider extends ChangeNotifier {
           _processQueue();
           continue;
         }
+        
+        // Apply enhanced editing using unlimited AI tools with web search knowledge
+        try {
+          final bytesB64 = _bytesToBase64(bytes);
+          final editResult = await _api.ultraEditImage(
+            imageBytes: bytes,
+            fileName: imgAttach.name,
+            editPrompt: text,
+            sessionId: sessionId,
+          );
+          if (editResult != null && editResult is Map<String, dynamic> && editResult.containsKey('image_data')) {
+            return {
+              'response': 'Successfully edited your image using unlimited AI tools with web knowledge and real-time editing tools!',
+              'image_data': editResult['image_data'] is String 
+                ? editResult['image_data'] 
+                : _uint8ListToBase64(Uint8List.fromList(editResult['image_data'])),
+              'type': 'chat',
+            };
+          }
+        } catch (_) {
+        }
+        }
         if (rawContent.isNotEmpty ||
             imageData.isNotEmpty ||
             fileData.isNotEmpty) {
