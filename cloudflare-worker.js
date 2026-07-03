@@ -1261,25 +1261,50 @@ CRITICAL:
       const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
 
       // ── Generate edited image with fallback chain ──
-      const seed = computeSeed(fileBytes);
       let imageBuffer;
       let lastError;
       const hfInstruction = cleanEdit || editDesc;
 
-      // Priority 1: Hugging Face InstructPix2Pix (best for instruction-based editing)
+      // Priority 1: Hugging Face InstructPix2Pix (free, sometimes works)
       if (!imageBuffer) {
         try {
           const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-          if (hfResult && hfResult.byteLength > 500) {
-            imageBuffer = hfResult;
-          }
-        } catch (err) {
-          lastError = err;
-        }
+          if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+        } catch (err) { lastError = err; }
       }
 
-      // Priority 2: Pollinations img2img with preservation prompts
+      // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
+      if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
+        try {
+          const cfPrompt = imgDesc && imgDesc.length > 20
+            ? `Photorealistic photograph. ${imgDesc.slice(0, 800)}. ONLY CHANGE: ${cleanEdit}.`
+            : `Photorealistic photograph. ${cleanEdit}.`;
+          const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
+            prompt: cfPrompt,
+            negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+          });
+          if (result && result.image) {
+            const raw = result.image;
+            if (raw instanceof ArrayBuffer) {
+              if (raw.byteLength > 500) imageBuffer = raw;
+            } else if (raw instanceof Uint8Array) {
+              if (raw.byteLength > 500) imageBuffer = raw.buffer;
+            } else if (typeof raw === 'string') {
+              // base64-encoded image
+              const bin = atob(raw);
+              const buf = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+              if (buf.byteLength > 500) imageBuffer = buf.buffer;
+            }
+          }
+        } catch (err) { lastError = err; }
+      }
+
+      // Priority 3: Pollinations text-to-image with detailed description
+      // CRITICAL: NOT passing imageBase64 — Pollinations free img2img is broken
+      // and generates completely wrong images. Pure text-to-image works correctly.
       if (!imageBuffer) {
+        const seed = computeSeed(fileBytes);
         const ttiModels = ['flux', 'turbo', 'flux-schnell'];
         for (let attempt = 0; attempt < 9; attempt++) {
           if (imageBuffer) break;
@@ -1290,11 +1315,8 @@ CRITICAL:
           try {
             imageBuffer = await pollinationsImage(ttiPrompt, {
               retries: 2, seed: seed + attempt * 37, model,
-              imageBase64: base64, imageMime: mimeType,
             });
-          } catch (err) {
-            lastError = err;
-          }
+          } catch (err) { lastError = err; }
         }
       }
 
@@ -1752,25 +1774,48 @@ CRITICAL RULES:
   }
   const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
 
-  const seed = computeSeed(fileBytes);
   let imageBuffer;
   let lastError;
   const hfInstruction = cleanEdit || editDesc;
 
-  // Priority 1: Hugging Face InstructPix2Pix (best for instruction-based editing)
+  // Priority 1: Hugging Face InstructPix2Pix (free, sometimes works)
   if (!imageBuffer) {
     try {
       const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-      if (hfResult && hfResult.byteLength > 500) {
-        imageBuffer = hfResult;
-      }
-    } catch (err) {
-      lastError = err;
-    }
+      if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+    } catch (err) { lastError = err; }
   }
 
-  // Priority 2: Pollinations img2img with preservation prompts
+  // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
+  if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
+    try {
+      const cfPrompt = imgDesc && imgDesc.length > 20
+        ? `Photorealistic photograph. ${imgDesc.slice(0, 800)}. ONLY CHANGE: ${cleanEdit}.`
+        : `Photorealistic photograph. ${cleanEdit}.`;
+      const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
+        prompt: cfPrompt,
+        negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+      });
+      if (result && result.image) {
+        const raw = result.image;
+        if (raw instanceof ArrayBuffer) {
+          if (raw.byteLength > 500) imageBuffer = raw;
+        } else if (raw instanceof Uint8Array) {
+          if (raw.byteLength > 500) imageBuffer = raw.buffer;
+        } else if (typeof raw === 'string') {
+          const bin = atob(raw);
+          const buf = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+          if (buf.byteLength > 500) imageBuffer = buf.buffer;
+        }
+      }
+    } catch (err) { lastError = err; }
+  }
+
+  // Priority 3: Pollinations text-to-image with detailed description
+  // NOT passing imageBase64 — Pollinations free img2img is broken
   if (!imageBuffer) {
+    const seed = computeSeed(fileBytes);
     const ttiModels = ['flux', 'turbo', 'flux-schnell'];
     for (let attempt = 0; attempt < 9; attempt++) {
       if (imageBuffer) break;
@@ -1781,11 +1826,8 @@ CRITICAL RULES:
       try {
         imageBuffer = await pollinationsImage(ttiPrompt, {
           retries: 2, seed: seed + attempt * 37, model,
-          imageBase64: base64, imageMime: mimeType,
         });
-      } catch (err) {
-        lastError = err;
-      }
+      } catch (err) { lastError = err; }
     }
   }
 
@@ -2067,25 +2109,48 @@ CRITICAL RULES:
     }
     const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
 
-    const seed = computeSeed(fileBytes);
     let imageBuffer;
     let lastError;
     const hfInstruction = cleanEdit || editDesc;
 
-    // Priority 1: Hugging Face InstructPix2Pix (best for instruction-based editing)
+    // Priority 1: Hugging Face InstructPix2Pix (free, sometimes works)
     if (!imageBuffer) {
       try {
         const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-        if (hfResult && hfResult.byteLength > 500) {
-          imageBuffer = hfResult;
-        }
-      } catch (err) {
-        lastError = err;
-      }
+        if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+      } catch (err) { lastError = err; }
     }
 
-    // Priority 2: Pollinations img2img with preservation prompts
+    // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
+    if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
+      try {
+        const cfPrompt = imgDesc && imgDesc.length > 20
+          ? `Photorealistic photograph. ${imgDesc.slice(0, 800)}. ONLY CHANGE: ${cleanEdit}.`
+          : `Photorealistic photograph. ${cleanEdit}.`;
+        const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
+          prompt: cfPrompt,
+          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+        });
+        if (result && result.image) {
+          const raw = result.image;
+          if (raw instanceof ArrayBuffer) {
+            if (raw.byteLength > 500) imageBuffer = raw;
+          } else if (raw instanceof Uint8Array) {
+            if (raw.byteLength > 500) imageBuffer = raw.buffer;
+          } else if (typeof raw === 'string') {
+            const bin = atob(raw);
+            const buf = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+            if (buf.byteLength > 500) imageBuffer = buf.buffer;
+          }
+        }
+      } catch (err) { lastError = err; }
+    }
+
+    // Priority 3: Pollinations text-to-image with detailed description
+    // NOT passing imageBase64 — Pollinations free img2img is broken
     if (!imageBuffer) {
+      const seed = computeSeed(fileBytes);
       const ttiModels = ['flux', 'turbo', 'flux-schnell'];
       for (let attempt = 0; attempt < 9; attempt++) {
         if (imageBuffer) break;
@@ -2096,7 +2161,6 @@ CRITICAL RULES:
         try {
         imageBuffer = await pollinationsImage(ttiPrompt, {
           retries: 2, seed: seed + attempt * 37, model,
-          imageBase64: base64, imageMime: mimeType,
         });
       } catch (err) {
         lastError = err;
@@ -3282,6 +3346,7 @@ export default {
     POLLINATIONS_API_KEY = env.POLLINATIONS_API_KEY || '';
     if (env.acronous_kv) globalThis.acronous_kv = env.acronous_kv;
     if (env.AUTH_USERS) globalThis.authUsersKv = env.AUTH_USERS;
+    if (env.AI) globalThis.AI = env.AI;
 
     const url = new URL(request.url);
     const hostname = url.hostname;

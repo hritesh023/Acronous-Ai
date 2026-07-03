@@ -24,6 +24,10 @@ PAGES_ORIGIN = "https://acronous-ai.pages.dev"
 binding = "AUTH_USERS"
 id = "eb112976703e4447af69c13dd5f8824c"
 
+# ── AI binding for Workers AI (free tier image generation) ────────────────
+[ai]
+binding = "AI"
+
 # Optional KV namespace for conversations
 # [[kv_namespaces]]
 # binding = "acronous_kv"
