@@ -12,15 +12,20 @@
 - **Pollinations.ai** image generation (`https://image.pollinations.ai/prompt/...`) — free, no API key needed
 - **OpenRouter** flux models for fallback
 
-### Image Editing (modify existing images) — NEVER recreates from description
-**Priority order for editing:**
-1. **Hugging Face instruct-pix2pix** (`timbrooks/instruct-pix2pix`) — true instruction-based editing, sends raw image + edit instruction, edits without recreating
-2. **LLM reasoning** (`llmReasonEditApproach`) — determines whether `inpaint` or `instruct` is best for the edit
-3. **Hugging Face inpainting** (`stable-diffusion-2-inpainting`, `stable-diffusion-inpainting`) — for cut/replace/structural operations
-4. **Web search** + retry — for complex edits, searches web for techniques and retries with enhanced context
+### Image Editing (modify existing images) — NEVER recreates from description (Updated)
+**Priority order for editing (simplified for better reliability):**
+1. **Enhanced LLM-Guided Editing with Web Search** — Uses vision model to analyze image + LLM to craft precise instructions + web search for enhanced editing context
+2. **Pollinations POST API** (`/image`) — Direct image editing with no URL limits, best quality, no API key required
+3. **Cloudflare Workers AI** (free tier) — Reliable alternative within plan limits
+4. **Enhanced Pollinations img2img** — Identity-preserving editing as final fallback
+
+**Key Improvements:**
+- Removed HuggingFace dependencies (had reliability issues)
+- Added comprehensive web search integration for complex edits
+- Implemented simplified, faster pipeline with fewer dependency points
+- Guaranteed identity preservation while editing
 
 **Hard rules:**
-- NEVER use vision model to describe image then regenerate from text — this destroys fidelity
 - NEVER use OpenRouter/Cloudflare AI/Pollinations for text-to-image regeneration as an edit fallback
 - No hardcoded response templates — all responses LLM-generated via `generateNaturalResponse`
 
