@@ -1241,7 +1241,7 @@ class ChatProvider extends ChangeNotifier {
               'type': editType,
             };
           }
-          if (editType == 'error' && response.isNotEmpty) {
+          if (response.isNotEmpty) {
             return {'response': response, 'image_data': '', 'type': 'chat'};
           }
         } catch (_) {
@@ -1264,8 +1264,8 @@ class ChatProvider extends ChangeNotifier {
               'type': 'chat',
             };
           }
-          if ((editResp['error'] as String?)?.isNotEmpty ?? false) {
-            return {'response': '', 'image_data': '', 'type': 'chat'};
+          if (response.isNotEmpty) {
+            return {'response': response, 'image_data': '', 'type': 'chat'};
           }
         } catch (_) {
         }
