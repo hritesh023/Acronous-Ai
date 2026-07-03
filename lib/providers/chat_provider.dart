@@ -30,8 +30,8 @@ class ChatProvider extends ChangeNotifier {
   bool get serverCheckDone => _serverCheckDone;
   bool get isConnecting => _isConnecting;
 
-  static final RegExp _privateInfoPattern = RegExp(
-    r'\b(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|openrouter|pollinations|cloudflare)[\s:=]',
+  static final RegExp _privateInfoLinePattern = RegExp(
+    r'(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by pollinations|pollinations\.ai|openrouter[.\s])',
     caseSensitive: false,
   );
 
@@ -42,8 +42,12 @@ class ChatProvider extends ChangeNotifier {
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
     if (cleaned.isEmpty) return text.trim();
-    if (_privateInfoPattern.hasMatch(cleaned)) return '';
-    return cleaned;
+    // Strip individual lines containing provider/internal info instead of blanking whole response
+    final lines = cleaned.split('\n');
+    final filtered = lines.where((line) {
+      return !_privateInfoLinePattern.hasMatch(line.trim());
+    }).join('\n').trim();
+    return filtered.isEmpty ? cleaned : filtered;
   }
 
   final List<Conversation> _conversations = [];

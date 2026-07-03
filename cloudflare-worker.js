@@ -108,7 +108,28 @@ function errorResponse(status = 500) {
 
 function sanitizeText(text) {
   if (!text) return '';
-  return text.replace(/\n{3,}/g, '\n\n').trim();
+  let cleaned = text.replace(/\n{3,}/g, '\n\n').trim();
+  // Strip Pollinations ad/branding text that leaks into responses
+  cleaned = cleaned
+    .replace(/🌸\s*\*\*Ad\*\*\s*🌸[\s\S]*?(?:$|(?=\n\S))/i, '')
+    .replace(/Powered\s+by\s+Pollinations\.AI.*?(?:mission|accessible|API).*/gi, '')
+    .replace(/\[Support\s+our\s+mission\]\(https:\/\/pollinations\.ai\/redirect\/kofi\).*/gi, '')
+    .replace(/to\s+keep\s+AI\s+accessible\s+for\s+everyone\.*/gi, '')
+    .replace(/Pollinations\.AI\s+free\s+text\s+APIs?\.?/gi, '')
+    .trim();
+  // Strip any remaining "Ad" sections with emoji patterns
+  cleaned = cleaned.replace(/[🌸🎨🎯🎉💡]+\s*\*{0,2}(Ad|Sponsor|Promotion|Support our work)\*{0,2}\s*[🌸🎨🎯🎉💡]*[\s\S]{0,200}$/gi, '').trim();
+  // Strip any raw JSON-like metadata that might leak from providers
+  cleaned = cleaned.replace(/\{\s*"id":\s*"[^"]*"\s*[,\}].*?\}\s*$/s, '').trim();
+  // Strip lines containing known provider/internal names
+  cleaned = cleaned.split('\n').filter(line => {
+    const l = line.toLowerCase();
+    // Allow the word if it's part of natural conversation vs. revealing backend
+    if (/pollinations\.ai/i.test(l) && !/how.*pollinations|what.*pollinations/i.test(l)) return false;
+    if (/openrouter/i.test(l) && !/how.*openrouter|what.*openrouter/i.test(l)) return false;
+    return true;
+  }).join('\n').trim();
+  return cleaned;
 }
 
 function estimateComplexity(text) {
@@ -198,6 +219,66 @@ async function callOpenRouterWithFallback(messages, options = {}) {
     }
     throw err;
   }
+}
+
+// ── OpenRouter image generation (fallback for image editing) ───────────
+
+async function callOpenRouterImageGen(prompt, options = {}) {
+  const { model = 'black-forest-labs/flux-schnell', seed, width = 1024, height = 1024 } = options;
+  if (!OPENROUTER_API_KEY) return null;
+  const models = [model, 'black-forest-labs/flux-schnell', 'black-forest-labs/flux-1.1-pro', 'stabilityai/stable-diffusion-3.5-large'];
+  for (const m of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const body = {
+          model: m,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: Math.max(width * height * 0.5, 4096),
+          temperature: 1,
+          seed: seed || (Math.floor(Math.random() * 1000000) + attempt * 37),
+          width,
+          height,
+        };
+        const resp = await fetch(OPENROUTER_BASE_URL + '/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            'HTTP-Referer': 'https://ai.acronous.com',
+            'X-Title': 'Acronous AI',
+          },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (!resp.ok) {
+          if (resp.status === 402 && m.includes(':free')) continue;
+          continue;
+        }
+        const data = await resp.json();
+        const content = data?.choices?.[0]?.message?.content || '';
+        const urlMatch = content.match(/!\[.*?\]\((https?:\/\/[^\)]+)\)/);
+        const directUrl = urlMatch ? urlMatch[1] : (content.match(/https?:\/\/[^\s\)]+\.(png|jpg|jpeg|gif|webp)/i) || [])[0];
+        if (directUrl) {
+          const imgResp = await fetch(directUrl, { signal: AbortSignal.timeout(30000) });
+          if (imgResp.ok) {
+            const ct = imgResp.headers.get('content-type') || '';
+            if (ct.startsWith('image/')) {
+              const buf = await imgResp.arrayBuffer();
+              if (buf && buf.byteLength > 500) return buf;
+            }
+          }
+        }
+        const b64Match = content.match(/data:image\/(?:png|jpeg|jpg|gif|webp);base64,([A-Za-z0-9+/=]+)/);
+        if (b64Match) {
+          const raw = atob(b64Match[1]);
+          const buf = new Uint8Array(raw.length);
+          for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+          if (buf.byteLength > 500) return buf.buffer;
+        }
+      } catch {}
+    }
+  }
+  return null;
 }
 
 function formatLocalTime(now, tz) {
@@ -339,8 +420,20 @@ function shouldSearchWeb(text) {
 }
 
 function extractSearchTerms(query) {
+  // Expand common abbreviations for better search results
+  let q = query
+    .replace(/\bcm\b/i, 'chief minister')
+    .replace(/\bpm\b/i, 'prime minister')
+    .replace(/\bpresident\b/i, 'president')
+    .replace(/\bvp\b/i, 'vice president')
+    .replace(/\bceo\b/i, 'CEO')
+    .replace(/\bcto\b/i, 'CTO')
+    .replace(/\bcmo\b/i, 'CMO')
+    .replace(/\bcfo\b/i, 'CFO')
+    .replace(/\bmla\b/i, 'MLA')
+    .replace(/\bmp\b/i, 'Member of Parliament');
   // Remove leading question phrases to get the core search terms
-  return query
+  return q
     .replace(/^(who\s+is|who\s+are|who\s+was|who\s+were|what\s+is|what\s+are|what\s+was|what\s+were|tell\s+me\s+(about|regarding)|i\s+want\s+to\s+know\s+(about|regarding)|can\s+you\s+tell\s+me|do\s+you\s+know|how\s+(is|are|was|were))\s+/i, '')
     .replace(/^(the|a|an)\s+/i, '')
     .replace(/\b(please|pls|kindly)\b/gi, '')
@@ -423,6 +516,26 @@ async function searchWeb(query) {
       }
     }
   } catch {}
+
+  // Fallback: DuckDuckGo Instant Answer API (JSON, no parsing needed)
+  if (allSnippets.length < 2) {
+    try {
+      const ddgResp = await fetch(`https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1`, {
+        headers: { 'User-Agent': 'AcronousAI/1.0' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (ddgResp.ok) {
+        const ddgData = await ddgResp.json();
+        if (ddgData.AbstractText) allSnippets.push(`[DuckDuckGo] ${ddgData.AbstractText.slice(0, 1000)}`);
+        if (ddgData.Answer) allSnippets.push(`[Answer] ${ddgData.Answer}`);
+        const relatedTopics = ddgData.RelatedTopics || [];
+        for (const topic of relatedTopics.slice(0, 3)) {
+          const text = topic.Text || topic.FirstURL || '';
+          if (text && !allSnippets.includes(text)) allSnippets.push(text.slice(0, 500));
+        }
+      }
+    } catch {}
+  }
 
   if (allSnippets.length > 0) return allSnippets.slice(0, 6).join('\n').slice(0, 4000);
 
@@ -550,10 +663,10 @@ function wakeupHandler() {
 const POLLINATIONS_TEXT_URL = 'https://text.pollinations.ai';
 
 async function callPollinationsText(messages, options = {}) {
-  const { max_tokens = 4096, temperature = 0.7 } = options;
+  const { max_tokens = 4096, temperature = 0.7, timeout = 120000 } = options;
   const body = { messages, model: 'openai', private: true };
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120000);
+  const timer = setTimeout(() => controller.abort(), timeout);
   try {
     const resp = await fetch(POLLINATIONS_TEXT_URL, {
       method: 'POST',
@@ -564,7 +677,7 @@ async function callPollinationsText(messages, options = {}) {
     if (!resp.ok) throw new Error(`Pollinations error (${resp.status})`);
     return resp.text();
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 }
 
@@ -586,17 +699,28 @@ async function chatHandler(request) {
       }, 400);
     }
 
-    // Build message array (use web-augmented messages so the model can use live search)
-    const msgs = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
+    const complexity = estimateComplexity(message);
 
-    // Try Pollinations text first (always free, no key needed)
+    // Skip web search for greetings — respond instantly with low tokens
+    let msgs;
+    if (complexity === 'greeting') {
+      msgs = buildMessages(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
+    } else {
+      msgs = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
+    }
+
+    // Dynamic timeout: greeting → fast (15s), simple → moderate (45s), complex → generous (120s+)
+    const pollinationsTimeout = complexity === 'greeting' ? 15000 :
+                                complexity === 'simple' ? 45000 :
+                                120000;
+
     let content = '';
     try {
-      content = sanitizeText(await callPollinationsText(msgs));
+      content = sanitizeText(await callPollinationsText(msgs, { timeout: pollinationsTimeout }));
     } catch (_) {}
 
-    // Fallback to OpenRouter if Pollinations fails
-    if (!content && OPENROUTER_API_KEY) {
+    // Skip OpenRouter fallback for greetings — respond fast with what we have
+    if (!content && complexity !== 'greeting' && OPENROUTER_API_KEY) {
       const models = [OPENROUTER_MODEL, FAST_MODEL, 'openrouter/auto'];
       for (let attempt = 0; attempt < models.length; attempt++) {
         try {
@@ -609,27 +733,11 @@ async function chatHandler(request) {
       }
     }
 
+    // Retry with full original context — never use simplified/hardcoded fallback
     if (!content) {
-      // Final fallback: generate a simple response from user message
       try {
-        const simpleMsgs = [
-          { role: 'system', content: 'You are Acronous AI, a helpful assistant. Respond conversationally and naturally.' },
-          { role: 'user', content: message },
-        ];
-        content = sanitizeText(await callPollinationsText(simpleMsgs));
+        content = sanitizeText(await callPollinationsText(msgs, { timeout: 180000 }));
       } catch (_) {}
-    }
-
-    if (!content && message) {
-      // Absolute last resort: respond based on message type
-      const lower = message.toLowerCase().trim();
-      if (lower.match(/^(hi|hello|hey|greetings|howdy|sup|yo)/)) {
-        content = 'Hello! How can I help you today?';
-      } else if (lower.includes('thank')) {
-        content = "You're welcome! Let me know if you need anything else.";
-      } else {
-        content = `I understand you're asking about "${message.slice(0, 80)}". Could you please rephrase or provide more details so I can give you a better answer?`;
-      }
     }
 
     if (content) {
@@ -637,7 +745,7 @@ async function chatHandler(request) {
     }
 
     return jsonResponse({
-      response: content || 'Let me look into that for you. Could you please provide more details?',
+      response: content || '',
       session_id,
       type: 'chat',
       image_data: '',
@@ -648,11 +756,8 @@ async function chatHandler(request) {
     });
   } catch (e) {
     console.error('chatHandler error:', e?.message || e);
-    const fallbackMsg = message
-      ? `I received your message but encountered an issue processing it. Could you please try again?`
-      : 'Hello! How can I help you today?';
     return jsonResponse({
-      response: fallbackMsg,
+      response: '',
       session_id: session_id || 'default',
       type: 'chat',
       image_data: '',
@@ -1013,14 +1118,7 @@ async function friendlyEditAck(text) {
     const text_ = sanitizeText(data?.choices?.[0]?.message?.content || '');
     if (text_ && text_.length > 5) return text_;
   } catch (_) {}
-  const clean = text
-    .replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '')
-    .replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '')
-    .trim();
-  if (clean && clean.length >= 3) {
-    return `I've updated the image as you requested — modified the ${clean.toLowerCase()}.`;
-  }
-  return "Here's your edited image.";
+  return '';
 }
 
 async function generateEditFailedMessage(editRequest) {
@@ -1034,7 +1132,7 @@ async function generateEditFailedMessage(editRequest) {
     const text = sanitizeText(data?.choices?.[0]?.message?.content || '');
     if (text && text.length > 5) return text;
   } catch (_) {}
-  return `I couldn't apply that edit right now. Could you try again with a clearer description or a different image?`;
+  return '';
 }
 
 function ensureNaturalLanguage(text) {
@@ -1263,25 +1361,27 @@ CRITICAL:
       // ── Generate edited image with fallback chain ──
       let imageBuffer;
       let lastError;
-      const hfInstruction = cleanEdit || editDesc;
 
-      // Priority 1: Hugging Face InstructPix2Pix (free, sometimes works)
-      if (!imageBuffer) {
+      const editPromptBase = imgDesc && imgDesc.length > 20
+        ? `A REAL CAMERA PHOTOGRAPH. ORIGINAL: ${imgDesc.slice(0, 800)}. CHANGE ONLY: ${cleanEdit}. CRITICAL — This must look like the EXACT SAME real photograph with ONLY the change applied. Preserve the photographic quality, natural skin texture, authentic lighting, and realistic appearance. The output MUST be indistinguishable from a real camera photo. Same person identity, face, expression, pose, background, lighting, composition. No text, no words, no letters. Photorealistic, natural skin, authentic textures.`
+        : `A REAL CAMERA PHOTOGRAPH. ${cleanEdit}. Preserve natural photographic quality, realistic textures, authentic lighting. The output must look like a real photo, not AI-generated. No text, no words, no letters.`;
+
+      // Priority 1: OpenRouter image generation (most reliable, uses flux models)
+      if (!imageBuffer && OPENROUTER_API_KEY) {
+        const orPrompt = editPromptBase;
         try {
-          const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-          if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+          const orResult = await callOpenRouterImageGen(orPrompt, { seed: computeSeed(fileBytes) });
+          if (orResult && orResult.byteLength > 500) imageBuffer = orResult;
         } catch (err) { lastError = err; }
       }
 
       // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
       if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
         try {
-          const cfPrompt = imgDesc && imgDesc.length > 20
-            ? `Photorealistic photograph. ${imgDesc.slice(0, 800)}. ONLY CHANGE: ${cleanEdit}.`
-            : `Photorealistic photograph. ${cleanEdit}.`;
+          const cfPrompt = editPromptBase;
           const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
             prompt: cfPrompt,
-            negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+            negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, artificial, cgi, rendered, illustration, painting, cartoon',
           });
           if (result && result.image) {
             const raw = result.image;
@@ -1290,7 +1390,6 @@ CRITICAL:
             } else if (raw instanceof Uint8Array) {
               if (raw.byteLength > 500) imageBuffer = raw.buffer;
             } else if (typeof raw === 'string') {
-              // base64-encoded image
               const bin = atob(raw);
               const buf = new Uint8Array(bin.length);
               for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
@@ -1300,24 +1399,29 @@ CRITICAL:
         } catch (err) { lastError = err; }
       }
 
-      // Priority 3: Pollinations text-to-image with detailed description
-      // CRITICAL: NOT passing imageBase64 — Pollinations free img2img is broken
-      // and generates completely wrong images. Pure text-to-image works correctly.
+      // Priority 3: Pollinations text-to-image with natural preservation prompt
       if (!imageBuffer) {
         const seed = computeSeed(fileBytes);
         const ttiModels = ['flux', 'turbo', 'flux-schnell'];
-        for (let attempt = 0; attempt < 9; attempt++) {
+        for (let attempt = 0; attempt < 6; attempt++) {
           if (imageBuffer) break;
           const model = ttiModels[attempt % ttiModels.length];
-          const ttiPrompt = imgDesc && imgDesc.length > 20
-            ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
-            : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
+          const ttiPrompt = editPromptBase;
           try {
             imageBuffer = await pollinationsImage(ttiPrompt, {
-              retries: 2, seed: seed + attempt * 37, model,
+              retries: 1, seed: seed + attempt * 37, model,
             });
           } catch (err) { lastError = err; }
         }
+      }
+
+      // Priority 4: Hugging Face InstructPix2Pix (free, least reliable for editing)
+      if (!imageBuffer) {
+        const hfInstruction = cleanEdit || editDesc;
+        try {
+          const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
+          if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+        } catch (err) { lastError = err; }
       }
 
       if (imageBuffer) {
@@ -1384,20 +1488,14 @@ CRITICAL:
       }
     } catch {}
 
-    // Final fallback: always return something meaningful
-    const finalResponse = message
-      ? `I've received your image along with your message: "${message}". I wasn't able to fully analyze the image this time, but please feel free to ask me about it in a different way.`
-      : 'Thank you for sharing the image. Could you please tell me what you would like to know about it or what changes you would like me to make?';
     return jsonResponse({
-      response: finalResponse,
+      response: '',
       session_id,
       type: 'chat',
     });
   } catch (e) {
     return jsonResponse({
-      response: message
-        ? `I received your request about the image but encountered an issue. Could you please try again?`
-        : 'I had trouble processing the image. Please try uploading it again.',
+      response: '',
       session_id: session_id || 'default',
       type: 'chat',
     });
@@ -1525,7 +1623,7 @@ async function chatFileHandler(request) {
     });
   } catch (e) {
     return jsonResponse({
-      response: 'I had trouble processing this file. Please try uploading it again.',
+      response: '',
       session_id: 'default',
       type: 'chat',
     });
@@ -1610,7 +1708,7 @@ async function generateImageHandler(request) {
         });
   } catch (e) {
     return jsonResponse({
-      response: 'I was unable to generate that image. Please try a different description.',
+      response: '',
       session_id: session_id || 'default',
       type: 'chat',
       image_data: '',
@@ -1764,7 +1862,7 @@ CRITICAL RULES:
   // Generate friendly confirmation text
   responseText = await friendlyEditAck(editDesc);
 
-  // ── Phase 2: Generate edited image via TTI with preservation-focused description ──
+  // ── Phase 2: Generate edited image with natural photo preservation ──
   let imgDesc = '';
   const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
   if (origMatch && origMatch[1].trim().length > 20) {
@@ -1776,25 +1874,25 @@ CRITICAL RULES:
 
   let imageBuffer;
   let lastError;
-  const hfInstruction = cleanEdit || editDesc;
 
-  // Priority 1: Hugging Face InstructPix2Pix (free, sometimes works)
-  if (!imageBuffer) {
+  const editPromptBase = imgDesc && imgDesc.length > 20
+    ? `A REAL CAMERA PHOTOGRAPH. ORIGINAL: ${imgDesc.slice(0, 800)}. CHANGE ONLY: ${cleanEdit}. CRITICAL — This must look like the EXACT SAME real photograph with ONLY the change applied. Preserve the photographic quality, natural skin texture, authentic lighting, and realistic appearance. The output MUST be indistinguishable from a real camera photo. Same person identity, face, expression, pose, background, lighting, composition. No text, no words, no letters. Photorealistic, natural skin, authentic textures.`
+    : `A REAL CAMERA PHOTOGRAPH. ${cleanEdit}. Preserve natural photographic quality, realistic textures, authentic lighting. The output must look like a real photo, not AI-generated. No text, no words, no letters.`;
+
+  // Priority 1: OpenRouter image generation (most reliable, uses flux models)
+  if (!imageBuffer && OPENROUTER_API_KEY) {
     try {
-      const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-      if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+      const orResult = await callOpenRouterImageGen(editPromptBase, { seed: computeSeed(fileBytes) });
+      if (orResult && orResult.byteLength > 500) imageBuffer = orResult;
     } catch (err) { lastError = err; }
   }
 
   // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
   if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
     try {
-      const cfPrompt = imgDesc && imgDesc.length > 20
-        ? `Photorealistic photograph. ${imgDesc.slice(0, 800)}. ONLY CHANGE: ${cleanEdit}.`
-        : `Photorealistic photograph. ${cleanEdit}.`;
       const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-        prompt: cfPrompt,
-        negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+        prompt: editPromptBase,
+        negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, artificial, cgi, rendered, illustration, painting, cartoon',
       });
       if (result && result.image) {
         const raw = result.image;
@@ -1812,23 +1910,28 @@ CRITICAL RULES:
     } catch (err) { lastError = err; }
   }
 
-  // Priority 3: Pollinations text-to-image with detailed description
-  // NOT passing imageBase64 — Pollinations free img2img is broken
+  // Priority 3: Pollinations text-to-image with natural preservation prompt
   if (!imageBuffer) {
     const seed = computeSeed(fileBytes);
     const ttiModels = ['flux', 'turbo', 'flux-schnell'];
-    for (let attempt = 0; attempt < 9; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       if (imageBuffer) break;
       const model = ttiModels[attempt % ttiModels.length];
-      const ttiPrompt = imgDesc && imgDesc.length > 20
-        ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
-        : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
       try {
-        imageBuffer = await pollinationsImage(ttiPrompt, {
-          retries: 2, seed: seed + attempt * 37, model,
+        imageBuffer = await pollinationsImage(editPromptBase, {
+          retries: 1, seed: seed + attempt * 37, model,
         });
       } catch (err) { lastError = err; }
     }
+  }
+
+  // Priority 4: Hugging Face InstructPix2Pix (free, least reliable for editing)
+  if (!imageBuffer) {
+    const hfInstruction = cleanEdit || editDesc;
+    try {
+      const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
+      if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+    } catch (err) { lastError = err; }
   }
 
   if (imageBuffer) {
@@ -1852,50 +1955,34 @@ CRITICAL RULES:
 async function apiChatHandler(request) {
   let query = '', session_id = 'default';
   try {
-    if (!OPENROUTER_API_KEY) {
-      return jsonResponse({
-        content: 'The AI service is currently unavailable. Please try again later.',
-        type: 'chat',
-        session_id: 'default',
-        sources: [],
-        analysis: null,
-      });
-    }
-
     const body = await request.json();
     query = body.query || '';
     session_id = body.session_id || 'default';
 
     if (!query) {
-      return jsonResponse({
-        content: 'Please provide a question or message.',
-        type: 'chat',
-        session_id,
-        sources: [],
-        analysis: null,
-      });
+      return jsonResponse({ content: '', type: 'chat', session_id, sources: [], analysis: null });
     }
 
     const messages = await buildMessagesWithSearch(query, session_id);
-    const resp = await callOpenRouter(messages);
-    const data = await resp.json();
-    let content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+    let content = '';
+    if (OPENROUTER_API_KEY) {
+      try {
+        const resp = await callOpenRouter(messages);
+        const data = await resp.json();
+        content = sanitizeText(data?.choices?.[0]?.message?.content || '');
+      } catch (_) {}
+    }
     
     if (!content) {
-      // Fallback: try Pollinations
       try {
         content = sanitizeText(await callPollinationsText(messages));
       } catch (_) {}
     }
     
-    if (!content) {
-      content = `I understand you're asking about "${query.slice(0, 80)}". Could you please provide more details?`;
-    }
-    
-    content = ensureNaturalLanguage(content);
+    if (content) content = ensureNaturalLanguage(content);
 
     return jsonResponse({
-      content,
+      content: content || '',
       type: 'chat',
       session_id,
       sources: [],
@@ -1903,9 +1990,7 @@ async function apiChatHandler(request) {
     });
   } catch (e) {
       return jsonResponse({
-        content: query
-          ? `I received your question but encountered a temporary issue. Please try again.`
-          : 'Hello! How can I help you today?',
+        content: '',
         type: 'chat',
         session_id,
         sources: [],
@@ -2111,25 +2196,25 @@ CRITICAL RULES:
 
     let imageBuffer;
     let lastError;
-    const hfInstruction = cleanEdit || editDesc;
 
-    // Priority 1: Hugging Face InstructPix2Pix (free, sometimes works)
-    if (!imageBuffer) {
+    const editPromptBase = imgDesc && imgDesc.length > 20
+      ? `A REAL CAMERA PHOTOGRAPH. ORIGINAL: ${imgDesc.slice(0, 800)}. CHANGE ONLY: ${cleanEdit}. CRITICAL — This must look like the EXACT SAME real photograph with ONLY the change applied. Preserve the photographic quality, natural skin texture, authentic lighting, and realistic appearance. The output MUST be indistinguishable from a real camera photo. Same person identity, face, expression, pose, background, lighting, composition. No text, no words, no letters. Photorealistic, natural skin, authentic textures.`
+      : `A REAL CAMERA PHOTOGRAPH. ${cleanEdit}. Preserve natural photographic quality, realistic textures, authentic lighting. The output must look like a real photo, not AI-generated. No text, no words, no letters.`;
+
+    // Priority 1: OpenRouter image generation (most reliable)
+    if (!imageBuffer && OPENROUTER_API_KEY) {
       try {
-        const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
-        if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+        const orResult = await callOpenRouterImageGen(editPromptBase, { seed: computeSeed(fileBytes) });
+        if (orResult && orResult.byteLength > 500) imageBuffer = orResult;
       } catch (err) { lastError = err; }
     }
 
     // Priority 2: Cloudflare Workers AI (free tier, if binding exists)
     if (!imageBuffer && typeof globalThis.AI !== 'undefined' && globalThis.AI) {
       try {
-        const cfPrompt = imgDesc && imgDesc.length > 20
-          ? `Photorealistic photograph. ${imgDesc.slice(0, 800)}. ONLY CHANGE: ${cleanEdit}.`
-          : `Photorealistic photograph. ${cleanEdit}.`;
         const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-          prompt: cfPrompt,
-          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs',
+          prompt: editPromptBase,
+          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, artificial, cgi, rendered, illustration, painting, cartoon',
         });
         if (result && result.image) {
           const raw = result.image;
@@ -2147,27 +2232,30 @@ CRITICAL RULES:
       } catch (err) { lastError = err; }
     }
 
-    // Priority 3: Pollinations text-to-image with detailed description
-    // NOT passing imageBase64 — Pollinations free img2img is broken
+    // Priority 3: Pollinations text-to-image with natural preservation prompt
     if (!imageBuffer) {
       const seed = computeSeed(fileBytes);
       const ttiModels = ['flux', 'turbo', 'flux-schnell'];
-      for (let attempt = 0; attempt < 9; attempt++) {
+      for (let attempt = 0; attempt < 6; attempt++) {
         if (imageBuffer) break;
         const model = ttiModels[attempt % ttiModels.length];
-        const ttiPrompt = imgDesc && imgDesc.length > 20
-          ? `Photorealistic photograph of ${imgDesc}. ONLY CHANGE: ${cleanEdit}. IDENTICAL RECONSTRUCTION: exact same person — same face, skin tone, eye color, hair style/color/length, expression, pose. Same background, lighting direction and type, shadows, composition, camera angle. Photorealistic, natural skin texture, sharp focus, high fidelity. No text, no words, no letters.`
-          : `Photorealistic photograph. ${cleanEdit}. Same subject identity, same face, same pose, same background, same lighting. High quality, natural. No text.`;
         try {
-        imageBuffer = await pollinationsImage(ttiPrompt, {
-          retries: 2, seed: seed + attempt * 37, model,
-        });
-      } catch (err) {
-        lastError = err;
+          imageBuffer = await pollinationsImage(editPromptBase, {
+            retries: 1, seed: seed + attempt * 37, model,
+          });
+        } catch (err) { lastError = err; }
       }
     }
-  }
-  if (!responseText || responseText.length < 3) responseText = await friendlyEditAck(editDesc);
+
+    // Priority 4: Hugging Face InstructPix2Pix (least reliable)
+    if (!imageBuffer) {
+      const hfInstruction = cleanEdit || editDesc;
+      try {
+        const hfResult = await callHuggingFaceImageEdit(base64, hfInstruction, mimeType);
+        if (hfResult && hfResult.byteLength > 500) imageBuffer = hfResult;
+      } catch (err) { lastError = err; }
+    }
+    if (!responseText || responseText.length < 3) responseText = await friendlyEditAck(editDesc);
 
   if (imageBuffer) {
     const b64 = arrayBufferToBase64(imageBuffer);
@@ -2260,13 +2348,13 @@ async function analyzeImageHandler(request) {
     }
 
     return jsonResponse({
-      content: 'I was unable to analyze this image in detail. Please try uploading a clearer image or try again.',
+      content: '',
       type: 'analysis',
       session_id,
     });
   } catch (e) {
     return jsonResponse({
-      content: 'Image analysis encountered an error. Please try again.',
+      content: '',
       type: 'analysis',
       session_id: session_id || 'default',
     });
