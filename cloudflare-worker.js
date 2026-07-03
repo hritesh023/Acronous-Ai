@@ -761,8 +761,33 @@ async function generateImage(prompt, session_id) {
   try {
     imageBuffer = await pollinationsImage(imagePrompt, { retries: 2 });
   } catch {
-    imageBuffer = await pollinationsImage(imagePrompt, { model: 'flux-schnell', retries: 1 }).catch(() => null);
+    try {
+      imageBuffer = await pollinationsImage(imagePrompt, { model: 'flux-schnell', retries: 1 });
+    } catch {}
   }
+  
+  // Fallback: Workers AI text-to-image (free tier)
+  if (!imageBuffer && globalThis.AI) {
+    try {
+      const inputs = {
+        prompt: imagePrompt,
+        negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, watermark',
+        height: 1024,
+        width: 1024,
+      };
+      const result = await globalThis.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', inputs);
+      if (result) {
+        if (result.image instanceof Uint8Array) {
+          imageBuffer = result.image.buffer;
+        } else if (result.image) {
+          imageBuffer = new Uint8Array(result.image).buffer;
+        } else if (result instanceof ArrayBuffer) {
+          imageBuffer = result;
+        }
+      }
+    } catch {}
+  }
+  
   if (!imageBuffer) return null;
   return arrayBufferToBase64(imageBuffer);
 }
@@ -1180,6 +1205,121 @@ async function describeImage(base64, mimeType, fileName = 'image') {
 
 // ── Image editing — preserve original, never regenerate from description ──
 
+// ── Cloudflare Workers AI (free tier) for image-to-image editing ─────────
+// Uses the AI binding configured in wrangler.toml — free, no rate limits within plan.
+async function callWorkersAIImageEdit(imageBytes, editDesc, mimeType) {
+  if (!globalThis.AI) return null;
+  
+  // Try multiple Workers AI image models in priority order
+  const models = [
+    {
+      name: '@cf/runwayml/stable-diffusion-v1-5-img2img',
+      params: { strength: 0.75, guidance: 7.5 },
+    },
+    {
+      name: '@cf/stabilityai/stable-diffusion-xl-base-1.0',
+      params: { strength: 0.8, guidance: 7.0 },
+    },
+  ];
+
+  for (const { name, params } of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const imageArray = Array.from(new Uint8Array(imageBytes));
+        const inputs = {
+          prompt: editDesc,
+          image: imageArray,
+          ...params,
+          negative_prompt: 'text, words, letters, deformed, distorted, blurry, low quality, bad anatomy, extra limbs, missing limbs, watermark, signature',
+        };
+        const result = await globalThis.AI.run(name, inputs);
+        
+        // Handle various return formats
+        if (result) {
+          // Case 1: { image: Uint8Array }
+          if (result.image && (result.image instanceof Uint8Array || Array.isArray(result.image))) {
+            const buf = result.image instanceof Uint8Array ? result.image.buffer : new Uint8Array(result.image).buffer;
+            if (buf.byteLength > 500) return buf;
+          }
+          // Case 2: Result is itself an ArrayBuffer or Uint8Array
+          if (result instanceof ArrayBuffer && result.byteLength > 500) return result;
+          if (result instanceof Uint8Array && result.byteLength > 500) return result.buffer;
+        }
+      } catch (e) {
+        if (attempt < 1) await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+  return null;
+}
+
+// ── Enhanced Pollinations img2img with optimized prompts ─────────────────
+async function pollinationsImg2img(imageBase64, editDesc, mimeType) {
+  // Build a preservation-focused edit prompt
+  const editPrompt = `${editDesc}. IMPORTANT: Preserve the original subject, face, body, pose, expression, background, and composition. Only apply the described change. No text, no words, no letters.`;
+  
+  // Try with multiple models and retries
+  const freeModels = ['flux', 'flux-schnell', 'turbo'];
+  for (const fm of freeModels) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const encodedPrompt = encodeURIComponent(editPrompt.substring(0, 500));
+        const encodedImage = encodeURIComponent(`data:${mimeType || 'image/jpeg'};base64,${imageBase64}`);
+        const negative = encodeURIComponent('text, words, letters, deformed, distorted, blurry, low quality, pixelated, artifacts, extra limbs, missing limbs, malformed, watermark, signature');
+        const seed = Math.floor(Math.random() * 1000000) + attempt * 7;
+        const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&model=${fm}&negative=${negative}&seed=${seed}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
+        
+        const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
+        if (resp.ok) {
+          const ct = resp.headers.get('content-type') || '';
+          if (ct.startsWith('image/')) {
+            const buf = await resp.arrayBuffer();
+            if (buf && buf.byteLength > 500) return buf;
+          }
+        }
+      } catch {}
+      if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+  return null;
+}
+
+async function editImageWithInstruct(imageBase64, editDesc, mimeType, fileBytes) {
+  // Priority 1: Cloudflare Workers AI img2img (free, reliable within plan)
+  if (globalThis.AI) {
+    const waifResult = await callWorkersAIImageEdit(fileBytes, editDesc, mimeType);
+    if (waifResult && waifResult.byteLength > 500) return waifResult;
+  }
+  
+  // Priority 2: Enhanced Pollinations img2img (free, unlimited)
+  const pollResult = await pollinationsImg2img(imageBase64, editDesc, mimeType);
+  if (pollResult && pollResult.byteLength > 500) return pollResult;
+  
+  // Priority 3: Vision + LLM + Pollinations generation
+  const visionResult = await tryVisionEdit(imageBase64, editDesc, mimeType);
+  if (visionResult && visionResult.byteLength > 500) return visionResult;
+  
+  // Priority 4: HuggingFace instruct-pix2pix
+  try {
+    const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
+    if (hfResult && hfResult.byteLength > 500) return hfResult;
+  } catch {}
+  
+  // Priority 5: HuggingFace inpainting
+  try {
+    const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
+    if (hfResult && hfResult.byteLength > 500) return hfResult;
+  } catch {}
+  
+  // Priority 6: Pollinations img2img with original approach
+  try {
+    const editResult = await pollinationsImage(`Edit this image: ${editDesc}`, { retries: 2, imageBase64, imageMime: mimeType });
+    if (editResult && editResult.byteLength > 500) return editResult;
+  } catch {}
+  
+  return null;
+}
+
 // Use LLM to determine the best approach for complex edits
 async function llmReasonEditApproach(editDesc) {
   try {
@@ -1196,32 +1336,7 @@ async function llmReasonEditApproach(editDesc) {
   return 'instruct';
 }
 
-async function editImageWithInstruct(imageBase64, editDesc, mimeType, fileBytes) {
-  // Primary approach: Vision analysis + LLM + Pollinations generation
-  const visionResult = await tryVisionEdit(imageBase64, editDesc, mimeType);
-  if (visionResult) return visionResult;
 
-  // Fallback: Quick HuggingFace instruct-pix2pix
-  try {
-    const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
-    if (hfResult && hfResult.byteLength > 100) return hfResult;
-  } catch {}
-
-  // Fallback: Quick HuggingFace inpainting
-  try {
-    const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
-    if (hfResult && hfResult.byteLength > 100) return hfResult;
-  } catch {}
-
-  // Last resort: Pollinations img2img
-  try {
-    const editPrompt = `Edit this image: ${editDesc}`;
-    const editResult = await pollinationsImage(editPrompt, { retries: 2, imageBase64, imageMime: mimeType });
-    if (editResult && editResult.byteLength > 100) return editResult;
-  } catch {}
-
-  return null;
-}
 
 async function tryVisionEdit(imageBase64, editDesc, mimeType) {
   if (!OPENROUTER_API_KEY) return null;
@@ -1349,15 +1464,14 @@ async function chatImageHandler(request) {
     if (isImageEditRequest) {
       const editDesc = message?.trim() || '';
 
-      // Edit the image directly — no vision description, no regeneration from text
+      // Edit the image using the enhanced pipeline
       let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
-      if (imageBuffer) {
+      if (imageBuffer && imageBuffer.byteLength > 500) {
         const resultBase64 = arrayBufferToBase64(imageBuffer);
-        // Use the LLM to generate a natural response about the edit
         const responseText = await generateNaturalResponse(
           `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
-        );
+        ) || 'Here is your edited image!';
         return jsonResponse({
           response: responseText,
           session_id, type: 'chat', image_data: resultBase64,
@@ -1365,10 +1479,10 @@ async function chatImageHandler(request) {
         });
       }
 
-      // Image edit failed — generate natural LLM response
+      // Image edit failed — generate a helpful text response
       const responseText = await generateNaturalResponse(
-        `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
-      );
+        `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence, suggesting they try describing the edit differently.`
+      ) || 'I was not able to complete that edit. Could you try describing what you want to change in a different way?';
       return jsonResponse({
         response: responseText,
         session_id, type: 'chat', image_data: '',
@@ -1638,15 +1752,15 @@ async function editImageHandler(request) {
     session_id = formData.get('session_id') || 'default';
     file = formData.get('file');
   } catch (e) {
-    return jsonResponse({ response: '', type: 'error' }, 400);
+    return jsonResponse({ response: 'Could not process the request. Please try again.', type: 'chat' }, 400);
   }
-  if (!file) return jsonResponse({ response: '', type: 'error' }, 400);
+  if (!file) return jsonResponse({ response: 'No image file provided for editing.', type: 'chat' }, 400);
 
   try {
     fileBytes = await file.arrayBuffer();
-    if (fileBytes.byteLength > 20 * 1024 * 1024) return jsonResponse({ response: '', type: 'error' }, 413);
+    if (fileBytes.byteLength > 20 * 1024 * 1024) return jsonResponse({ response: 'Image is too large. Maximum size is 20MB.', type: 'chat' }, 413);
   } catch (e) {
-    return jsonResponse({ response: '', type: 'error' }, 400);
+    return jsonResponse({ response: 'Could not read the image file. Please try again.', type: 'chat' }, 400);
   }
 
   const fileName = file.name || 'image.jpg';
@@ -1655,14 +1769,14 @@ async function editImageHandler(request) {
   base64 = arrayBufferToBase64(fileBytes);
   editDesc = message?.trim() || '';
 
-  // Edit the image directly — no vision description, no regeneration from text
+  // Edit the image directly using the enhanced pipeline
   let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
-  if (imageBuffer) {
+  if (imageBuffer && imageBuffer.byteLength > 500) {
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     const responseText = await generateNaturalResponse(
       `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
-    );
+    ) || 'Here is your edited image!';
     return jsonResponse({
       response: responseText,
       session_id, type: 'chat', image_data: resultBase64,
@@ -1671,7 +1785,7 @@ async function editImageHandler(request) {
   }
   const responseText = await generateNaturalResponse(
     `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
-  );
+  ) || 'I tried to edit the image but had some difficulty. Could you try describing your edit differently?';
   return jsonResponse({
     response: responseText,
     session_id, type: 'chat', image_data: '',
@@ -1690,12 +1804,12 @@ async function ultraEditImageHandler(request) {
     session_id = formData.get('session_id') || 'default';
 
     if (!file) {
-      return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 400);
+      return jsonResponse({ image_data: '', response: 'No image file provided for editing.', session_id, type: 'chat' }, 400);
     }
 
     const fileBytes = await file.arrayBuffer();
     if (fileBytes.byteLength > 20 * 1024 * 1024) {
-      return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 413);
+      return jsonResponse({ image_data: '', response: 'Image is too large. Maximum size is 20MB.', session_id, type: 'chat' }, 413);
     }
 
     const fileName = file.name || 'image.jpg';
@@ -1705,33 +1819,17 @@ async function ultraEditImageHandler(request) {
     editDesc = prompt?.trim() || '';
 
     if (!editDesc) {
-      return jsonResponse({ image_data: '', response: '', session_id, type: 'chat' }, 400);
+      return jsonResponse({ image_data: '', response: 'Please describe what edit you want to make.', session_id, type: 'chat' }, 400);
     }
 
-    // Run editing attempts in priority order
-    let imageBuffer = null;
-    imageBuffer = await tryVisionEdit(base64, editDesc, mimeType);
-    if (!imageBuffer) {
-      try {
-        imageBuffer = await callHuggingFaceInstructEdit(base64, editDesc, mimeType);
-      } catch {}
-    }
-    if (!imageBuffer) {
-      try {
-        imageBuffer = await callHuggingFaceInpainting(base64, editDesc, mimeType);
-      } catch {}
-    }
-    if (!imageBuffer) {
-      try {
-        imageBuffer = await pollinationsImage(`Edit this image: ${editDesc}`, { retries: 2, imageBase64: base64, imageMime: mimeType });
-      } catch {}
-    }
+    // Use enhanced edit pipeline
+    let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
-    if (imageBuffer) {
+    if (imageBuffer && imageBuffer.byteLength > 500) {
       const resultBase64 = arrayBufferToBase64(imageBuffer);
       const responseText = await generateNaturalResponse(
         `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
-      );
+      ) || 'Here is your edited image!';
       return jsonResponse({
         image_data: resultBase64,
         response: responseText,
@@ -1742,7 +1840,7 @@ async function ultraEditImageHandler(request) {
 
     const responseText = await generateNaturalResponse(
       `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
-    );
+    ) || 'I tried to edit the image but had some difficulty. Could you try describing your edit differently?';
     return jsonResponse({
       image_data: '',
       response: responseText,
@@ -1750,12 +1848,9 @@ async function ultraEditImageHandler(request) {
       image_type: '', file_data: '', file_name: '', file_type: '',
     });
   } catch (e) {
-    const errMsg = await generateNaturalResponse(
-      `I tried to edit an image but couldn't complete it. Respond naturally in 1 sentence.`
-    ).catch(() => '');
     return jsonResponse({
       image_data: '',
-      response: errMsg,
+      response: 'Sorry, something went wrong while editing. Please try again.',
       session_id: session_id || 'default',
       type: 'chat',
       image_type: '', file_data: '', file_name: '', file_type: '',
@@ -1847,14 +1942,14 @@ async function redesignImageHandler(request) {
     const session_id = formData.get('session_id') || 'default';
 
     if (!file) {
-      return jsonResponse({ content: null, error: '' }, 400);
+      return jsonResponse({ content: null, error: 'No image file provided', response: 'Please provide an image to redesign.' }, 400);
     }
 
     const fileName = file.name || 'image.jpg';
     const fileBytes = await file.arrayBuffer();
 
     if (fileBytes.byteLength > 20 * 1024 * 1024) {
-      return jsonResponse({ content: null, error: '' }, 413);
+      return jsonResponse({ content: null, error: 'Image too large', response: 'Image must be under 20MB.' }, 413);
     }
 
     const rawMime = file.type || '';
@@ -1862,33 +1957,27 @@ async function redesignImageHandler(request) {
     const base64 = arrayBufferToBase64(fileBytes);
     editDesc = prompt?.trim() || '';
 
-    // Edit the image directly — no vision description, no regeneration from text
+    // Use enhanced edit pipeline
     let imageBuffer = await editImageWithInstruct(base64, editDesc, mimeType, fileBytes);
 
-    if (imageBuffer) {
+    if (imageBuffer && imageBuffer.byteLength > 500) {
       const b64 = arrayBufferToBase64(imageBuffer);
       const responseText = await generateNaturalResponse(
-        `The user asked me to edit an image by doing: "${editDesc}". The edit was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
-      );
+        `The user asked me to redesign an image by doing: "${editDesc}". The redesign was applied successfully. Briefly confirm what was done in 1 natural sentence. Keep it under 15 words.`
+      ) || 'Here is your redesigned image!';
       return jsonResponse({ content: b64, error: null, prompt: editDesc, response: responseText, session_id });
     }
-    const responseText = await generateNaturalResponse(
-      `The user asked me to edit an image: "${editDesc || 'edit an image'}". I was unable to complete the edit. Respond naturally and helpfully in 1 sentence.`
-    );
     return jsonResponse({
       content: null,
       error: '',
-      response: responseText,
-      session_id: 'default',
+      response: 'I tried to redesign the image but had some difficulty. Could you try describing your desired changes differently?',
+      session_id: session_id || 'default',
     }, 200);
   } catch (e) {
-    const errMsg = await generateNaturalResponse(
-      `I tried to edit an image but couldn't complete it. Respond naturally in 1 sentence.`
-    ).catch(() => '');
     return jsonResponse({
       content: null,
       error: '',
-      response: errMsg,
+      response: 'Sorry, something went wrong while redesigning. Please try again.',
       session_id: 'default',
     }, 200);
   }
