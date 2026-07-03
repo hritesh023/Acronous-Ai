@@ -1,13 +1,18 @@
+[pages]
+binding = "Pages"
+directory = "build/web"
+pages_build_output_dir = "build/web"
+
 name = "acronous-ai"
 compatibility_date = "2026-05-30"
 main = "cloudflare-worker.js"
 
-# ── Routes ───────────────────────────────────────────────────────────
+# Routes for the Worker API
 routes = [
   { pattern = "ai.acronous.com", custom_domain = true },
 ]
 
-# ── Environment variables (non-secret) ───────────────────────────────────
+# Environment variables
 [vars]
 OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 VISION_MODEL = "google/gemini-2.5-flash-lite"
@@ -19,16 +24,11 @@ ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
 
-# ── KV namespaces ──────────────────────────────────────────────────────────
+# KV namespaces
 [[kv_namespaces]]
 binding = "AUTH_USERS"
 id = "eb112976703e4447af69c13dd5f8824c"
 
-# ── AI binding for Workers AI (free tier image generation) ────────────────
+# AI binding for Workers AI
 [ai]
 binding = "AI"
-
-# ── Pages configuration for frontend ───────────────────────────────────
-[pages]
-binding = "Pages"
-directory = "build/web"
