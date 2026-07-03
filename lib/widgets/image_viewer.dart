@@ -1,5 +1,8 @@
+import 'dart:convert';
+import 'dart:html' as html;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -44,6 +47,18 @@ class _ImageViewerState extends State<ImageViewer>
     _transformController.value = Matrix4.identity();
   }
 
+  void _downloadImage() {
+    final name = 'acronous_image_${DateTime.now().millisecondsSinceEpoch}.png';
+    if (kIsWeb) {
+      final blob = base64Encode(widget.imageBytes);
+      final dataUri = 'data:image/png;base64,$blob';
+      final anchor = html.AnchorElement(href: dataUri)
+        ..target = '_blank'
+        ..download = name;
+      anchor.click();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return FadeTransition(
@@ -58,6 +73,15 @@ class _ImageViewerState extends State<ImageViewer>
             onPressed: () => Navigator.of(context).pop(),
           ),
           actions: [
+            IconButton(
+              icon: Icon(
+                Icons.download_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
+              tooltip: 'Download image',
+              onPressed: _downloadImage,
+            ),
             IconButton(
               icon: Icon(
                 Icons.zoom_out_map_rounded,
@@ -98,23 +122,23 @@ class _ImageViewerState extends State<ImageViewer>
                   ),
                 ),
                 Positioned(
-                  bottom: 8,
-                  right: 8,
+                  bottom: 6,
+                  right: 6,
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(3),
+                      color: Colors.black.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(2),
                     ),
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 2,
-                      vertical: 2,
+                      horizontal: 0.5,
+                      vertical: 0.5,
                     ),
                     child: ClipRRect(
-                      borderRadius: BorderRadius.circular(2),
+                      borderRadius: BorderRadius.circular(0.5),
                       child: Image.asset(
                         'assets/logo.png',
-                        width: 14,
-                        height: 14,
+                        width: 6,
+                        height: 6,
                       ),
                     ),
                   ),

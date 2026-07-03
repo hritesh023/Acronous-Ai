@@ -426,13 +426,6 @@ class ChatProvider extends ChangeNotifier {
         );
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
-          final errMsg =
-              resp['response'] as String? ?? resp['error'] as String? ?? '';
-          _addAssistantMessage(
-            errMsg.isNotEmpty
-                ? errMsg
-                : 'Sorry, I could not process your request. Please try again.',
-          );
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -445,9 +438,6 @@ class ChatProvider extends ChangeNotifier {
             await Future.delayed(const Duration(seconds: 2));
             continue;
           }
-          _addAssistantMessage(
-            'I had trouble generating a response. Please try rephrasing your question.',
-          );
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -495,9 +485,6 @@ class ChatProvider extends ChangeNotifier {
       }
     }
 
-    _addAssistantMessage(
-      'Sorry, I could not get a response. Please check your connection and try again.',
-    );
     _isTakingLong = false;
     _isLoading = false;
     _prefs.saveConversations(_conversations).catchError((_) {});

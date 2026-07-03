@@ -696,7 +696,7 @@ async function constructEditPrompt(userRequest, originalDescription) {
   return `ORIGINAL IMAGE: ${subject}. PRESERVE EVERYTHING IDENTICAL. No text or typography.`;
 }
 
-// Responses are now LLM-generated — no hardcoded templates
+      // ALL responses must be LLM-generated — no hardcoded templates
 
 function isValidImagePrompt(text, originalUserText) {
   if (!text || text.length < 10) return false;
@@ -796,11 +796,11 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
 
 async function describeImage(base64, mimeType, fileName = 'image') {
   const content = buildMultimodalContent(
-    'Describe this image in EXTREME detail. Include: main subject (person/animal/object with exact identity/type), precise pose and position, facial expression and features, all clothing/accessories with exact colors and patterns, hair style and color, skin tone, body type, background details (setting, objects, colors, lighting), camera angle and composition, art style and color palette. Be extremely specific — every visible detail matters. Return ONLY the factual description.',
+    'Describe this image at PIXEL-LEVEL detail for perfect AI reconstruction. You MUST include ALL of the following with MAXIMUM precision:\n\n1. SUBJECT IDENTITY: Age, gender, ethnicity, face shape, eye color/shape, nose shape, mouth/lip shape/size, eyebrow shape, skin tone (exact shade), any scars/marks/freckles. Hair: exact style, color, length, texture, part direction.\n\n2. BODY & POSE: Exact stance, head tilt angle, arm/hand positions, leg position, body orientation (front/side/3/4). Height/build.\n\n3. CLOTHING: Each garment type, EXACT color (not "blue" but "navy blue" or "sky blue"), fabric type, fit, patterns, visible logos. Footwear. Accessories.\n\n4. FACIAL EXPRESSION: Exact expression (smile with teeth, closed-lip smile, neutral, etc.), eye gaze direction, eyebrow position, mouth openness.\n\n5. BACKGROUND: Location/setting, objects, colors, textures, depth of field, any visible text/signs.\n\n6. LIGHTING: Direction (front/side/back/top), type (natural/artificial/studio), shadows, highlights, color temperature (warm/cool/neutral).\n\n7. COMPOSITION: Camera angle (low/eye/high), shot type (close-up/medium/wide/full-body), framing, aspect ratio.\n\n8. OVERALL: Photographic style, image quality, color grading, mood/atmosphere.\n\nReturn ONLY the factual description with NO preamble.',
     base64, mimeType,
   );
   const messages = [
-    { role: 'system', content: 'You are an expert image analyst providing EXTREMELY detailed descriptions for image reconstruction. Be precise about every visible detail — colors, positions, expressions, textures. Do not generalize.' },
+    { role: 'system', content: 'You are a forensic image analyst providing MAXIMUM-DETAIL descriptions for perfect AI image reconstruction. You describe EVERY pixel-level detail. You NEVER generalize — you specify exact colors, shapes, positions, and textures. Your descriptions are used to recreate images with AI and must be precise enough that the recreated image is indistinguishable from the original.' },
     { role: 'user', content },
   ];
   for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
@@ -1023,31 +1023,62 @@ CRITICAL:
         let imageBuffer;
         try {
           imageBuffer = await pollinationsImage(imagePrompt, {
-            retries: 3,
+            retries: 4,
             seed,
             imageBase64: base64,
             imageMime: mimeType,
+            model: 'flux',
           });
         } catch (primaryError) {
-          // img2img failed - use vision description to construct detailed TTI prompt
-          let imageDescription = '';
-          const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|WITH ONLY THIS CHANGE:|$)/i);
-          if (origMatch && origMatch[1].trim().length > 20) {
-            imageDescription = origMatch[1].trim();
-          } else {
-            try {
-              imageDescription = await describeImage(base64, mimeType, fileName) || editDesc;
-            } catch {
-              imageDescription = editDesc;
+          // Try alternate img2img approach with different model
+          try {
+            imageBuffer = await pollinationsImage(imagePrompt, {
+              retries: 3,
+              seed: seed + 100,
+              imageBase64: base64,
+              imageMime: mimeType,
+              model: 'turbo',
+            });
+          } catch (altError) {
+            // img2img failed - use vision description to construct a SUPER detailed TTI prompt
+            let imageDescription = '';
+            const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|WITH ONLY THIS CHANGE:|$)/i);
+            if (origMatch && origMatch[1].trim().length > 20) {
+              imageDescription = origMatch[1].trim();
+            } else {
+              try {
+                imageDescription = await describeImage(base64, mimeType, fileName) || editDesc;
+              } catch {
+                imageDescription = editDesc;
+              }
             }
+            // Strip edit prefixes from editDesc for cleaner prompt
+            const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
+            const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
+            const styleInstr = prefersArt ? '' : 'Photorealistic, natural skin textures, authentic photograph, natural lighting, high fidelity, realistic details.';
+            // Build an ultra-prescriptive TTI prompt to minimize deviation
+            const ttiPrompt = `EXACT PHOTO RECREATION WITH ONE CHANGE: "${cleanChange}"
+
+ORIGINAL PHOTO: ${imageDescription}
+
+CRITICAL INSTRUCTIONS:
+- This must look like the SAME photograph with ONLY the requested change
+- SAME PERSON: identical face, eyes, nose, mouth, skin tone, hair style, hair color, facial features, body type
+- SAME POSE: exact body position, head tilt, hand/arm placement, leg position, stance
+- SAME EXPRESSION: exact same facial expression, eye gaze direction, mouth shape
+- SAME BACKGROUND: exact same setting, objects, colors, depth of field, textures
+- SAME LIGHTING: exact same direction, intensity, color temperature, shadows, highlights
+- SAME COMPOSITION: exact same camera angle, framing, zoom level, aspect ratio
+- SAME STYLE: same photographic quality, color grading, mood
+
+${styleInstr}
+CHANGE ONLY what is specified in the edit request above.
+NO text, words, letters, symbols, typography, signatures, or watermarks.`;
+            imageBuffer = await pollinationsImage(ttiPrompt, {
+              retries: 4,
+              seed: seed + 2,
+            });
           }
-          // Strip edit prefixes from editDesc for cleaner prompt
-          const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
-          const ttiPrompt = `ORIGINAL IMAGE: ${imageDescription}. APPLY ONLY THIS CHANGE: ${cleanChange}. CRITICAL: Preserve the subject identity (face, features, skin, hair, expression, pose), background, lighting, composition, camera angle EXACTLY. Only modify the specific element requested. Photorealistic, natural lighting and skin tones, high-fidelity, realistic textures, natural photographic color grading. No text, words, letters, symbols, or typography.`;
-          imageBuffer = await pollinationsImage(ttiPrompt, {
-            retries: 3,
-            seed: seed + 1,
-          });
         }
         const resultBase64 = arrayBufferToBase64(imageBuffer);
         return jsonResponse({
@@ -1057,7 +1088,7 @@ CRITICAL:
         });
       } catch (genError) {
         return jsonResponse({
-          response: 'Unable to process that image edit right now. Please try: 1) A simpler edit (e.g., change color/clothing), 2) A different image, or 3) Asking me to generate a new image instead.',
+          response: '',
           session_id, type: 'chat', image_data: '',
           image_type: '', file_data: '', file_name: '', file_type: '',
         });
@@ -1101,7 +1132,7 @@ CRITICAL:
       const fallbackContent = await callPollinationsText(fallbackMsgs);
       if (fallbackContent) {
         return jsonResponse({
-          response: `I received your image but can't analyze it visually right now. Here's what I can say: ${fallbackContent}`,
+          response: fallbackContent,
           session_id,
           type: 'chat',
           image_data: '',
@@ -1114,7 +1145,7 @@ CRITICAL:
     } catch {}
 
     return jsonResponse({
-      response: 'I received your image but could not analyze it. Please try again or ask a different question.',
+      response: '',
       session_id,
       type: 'chat',
     });
@@ -1494,30 +1525,57 @@ CRITICAL RULES:
     let imageBuffer;
     try {
       imageBuffer = await pollinationsImage(imagePrompt, {
-        retries: 3,
+        retries: 4,
         seed,
         imageBase64: base64,
         imageMime: mimeType,
+        model: 'flux',
       });
     } catch (img2imgError) {
-      // img2img failed - use vision description for TTI fallback
-      let imageDescription = '';
-      const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
-      if (origMatch && origMatch[1].trim().length > 20) {
-        imageDescription = origMatch[1].trim();
-      } else {
-        try {
-          imageDescription = await describeImage(base64, mimeType, fileName) || editDesc;
-        } catch {
-          imageDescription = editDesc;
+      // Try alternate img2img model before falling back to TTI
+      try {
+        imageBuffer = await pollinationsImage(imagePrompt, {
+          retries: 3,
+          seed: seed + 100,
+          imageBase64: base64,
+          imageMime: mimeType,
+          model: 'turbo',
+        });
+      } catch (altError) {
+        // img2img failed - use vision description for TTI fallback
+        let imageDescription = '';
+        const origMatch = imagePrompt.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
+        if (origMatch && origMatch[1].trim().length > 20) {
+          imageDescription = origMatch[1].trim();
+        } else {
+          try {
+            imageDescription = await describeImage(base64, mimeType, fileName) || editDesc;
+          } catch {
+            imageDescription = editDesc;
+          }
         }
+        const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
+        const ttiPrompt = `EXACT PHOTO RECREATION WITH ONE CHANGE: "${cleanChange}"
+
+ORIGINAL PHOTO: ${imageDescription}
+
+CRITICAL INSTRUCTIONS:
+- This must look like the SAME photograph with ONLY the requested change
+- SAME PERSON: identical face, eyes, nose, mouth, skin tone, hair style, hair color, facial features, body type
+- SAME POSE: exact body position, head tilt, hand/arm placement, leg position, stance
+- SAME EXPRESSION: exact same facial expression, eye gaze direction, mouth shape
+- SAME BACKGROUND: exact same setting, objects, colors, depth of field, textures
+- SAME LIGHTING: exact same direction, intensity, color temperature, shadows, highlights
+- SAME COMPOSITION: exact same camera angle, framing, zoom level, aspect ratio
+- SAME STYLE: same photographic quality, color grading, mood
+
+CHANGE ONLY what is specified in the edit request above.
+NO text, words, letters, symbols, typography, signatures, or watermarks.`;
+        imageBuffer = await pollinationsImage(ttiPrompt, {
+          retries: 4,
+          seed: seed + 2,
+        });
       }
-      const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
-      const ttiPrompt = `ORIGINAL IMAGE: ${imageDescription}. APPLY ONLY THIS CHANGE: ${cleanChange}. CRITICAL: Preserve subject identity, face, expression, pose, background, lighting, composition EXACTLY. Only modify the specific element requested. Photorealistic, natural. No text or typography.`;
-      imageBuffer = await pollinationsImage(ttiPrompt, {
-        retries: 3,
-        seed: seed + 1,
-      });
     }
     const resultBase64 = arrayBufferToBase64(imageBuffer);
     return jsonResponse({
@@ -1527,7 +1585,7 @@ CRITICAL RULES:
     });
   } catch (genError) {
     return jsonResponse({
-      response: 'Could not process the image edit. Please try again with a clearer description.',
+      response: '',
       session_id, type: 'chat', image_data: '',
       image_type: '', file_data: '', file_name: '', file_type: '',
     });
@@ -1677,20 +1735,36 @@ Start with "The image shows" followed by all original details.`,
     let imageBuffer;
     try {
       imageBuffer = await pollinationsImage(redesignPrompt, {
-        retries: 2,
+        retries: 3,
         seed,
         imageBase64: base64,
         imageMime: mimeType,
+        model: 'flux',
       });
     } catch (img2imgError) {
-      // img2img failed - get description and use TTI
-      let imgDesc = '';
-      try { imgDesc = await describeImage(base64, mimeType, fileName) || prompt; } catch { imgDesc = prompt; }
-      const ttiPrompt = `ORIGINAL IMAGE: ${imgDesc}. APPLY ONLY: ${prompt}. Preserve subject identity, face, expression, pose, background, lighting, composition EXACTLY. Only change the requested element. Photorealistic. No text.`;
-      imageBuffer = await pollinationsImage(ttiPrompt, {
-        retries: 2,
-        seed: seed + 1,
-      });
+      try {
+        imageBuffer = await pollinationsImage(redesignPrompt, {
+          retries: 2,
+          seed: seed + 100,
+          imageBase64: base64,
+          imageMime: mimeType,
+          model: 'turbo',
+        });
+      } catch (altError) {
+        let imgDesc = '';
+        try { imgDesc = await describeImage(base64, mimeType, fileName) || prompt; } catch { imgDesc = prompt; }
+        const ttiPrompt = `EXACT PHOTO WITH ONE CHANGE: "${prompt}"
+
+ORIGINAL PHOTO: ${imgDesc}
+
+CRITICAL: SAME person - identical face, eyes, nose, mouth, hair, skin, expression, pose. SAME background, lighting, composition. SAME style.
+CHANGE ONLY what is specified.
+NO text, words, letters, typography.`;
+        imageBuffer = await pollinationsImage(ttiPrompt, {
+          retries: 3,
+          seed: seed + 2,
+        });
+      }
     }
     const b64 = arrayBufferToBase64(imageBuffer);
 
