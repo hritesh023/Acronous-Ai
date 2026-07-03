@@ -2,7 +2,7 @@ name = "acronous-ai"
 compatibility_date = "2026-05-30"
 main = "cloudflare-worker.js"
 
-# ── Routes ─────────────────────────────────────────────────────────────────
+# ── Routes ───────────────────────────────────────────────────────────
 routes = [
   { pattern = "ai.acronous.com", custom_domain = true },
 ]
@@ -28,7 +28,7 @@ id = "eb112976703e4447af69c13dd5f8824c"
 [ai]
 binding = "AI"
 
-# Optional KV namespace for conversations
-# [[kv_namespaces]]
-# binding = "acronous_kv"
-# id = "your-kv-namespace-id-here"
+# ── Pages configuration for frontend ───────────────────────────────────
+[pages]
+binding = "Pages"
+directory = "build/web"
