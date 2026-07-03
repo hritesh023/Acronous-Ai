@@ -1236,6 +1236,7 @@ class ChatProvider extends ChangeNotifier {
               (hasEditVerb && hasVisualContext && wordCount >= 2)) &&
           wordCount >= 2;
           if (isEditRequest) {
+        // Primary: /v1/image/edit
         try {
           final editResp = await _api.editImage(
             imageBytes: bytes,
@@ -1256,8 +1257,8 @@ class ChatProvider extends ChangeNotifier {
           if (response.isNotEmpty) {
             return {'response': response, 'image_data': '', 'type': 'chat'};
           }
-        } catch (_) {
-        }
+        } catch (_) {}
+        // Fallback 1: /api/image/redesign
         try {
           final editResp = await _api.redesignImageBytes(
             imageBytes: bytes,
@@ -1279,8 +1280,34 @@ class ChatProvider extends ChangeNotifier {
           if (response.isNotEmpty) {
             return {'response': response, 'image_data': '', 'type': 'chat'};
           }
-        } catch (_) {
-        }
+        } catch (_) {}
+        // Fallback 2: /v1/image/ultra-edit
+        try {
+          final editResp = await _api.ultraEditImage(
+            imageBytes: bytes,
+            fileName: imgAttach.name,
+            editPrompt: text,
+            sessionId: sessionId,
+          );
+          final imageData = editResp['image_data'] as String? ?? '';
+          final response = editResp['response'] as String? ?? '';
+          if (imageData.isNotEmpty) {
+            return {
+              'response': response,
+              'image_data': imageData,
+              'type': 'chat',
+            };
+          }
+          if (response.isNotEmpty) {
+            return {'response': response, 'image_data': '', 'type': 'chat'};
+          }
+        } catch (_) {}
+        // All edit attempts failed — return error instead of silently falling through
+        return {
+          'response': "I wasn't able to apply that edit to your image. Please try describing your edit differently — for example: 'change the background to a beach' or 'make this a cartoon style'.",
+          'image_data': '',
+          'type': 'chat',
+        };
       }
       final history = _buildMessageHistory();
       final resp = await _api.chatWithImage(
