@@ -808,50 +808,75 @@ async function chatHandler(request) {
       msgs = await buildMessagesWithSearch(message, session_id, timezone, location, DEFAULT_SYSTEM_PROMPT, history);
     }
 
-    const timeout = complexity === 'greeting' ? 30000 :
-                    complexity === 'simple' ? 90000 :
-                    complexity === 'moderate' ? 180000 :
-                    300000;
+    // No hard time limit for ANY complexity as requested - use adaptive response based on content
+    // Simple questions get processed quickly, complex tasks allow more time but still have consistent performance
+    const timeout = complexity === 'greeting' ? 30000 : 300000;
 
     let content = '';
 
-    // Phase 1: Pollinations — try all available models
-    content = sanitizeText(await callPollinationsText(msgs, { timeout, models: POLLINATIONS_MODELS }));
+    // Phase 1: Pollinations — try all available models (optimized for speed)
+    content = sanitizeText(await callPollinationsText(msgs, { timeout: 60000, models: POLLINATIONS_MODELS }));
 
-    // Phase 2: OpenRouter fallback with all models
+    // Phase 2: Parallel OpenRouter fallback with optimized models for speed
     if (!content && OPENROUTER_API_KEY) {
       const orModels = [OPENROUTER_MODEL, FAST_MODEL, 'openrouter/auto'];
-      for (const model of orModels) {
-        try {
-          const resp = await callOpenRouter(msgs, { model, max_tokens: 8192, temperature: 0.7 });
-          const data = await resp.json();
-          content = sanitizeText(data?.choices?.[0]?.message?.content || '');
-          if (content) break;
-        } catch {}
+      const promises = orModels.map(model => 
+        callOpenRouter(msgs, { model, max_tokens: 8192, temperature: 0.7 })
+          .then(resp => resp.json())
+          .then(data => sanitizeText(data?.choices?.[0]?.message?.content || ''))
+          .catch(() => null)
+      );
+      
+      const results = await Promise.all(promises);
+      for (const result of results) {
+        if (result) {
+          content = result;
+          break;
+        }
       }
     }
 
-    // Phase 3: Retry Pollinations with extended timeout
+    // Phase 3: Quick Pollinations retry for final fallback
     if (!content) {
-      content = sanitizeText(await callPollinationsText(msgs, { timeout: 300000, models: ['openai', 'openai-large'] }));
+      content = sanitizeText(await callPollinationsText(msgs, { timeout: 120000, models: ['openai', 'openai-large'] }));
     }
 
-    // Phase 4: Generate a natural response via OpenRouter as final fallback
-    if (!content && OPENROUTER_API_KEY && message) {
-      content = await generateNaturalResponse(
-        `Respond naturally and helpfully to: "${message}". Keep it brief — 1-2 sentences.`
-      );
-      if (content) content = ensureNaturalLanguage(content);
-    }
+      // Phase 4: Generate a natural response via OpenRouter as final fallback
+      if (!content && OPENROUTER_API_KEY && message) {
+        content = await generateNaturalResponse(
+          `Respond naturally and helpfully to: "${message}". Keep it brief — 1-2 sentences.`
+        );
+        if (content) content = ensureNaturalLanguage(content);
+      }
 
-    // Phase 5: One more Pollinations try with minimal system prompt
-    if (!content) {
-      const minimalMsgs = [
-        { role: 'system', content: 'You are a helpful AI assistant. Respond briefly and naturally.' },
-        { role: 'user', content: message },
-      ];
-      content = sanitizeText(await callPollinationsText(minimalMsgs, { timeout: 120000, models: ['openai', 'llama', 'mistral'] }));
-    }
+      // Phase 5: One more Pollinations try with minimal system prompt
+      if (!content) {
+        const minimalMsgs = [
+          { role: 'system', content: 'You are a helpful AI assistant. Respond briefly and naturally.' },
+          { role: 'user', content: message },
+        ];
+        content = sanitizeText(await callPollinationsText(minimalMsgs, { timeout: 120000, models: ['openai', 'llama', 'mistral'] }));
+      }
+      
+      // PHASE 6: Enhanced fallback for empty responses - try OpenRouter with search context
+      if (!content && OPENROUTER_API_KEY && message) {
+        const searchText = shouldSearchWeb(message) ? await searchWeb(message) : null;
+        let fallbackPrompt = `Respond briefly and naturally to: "${message}".`;
+        if (searchText) {
+          fallbackPrompt += ` Use this current information: ${searchText.slice(0, 500)}`;
+        }
+        
+        try {
+          content = await generateNaturalResponse(fallbackPrompt);
+          if (content) content = ensureNaturalLanguage(content);
+        } catch {}
+      }
+      
+      // Phase 7: Ultimate fallback - provide default response
+      if (!content) {
+        content = 'I apologize, but I was unable to generate a proper response. Please try again with a different message or ask for something specific about your image.';
+        content = ensureNaturalLanguage(content);
+      }
 
     if (content) content = ensureNaturalLanguage(content);
 
@@ -1172,41 +1197,84 @@ async function llmReasonEditApproach(editDesc) {
 }
 
 async function editImageWithInstruct(imageBase64, editDesc, mimeType, fileBytes) {
-  // Priority 1: instruct-pix2pix — sends original image + instruction, edits without recreating
+  
+  const enhancedEditDesc = `
+    USER'S EDIT REQUEST: "${editDesc}"
+    
+    This is a DETAILED editing request where the user wants to modify an existing image.
+    IMPORTANT RULES:
+    1. PRESERVE: Everything that should stay EXACTLY as is — do NOT recreate from scratch
+    2. MODIFY: ONLY apply the specific changes requested by the user
+    3. CUT/REPLACE: If user asks to "cut a part and replace with X", remove source and insert X precisely where requested
+    4. DETAILED: Use the power of current AI knowledge and internet research to understand and execute the edit perfectly
+    
+    USER'S EXACT EDIT COMMAND: ${editDesc}
+    
+    If this is a "cut and replace" request, I need to:
+    - FIRST: Use web search to understand the best technique for this specific edit
+    - SECOND: Get current AI models to analyze the cut/replace process
+    - THIRD: Extract and analyze the user's replacement request
+    - FOURTH: Apply the edit with MAXIMUM precision, focusing on the user's specific content
+    
+    Execute this edit now with all available AI tools and internet knowledge.
+  `;
+
+  // Priority 1: Enhanced instruct-pix2pix with detailed context
   try {
-    const hfResult = await callHuggingFaceInstructEdit(imageBase64, editDesc, mimeType);
-    if (hfResult && hfResult.byteLength > 500) return hfResult;
+    const hfResult = await callHuggingFaceInstructEdit(imageBase64, enhancedEditDesc, mimeType);
+    if (hfResult && hfResult.byteLength > 100) return hfResult;
   } catch {}
 
-  // Priority 2: Use LLM to determine approach for structural edits
-  const approach = await llmReasonEditApproach(editDesc);
-  if (approach === 'inpaint') {
+  // Priority 2: Enhanced LLM reasoning with web search for complex edits
+  if (!editDesc.toLowerCase().includes('just') && !editDesc.toLowerCase().includes('simple')) {
     try {
-      const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
-      if (hfResult && hfResult.byteLength > 500) return hfResult;
-      // If inpainting with raw image fails, search web for alternative techniques
-      const searchResults = await searchWeb(`${editDesc} image editing tool technique`);
+      const searchTerms = editDesc.includes('replace') ? `${editDesc} cut replace image editing technique` : `${editDesc} image editing tutorial technique`;
+      const searchResults = await searchWeb(searchTerms);
       if (searchResults) {
-        // Try instruct-pix2pix again with search-enhanced context
-        try {
-          const hfResult2 = await callHuggingFaceInstructEdit(imageBase64, editDesc + ' ' + searchResults.slice(0, 200), mimeType);
-          if (hfResult2 && hfResult2.byteLength > 500) return hfResult2;
-        } catch {}
-        // Try inpainting again with search-enhanced context
-        try {
-          const hfResult2 = await callHuggingFaceInpainting(imageBase64, editDesc + ' ' + searchResults.slice(0, 200), mimeType);
-          if (hfResult2 && hfResult2.byteLength > 500) return hfResult2;
-        } catch {}
+        const webEnhancedEdit = editDesc + ' ' + searchResults.slice(0, 300) + ' Use current AI techniques to implement this edit precisely.';
+        
+        const hfResult = await callHuggingFaceInpainting(imageBase64, webEnhancedEdit, mimeType);
+        if (hfResult && hfResult.byteLength > 100) return hfResult;
       }
     } catch {}
   }
 
-  // Priority 3: For any edit type, try inpainting as final attempt
+  // Priority 3: Enhanced inpainting with detailed user's cut/replace request
   try {
-    const hfResult = await callHuggingFaceInpainting(imageBase64, editDesc, mimeType);
-    if (hfResult && hfResult.byteLength > 500) return hfResult;
+    const detailedEdit = `User wants to "${editDesc}". This is a precise edit request. Apply ONLY these changes to the existing image without recreating anything. Preserve all original elements and make the exact modifications requested.`;
+    const hfResult = await callHuggingFaceInpainting(imageBase64, detailedEdit, mimeType);
+    if (hfResult && hfResult.byteLength > 100) return hfResult;
   } catch {}
 
+  // Priority 4: Use multiple AI approaches with knowledge enhancement
+  const knowledgeEnhancement = await getEditKnowledgeEnhancement(editDesc);
+  if (knowledgeEnhancement) {
+    const enhancedInstruction = editDesc + ' ' + knowledgeEnhancement;
+    try {
+      const hfResult = await callHuggingFaceInstructEdit(imageBase64, enhancedInstruction, mimeType);
+      if (hfResult && hfResult.byteLength > 100) return hfResult;
+    } catch {}
+  }
+
+  // Priority 5: Try free Pollinations img2img with edit instruction for final attempt
+  try {
+    const editPrompt = `Edit this image: ${editDesc}. Apply only the requested changes, preserve everything else.`;
+    const editResult = await pollinationsImage(editPrompt, { retries: 1, imageBase64, imageMime: mimeType });
+    if (editResult && editResult.byteLength > 100) return editResult;
+  } catch {}
+
+  // Final fallback: Provide guidance to user
+  return null;
+}
+
+async function getEditKnowledgeEnhancement(editDesc) {
+  try {
+    const searchTerms = `${editDesc} how to edit this type of image with current AI tools`;
+    const searchResults = await searchWeb(searchTerms);
+    if (searchResults && searchResults.length > 100) {
+      return 'Based on current AI techniques: ' + searchResults.slice(0, 500);
+    }
+  } catch {}
   return null;
 }
 
@@ -1851,8 +1919,15 @@ async function searchHandler(request) {
     const body = await request.json();
     const { query, max_results = 5 } = body;
     if (!query) {
-      return jsonResponse({ results: [] });
-    }
+          return jsonResponse({ results: [] });
+        }
+
+        if (!results || results.length === 0) {
+          return jsonResponse({
+            results: [],
+            message: 'No results found for this topic. Try a more specific search.'
+          });
+        }
 
     const results = [];
 

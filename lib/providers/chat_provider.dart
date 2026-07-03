@@ -447,6 +447,21 @@ class ChatProvider extends ChangeNotifier {
           _processQueue();
           return;
         }
+        
+        // Ensure no empty responses are processed - this is a critical safeguard
+        if ((rawContent.isEmpty && respType != 'image_gen') || 
+            (imageData.isEmpty && respType == 'image_gen') || 
+            (fileData.isEmpty && respType != 'error' && respType != 'chat')) {
+          if (attempt < 2) {
+            await Future.delayed(const Duration(seconds: 2));
+            continue;
+          }
+          _isTakingLong = false;
+          _isLoading = false;
+          notifyListeners();
+          _processQueue();
+          continue;
+        }
         if (rawContent.isNotEmpty ||
             imageData.isNotEmpty ||
             fileData.isNotEmpty) {
