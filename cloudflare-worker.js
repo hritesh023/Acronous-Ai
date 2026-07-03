@@ -113,6 +113,70 @@ function errorResponse(status = 500) {
   return jsonResponse({ error: 'An unexpected error occurred' }, status);
 }
 
+function isCodeLine(line) {
+  const t = line.trim();
+  if (!t) return false;
+  // Lines that are mostly code/JSON
+  if (/^[{[]/.test(t) && /[}\]]$/.test(t)) return true;
+  if (/^\s*(const|let|var|function|class|import|export|def |if\s*\(|for\s*\(|while\s*\(|switch\s*\(|try\s*\{)/.test(t)) return true;
+  if (/^\s*[a-z_]\w*\s*[:=]\s*(function|\(|new\s+[A-Z])/.test(t)) return true;
+  if (/^\s*\}\s*(catch|else|finally)\s*(\{|$)/.test(t)) return true;
+  if (/^\s*<[a-z][^>]*>/.test(t) && !/^\s*<[a-z]+\s*>/.test(t)) return true;
+  return false;
+}
+
+function isMostlyCode(text) {
+  const lines = text.split('\n').filter(l => l.trim());
+  if (lines.length === 0) return false;
+  
+  // Count lines that look like code or raw JSON
+  let codeLines = 0;
+  let inCodeFence = false;
+  
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith('```')) { inCodeFence = !inCodeFence; codeLines++; continue; }
+    if (inCodeFence) { codeLines++; continue; }
+    if (isCodeLine(t)) { codeLines++; continue; }
+    // Lines with mostly non-alphabetic characters (code-like)
+    const alpha = (t.match(/[a-zA-Z]/g) || []).length;
+    const total = t.length;
+    if (total > 20 && alpha / total < 0.4) { codeLines++; continue; }
+  }
+  
+  return (codeLines / lines.length) > 0.5;
+}
+
+function stripCodeContent(text) {
+  // Remove markdown code fences and their contents
+  let cleaned = text.replace(/```[\s\S]*?```/g, '').trim();
+  
+  // Remove standalone JSON objects that dominate the text
+  // (only if they're not part of natural conversation)
+  const lines = cleaned.split('\n');
+  const naturalLines = lines.filter(line => {
+    const t = line.trim();
+    // Skip lines that are pure JSON objects/arrays
+    if (/^\{[^}]*\}$/.test(t) && t.length > 10) return false;
+    if (/^\[[^\]]*\]$/.test(t) && t.length > 10) return false;
+    if (isCodeLine(t) && t.length > 30) return false;
+    return true;
+  });
+  
+  cleaned = naturalLines.join('\n').trim();
+  
+  // If after stripping, we're left with very little, return original non-code parts
+  if (cleaned.length < 10 && text.length > 50) {
+    // Try to extract any natural language text
+    const sentences = text.match(/[A-Z][^.!?]*[.!?]/g);
+    if (sentences && sentences.length > 0) {
+      return sentences.join(' ').trim();
+    }
+  }
+  
+  return cleaned;
+}
+
 function sanitizeText(text) {
   if (!text) return '';
   let cleaned = text.replace(/\n{3,}/g, '\n\n').trim();
@@ -131,11 +195,17 @@ function sanitizeText(text) {
   // Strip lines containing known provider/internal names
   cleaned = cleaned.split('\n').filter(line => {
     const l = line.toLowerCase();
-    // Allow the word if it's part of natural conversation vs. revealing backend
     if (/pollinations\.ai/i.test(l) && !/how.*pollinations|what.*pollinations/i.test(l)) return false;
     if (/openrouter/i.test(l) && !/how.*openrouter|what.*openrouter/i.test(l)) return false;
     return true;
   }).join('\n').trim();
+  
+  // Strip code/JSON content that leaks into text responses
+  cleaned = stripCodeContent(cleaned);
+  
+  // Ensure the result reads like natural language
+  cleaned = ensureNaturalLanguage(cleaned);
+  
   return cleaned;
 }
 
@@ -1391,28 +1461,61 @@ async function generateNaturalResponse(prompt) {
 function ensureNaturalLanguage(text) {
   if (!text || text.length < 10) return text;
   const trimmed = text.trim();
-  // If the response is mostly a code block (>50% of content)
-  const codeFenceCount = (trimmed.match(/```/g) || []).length;
-  if (codeFenceCount >= 2) {
-    const lines = trimmed.split('\n');
-    let codeLines = 0;
-    let inCode = false;
-    for (const line of lines) {
-      if (line.trim().startsWith('```')) { inCode = !inCode; continue; }
-      if (inCode) codeLines++;
+  
+  // If the entire response is a raw JSON object, strip it
+  if (/^\{[\s\S]*\}$/.test(trimmed) || /^\[[\s\S]*\]$/.test(trimmed)) {
+    // Try to extract any natural text from JSON values
+    const values = trimmed.match(/"([^"]+)"\s*[}\]],?\s*/g);
+    if (values) {
+      const extracted = values.map(v => v.replace(/[\[\]{}",:]/g, '').trim()).filter(Boolean).join('. ');
+      if (extracted.length > 10) return extracted;
     }
-    // If more than half the response is code, convert it
-    if (codeLines > lines.length * 0.4) {
-      const nonCodeParts = [];
-      let inFence = false;
-      for (const line of lines) {
-        if (line.trim().startsWith('```')) { inFence = !inFence; continue; }
-        if (!inFence && line.trim()) nonCodeParts.push(line);
-      }
-      if (nonCodeParts.length > 0) return nonCodeParts.join('\n').trim();
-      return text;
+    return text;
+  }
+  
+  const lines = trimmed.split('\n');
+  let inCodeFence = false;
+  let codeLineCount = 0;
+  let naturalLineCount = 0;
+  const naturalLines = [];
+  
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.startsWith('```')) { inCodeFence = !inCodeFence; codeLineCount++; continue; }
+    if (inCodeFence) { codeLineCount++; continue; }
+    
+    // Detect raw code/JSON lines even without fences
+    if (isCodeLine(t) && t.length > 25) {
+      codeLineCount++;
+      continue;
+    }
+    
+    // Lines with mostly special characters
+    const alpha = (t.match(/[a-zA-Z]/g) || []).length;
+    const total = t.length;
+    if (total > 30 && alpha / total < 0.35) {
+      codeLineCount++;
+      continue;
+    }
+    
+    naturalLineCount++;
+    naturalLines.push(line);
+  }
+  
+  // If more than half the content is code, strip it
+  const totalMeaningful = codeLineCount + naturalLineCount;
+  if (totalMeaningful > 0 && codeLineCount / totalMeaningful > 0.4) {
+    if (naturalLines.length > 0) {
+      const result = naturalLines.join('\n').trim();
+      if (result.length > 5) return result;
+    }
+    // If stripping code leaves nothing, generate a simple response
+    const sentences = trimmed.match(/[A-Z][^.!?]*[.!?]/g);
+    if (sentences && sentences.length > 0) {
+      return sentences.join(' ').trim();
     }
   }
+  
   return text;
 }
 
