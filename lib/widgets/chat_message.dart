@@ -336,7 +336,6 @@ class ChatMessageWidget extends StatelessWidget {
                     constraints: const BoxConstraints(maxHeight: 300),
                     child: Stack(
                       fit: StackFit.loose,
-                      alignment: Alignment.bottomRight,
                       clipBehavior: Clip.antiAlias,
                       children: [
                         Image.memory(
@@ -356,6 +355,34 @@ class ChatMessageWidget extends StatelessWidget {
                                   child: child,
                                 );
                               },
+                        ),
+                        Positioned(
+                          top: 6,
+                          right: 6,
+                          child: Material(
+                            color: Colors.black.withValues(alpha: 0.35),
+                            borderRadius: BorderRadius.circular(20),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(20),
+                              onTap: () => _downloadGeneratedImage(
+                                context, b64,
+                              ),
+                              child: Container(
+                                padding: const EdgeInsets.all(7),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: Border.all(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.download_rounded,
+                                  size: 16,
+                                  color: Colors.white.withValues(alpha: 0.9),
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                         Positioned(
                           bottom: 4,

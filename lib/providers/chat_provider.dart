@@ -1223,47 +1223,7 @@ class ChatProvider extends ChangeNotifier {
               startsWithEdit ||
               (hasEditVerb && hasVisualContext && wordCount >= 2)) &&
           wordCount >= 2;
-      if (isEditRequest) {
-        final cleanEdit = text
-            .replaceAll(
-              RegExp(
-                r'^(edit|modify|redesign|transform|enhance|improve|change|make|turn|convert)\s+(this|the|my|image|photo|picture|it|into)\s*',
-                caseSensitive: false,
-              ),
-              '',
-            )
-            .trim();
-        final friendlyResponse = cleanEdit.isNotEmpty
-            ? 'Edited image: $cleanEdit.'
-            : 'Edited image generated.';
-        try {
-          final editResp = await _api.redesignImageBytes(
-            imageBytes: bytes,
-            fileName: imgAttach.name,
-            prompt: text,
-          );
-          final imageData =
-              editResp['content'] as String? ??
-              editResp['image_data'] as String? ??
-              '';
-          if (imageData.isNotEmpty) {
-            return {
-              'response': friendlyResponse,
-              'image_data': imageData,
-              'type': 'chat',
-            };
-          }
-          if ((editResp['error'] as String?)?.isNotEmpty ?? false) {
-            return {
-              'response':
-                  editResp['error'] as String? ?? 'Could not edit the image.',
-              'image_data': '',
-              'type': 'chat',
-            };
-          }
-        } catch (_) {
-          // Fall through to regular image analysis
-        }
+          if (isEditRequest) {
         try {
           final editResp = await _api.editImage(
             imageBytes: bytes,
@@ -1281,12 +1241,33 @@ class ChatProvider extends ChangeNotifier {
               'type': editType,
             };
           }
-          // Edit failed — fall through to regular image analysis
           if (editType == 'error' && response.isNotEmpty) {
             return {'response': response, 'image_data': '', 'type': 'chat'};
           }
         } catch (_) {
-          // Fall through to regular image analysis
+        }
+        try {
+          final editResp = await _api.redesignImageBytes(
+            imageBytes: bytes,
+            fileName: imgAttach.name,
+            prompt: text,
+          );
+          final imageData =
+              editResp['content'] as String? ??
+              editResp['image_data'] as String? ??
+              '';
+          final response = editResp['response'] as String? ?? '';
+          if (imageData.isNotEmpty) {
+            return {
+              'response': response,
+              'image_data': imageData,
+              'type': 'chat',
+            };
+          }
+          if ((editResp['error'] as String?)?.isNotEmpty ?? false) {
+            return {'response': '', 'image_data': '', 'type': 'chat'};
+          }
+        } catch (_) {
         }
       }
       final history = _buildMessageHistory();

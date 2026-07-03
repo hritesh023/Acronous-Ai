@@ -746,16 +746,48 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
       }
     }
 
-    // Try free img2img with multiple models
+    // Build different image URL formats for fallback attempts
+    const imageFormats = [
+      effectiveImageUrl,                                 // data:image/...;base64,...
+      imageBase64,                                       // raw base64 without prefix
+      imageUrl,                                          // URL if provided
+    ].filter(Boolean);
+
+    // Try free img2img with multiple models and multiple image format attempts
     const freeModels = ['flux', 'turbo', 'flux-schnell'];
     for (const fm of freeModels) {
-      for (let attempt = 0; attempt < 2; attempt++) {
+      for (const imgFormat of imageFormats) {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const encodedPrompt = encodeURIComponent(prompt);
+            const encodedImage = encodeURIComponent(imgFormat);
+            const encodedNegative = encodeURIComponent(negative);
+            const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${fm}&negative=${encodedNegative}&seed=${seed + attempt * 3}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
+            const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
+            if (resp.ok) {
+              const ct = resp.headers.get('content-type') || '';
+              if (ct.startsWith('image/')) {
+                const buf = await resp.arrayBuffer();
+                if (buf && buf.byteLength > 500) return buf;
+              }
+            }
+          } catch {}
+          if (attempt < 1) await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    }
+
+    // One more attempt with enhanced prompt appended with img2img preservation instructions
+    const img2imgPreserve = ' IDENTICAL RECONSTRUCTION: Preserve the exact same subject, face, body, pose, expression, background, lighting, composition. Only apply the described change.';
+    for (const fm of freeModels) {
+      for (const imgFormat of imageFormats) {
         try {
-          const encodedPrompt = encodeURIComponent(prompt);
-          const encodedImage = encodeURIComponent(effectiveImageUrl);
+          const extendedPrompt = prompt + img2imgPreserve;
+          const encodedPrompt = encodeURIComponent(extendedPrompt);
+          const encodedImage = encodeURIComponent(imgFormat);
           const encodedNegative = encodeURIComponent(negative);
-          const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${fm}&negative=${encodedNegative}&seed=${seed + attempt}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
-          const resp = await fetch(url, { signal: AbortSignal.timeout(45000) });
+          const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${w}&height=${h}&model=${fm}&negative=${encodedNegative}&seed=${seed + 999}&img=${encodedImage}&nofeed=1&nojson=1&wait=1`;
+          const resp = await fetch(url, { signal: AbortSignal.timeout(60000) });
           if (resp.ok) {
             const ct = resp.headers.get('content-type') || '';
             if (ct.startsWith('image/')) {
@@ -764,7 +796,6 @@ async function pollinationsImage(prompt, { size = '1024x1024', model = 'flux', r
             }
           }
         } catch {}
-        if (attempt < 1) await new Promise(r => setTimeout(r, 2000));
       }
     }
   }
@@ -1676,66 +1707,161 @@ async function redesignImageHandler(request) {
     const session_id = formData.get('session_id') || 'default';
 
     if (!file) {
-      return jsonResponse({ content: null, error: 'No image provided' }, 400);
+      return jsonResponse({ content: null, error: '' }, 400);
     }
 
     const fileName = file.name || 'image.jpg';
     const fileBytes = await file.arrayBuffer();
 
     if (fileBytes.byteLength > 20 * 1024 * 1024) {
-      return jsonResponse({
-        content: null,
-        error: 'The image is too large. Please upload an image smaller than 20MB.',
-      }, 413);
+      return jsonResponse({ content: null, error: '' }, 413);
     }
 
     const rawMime = file.type || '';
     const mimeType = normalizeImageMime(rawMime, fileName);
     const base64 = arrayBufferToBase64(fileBytes);
+    const editDesc = prompt?.trim() || '';
 
-    // ── Generate redesign prompt using original image directly ────────
-    const visionContent = buildMultimodalContent(
-      `Redesign request: "${prompt || 'redesign this image'}"
+    // ── Phase 1: Generate edit prompt using original image directly ──
+    let imagePrompt = '';
+    let responseText = '';
+    let visionDescription = '';
 
-Study the original image. Generate an image generation prompt to:
-1. Describe the EXACT original image first — every visible detail
-2. Apply ONLY the requested redesign changes
-3. Keep subject, pose, expression, clothing, background, lighting IDENTICAL
-4. No text, words, letters, or typography in the image
+    const multimodalContent = buildMultimodalContent(
+      `CRITICAL: You are an expert image analyst creating a detailed edit prompt for an AI image generator.
 
-Start with "The image shows" followed by all original details.`,
-      base64,
-      mimeType,
+The user wants to edit this image like this: "${editDesc}"
+
+Your goal: Write a prompt that will make the image generator RECREATE THIS EXACT IMAGE with ONLY the requested change applied.
+
+STUDY EVERY VISIBLE DETAIL of the original image with EXTREME precision:
+
+SUBJECT & IDENTITY:
+- If person: exact age range, gender, ethnicity, skin tone, face shape, distinctive facial features
+- Eye color, shape, expression
+- Nose shape and size
+- Mouth/lips shape, size, color
+- Hair: exact style, color, length, texture, direction
+- Any facial hair, markings, scars, or distinguishing features
+- Body type, posture, stance, hand positions
+- Any tattoos, piercings, or accessories on the body
+
+CLOTHING & APPEARANCE:
+- Type of each garment (shirt, pants, jacket, etc.)
+- EXACT color of each item (not just "blue" - specify shade: navy blue, sky blue, royal blue, etc.)
+- Fabric type (cotton, silk, denim, leather, etc.)
+- Fit and style
+- Any patterns (stripes, checks, prints)
+- Visible logos, text, or emblems
+- Accessories: jewelry, watches, hats, bags, shoes
+- Exact color of each accessory
+
+POSE & POSITIONING:
+- Head tilt angle
+- Arm positions and angles
+- Hand gestures and positioning
+- Leg position
+- Overall body stance (standing, sitting, leaning, etc.)
+- Camera view (front, side, three-quarter, profile)
+
+FACIAL EXPRESSION & EYES:
+- Exact expression (smile, neutral, angry, sad, surprised, etc.)
+- Eye gaze direction
+- Eyebrow position
+- Mouth shape and openness
+- Lighting on the face (shadows, highlights)
+
+BACKGROUND & ENVIRONMENT:
+- Setting (indoor/outdoor, specific location description)
+- All visible objects in the background
+- Background colors and textures
+- Depth of field (sharp/blurry)
+- Any windows, doors, furniture visible
+
+LIGHTING & ATMOSPHERE:
+- Light direction (front, back, side, from top, etc.)
+- Light type (natural sunlight, artificial, mixed, dramatic, soft, harsh)
+- Shadow positions and intensity
+- Highlights and reflections
+- Overall mood and atmosphere
+- Color temperature (warm/cool/neutral)
+
+COMPOSITION & CAMERA:
+- Camera angle (low, eye-level, high)
+- Shot type (close-up, medium, wide, full body)
+- Framing and crop
+- Aspect ratio (square, portrait, landscape)
+
+OVERALL STYLE & QUALITY:
+- Photography style (portrait, candid, professional, casual)
+- Image quality (sharp, soft focus, motion blur)
+- Color grading or filter applied
+- Overall tone (warm, cool, vibrant, muted)
+
+THEN APPLY ONLY THIS CHANGE: "${editDesc}"
+
+FORMAT YOUR RESPONSE EXACTLY AS:
+ORIGINAL IMAGE: [Detailed description of original with every detail above]
+CHANGE: [ONLY what changes - nothing else changes]
+PRESERVE: Everything from the original except the specific change
+
+CRITICAL RULES:
+- The recreated image must look like the EXACT same photograph/scene/person with ONLY the requested modification
+- Do NOT change the person's identity, face, expression, or pose unless explicitly requested
+- Do NOT change background, lighting, or composition unless explicitly requested
+- Do NOT change clothing/accessories unless explicitly requested
+- Every pixel should match the original except for the requested change
+- No text, words, letters, symbols, typography, or writing in the image
+- Describe with maximum precision and detail - ambiguity will cause the edit to fail`,
+      base64, mimeType
     );
-    const visionMessages = [
-      { role: 'system', content: 'You generate precise image prompts. Look at the original image, describe it in full detail, then apply only the requested redesign. Preserve everything else exactly.' },
-      { role: 'user', content: visionContent },
-    ];
 
-    let redesignPrompt = prompt || 'redesign this image';
+    const visionSystemMsg = { role: 'system', content: 'You are an expert image analyst and prompt engineer. Describe images with EXTREME precision and detail. Your prompts must recreate the original image exactly with only the requested change applied. Every pixel-level detail matters.' };
+    const visionUserMsg = { role: 'user', content: multimodalContent };
+
     for (const model of [VISION_MODEL, FALLBACK_VISION_MODEL, OPENROUTER_MODEL].filter(Boolean)) {
       try {
-        const visionResp = await callOpenRouter(visionMessages, { model, stream: false, max_tokens: 800, temperature: 0.1 });
-        const visionData = await visionResp.json();
-        const q = visionData?.choices?.[0]?.message?.content?.trim();
-        if (q && q.length > 10 && isValidImagePrompt(q, prompt)) {
-          redesignPrompt = q;
+        const resp = await callOpenRouter([visionSystemMsg, visionUserMsg], { model, stream: false, max_tokens: 1500, temperature: 0.1 });
+        const data = await resp.json();
+        const output = data?.choices?.[0]?.message?.content?.trim();
+        if (output && output.length > 20 && isValidImagePrompt(output, editDesc)) {
+          imagePrompt = output.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').trim();
+          // Store the original description for fallback
+          const origMatch = output.match(/ORIGINAL IMAGE:([^]*?)(?:CHANGE:|PRESERVE:|$)/i);
+          if (origMatch && origMatch[1].trim().length > 20) {
+            visionDescription = origMatch[1].trim();
+          }
           break;
         }
-      } catch (err) {
-      }
+      } catch {}
     }
 
-    redesignPrompt = redesignPrompt.replace(/\b(text\b(?:\s+\w+){0,3}|words|letters|symbols|characters|font|typography|alphabet|label|caption|heading|title|header|footer)\s*[,.]*/gi, '').replace(/\s+/g, ' ').trim();
-    if (!redesignPrompt || redesignPrompt.length < 10 || !isValidImagePrompt(redesignPrompt, prompt)) {
-      redesignPrompt = prompt || 'redesign this image';
+    if (!imagePrompt || imagePrompt.length < 20) {
+      const cleanEdit = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim();
+      imagePrompt = `ORIGINAL IMAGE: A photograph of a subject in a specific setting with particular lighting and composition. CHANGE: ${cleanEdit}. PRESERVE: All other elements EXACTLY IDENTICAL - same subject identity, same facial features, same pose, same expression, same body position, same clothing (except changes), same background, same lighting direction, same camera angle, same composition, same colors, same atmosphere. Make the edited image look like the exact same photograph/scene with only the specific change applied. No text, words, letters, or typography.`;
     }
 
+    // Derive response text from edit request via LLM
+    try {
+      const responseMsgs = [
+        { role: 'system', content: 'You are Acronous AI. Acknowledge the image edit briefly in 1 sentence. Never reveal backend details, model names, or APIs.' },
+        { role: 'user', content: `The user asked to edit an image: "${editDesc}". Acknowledge what was done. Keep it under 15 words. Just confirm the edit was applied.` },
+      ];
+      const resp = await callOpenRouter(responseMsgs, { model: FAST_MODEL, stream: false, max_tokens: 80, temperature: 0.3 });
+      const data = await resp.json();
+      responseText = sanitizeText(data?.choices?.[0]?.message?.content?.trim() || '');
+      responseText = responseText.replace(/^(sure|okay|ok|here|absolutely|certainly|of course)[!.,]?\s*/i, '').trim();
+    } catch {}
+    if (!responseText || responseText.length < 3) {
+      responseText = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
+    }
+
+    // ── Phase 2: Generate edited image ──
     const seed = computeSeed(fileBytes);
     let imageBuffer;
     try {
-      imageBuffer = await pollinationsImage(redesignPrompt, {
-        retries: 3,
+      imageBuffer = await pollinationsImage(imagePrompt, {
+        retries: 4,
         seed,
         imageBase64: base64,
         imageMime: mimeType,
@@ -1743,32 +1869,48 @@ Start with "The image shows" followed by all original details.`,
       });
     } catch (img2imgError) {
       try {
-        imageBuffer = await pollinationsImage(redesignPrompt, {
-          retries: 2,
+        imageBuffer = await pollinationsImage(imagePrompt, {
+          retries: 3,
           seed: seed + 100,
           imageBase64: base64,
           imageMime: mimeType,
           model: 'turbo',
         });
       } catch (altError) {
-        let imgDesc = '';
-        try { imgDesc = await describeImage(base64, mimeType, fileName) || prompt; } catch { imgDesc = prompt; }
-        const ttiPrompt = `EXACT PHOTO WITH ONE CHANGE: "${prompt}"
+        // img2img failed - use vision description for TTI fallback
+        let imgDesc = visionDescription;
+        if (!imgDesc || imgDesc.length < 20) {
+          try { imgDesc = await describeImage(base64, mimeType, fileName) || editDesc; } catch { imgDesc = editDesc; }
+        }
+        const cleanChange = editDesc.replace(/^(edit|modify|redesign|transform|enhance|improve|recreate|reimagine|turn|convert|change|make|create|generate|draw|paint|sketch|render)\s+(this|it|the|my|that)\s+(image|picture|photo|pic)?\s*/i, '').replace(/\b(please|pls|kindly|i want|i need|can you|could you|would you)\b/gi, '').trim() || editDesc;
+        const prefersArt = /\b(cartoon|anime|painting|sketch|drawing|watercolor|illustration)\b/i.test(editDesc);
+        const styleInstr = prefersArt ? '' : 'Photorealistic, natural skin textures, authentic photograph, natural lighting, high fidelity, realistic details.';
+        const ttiPrompt = `EXACT PHOTO RECREATION WITH ONE CHANGE: "${cleanChange}"
 
 ORIGINAL PHOTO: ${imgDesc}
 
-CRITICAL: SAME person - identical face, eyes, nose, mouth, hair, skin, expression, pose. SAME background, lighting, composition. SAME style.
-CHANGE ONLY what is specified.
-NO text, words, letters, typography.`;
+CRITICAL INSTRUCTIONS:
+- This must look like the SAME photograph with ONLY the requested change
+- SAME PERSON: identical face, eyes, nose, mouth, skin tone, hair style, hair color, facial features, body type
+- SAME POSE: exact body position, head tilt, hand/arm placement, leg position, stance
+- SAME EXPRESSION: exact same facial expression, eye gaze direction, mouth shape
+- SAME BACKGROUND: exact same setting, objects, colors, depth of field, textures
+- SAME LIGHTING: exact same direction, intensity, color temperature, shadows, highlights
+- SAME COMPOSITION: exact same camera angle, framing, zoom level, aspect ratio
+- SAME STYLE: same photographic quality, color grading, mood
+
+${styleInstr}
+CHANGE ONLY what is specified in the edit request above.
+NO text, words, letters, symbols, typography, signatures, or watermarks.`;
         imageBuffer = await pollinationsImage(ttiPrompt, {
-          retries: 3,
+          retries: 4,
           seed: seed + 2,
         });
       }
     }
     const b64 = arrayBufferToBase64(imageBuffer);
 
-    return jsonResponse({ content: b64, error: null, prompt: redesignPrompt, session_id });
+    return jsonResponse({ content: b64, error: null, prompt: imagePrompt, response: responseText, session_id });
   } catch (e) {
     return jsonResponse({
       content: null,
