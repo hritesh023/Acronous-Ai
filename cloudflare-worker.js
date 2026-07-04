@@ -652,7 +652,7 @@ export default {
         if (history.length > 20) history = history.slice(-20);
         const { tz, location } = await resolveUserGeo(request);
 
-        const [webContext, aiContent] = await Promise.allSettled([
+        const [webResult, firstAi] = await Promise.allSettled([
           webSearch(message),
           tryWorkersAIChat([
             { role: 'system', content: buildSystemPrompt(tz, location, null) },
@@ -660,16 +660,17 @@ export default {
             { role: 'user', content: message }
           ], env),
         ]);
-        const webData = webContext.status === 'fulfilled' ? webContext.value : null;
-        let content = aiContent.status === 'fulfilled' ? aiContent.value : null;
+        const webData = webResult.status === 'fulfilled' ? webResult.value : null;
 
-        if (!content || !content.trim()) {
-          const sysPrompt = buildSystemPrompt(tz, location, webData);
-          const msgs = [
-            { role: 'system', content: sysPrompt },
-            ...history,
-            { role: 'user', content: message }
-          ];
+        const sysPrompt = webData ? buildSystemPrompt(tz, location, webData) : null;
+        const msgs = sysPrompt ? [
+          { role: 'system', content: sysPrompt },
+          ...history,
+          { role: 'user', content: message }
+        ] : null;
+
+        let content = null;
+        if (msgs) {
           const results = await Promise.allSettled([
             tryWorkersAIChat(msgs, env),
             env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
@@ -681,6 +682,9 @@ export default {
               break;
             }
           }
+        }
+        if (!content || !content.trim()) {
+          content = firstAi.status === 'fulfilled' ? firstAi.value : null;
         }
 
         if (!content || !content.trim()) {
