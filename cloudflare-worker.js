@@ -71,9 +71,10 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
-  prompt += `\n\nACCURACY RULE: Answer from your training data for general knowledge (politics, history, science, definitions, etc.). The current date and time is provided above — answer time/date queries directly without searching. Only call web_search if the user explicitly asks for current/live data (news, weather, prices) or if you genuinely do not know the answer.`;
   if (webContext) {
-    prompt += `\n\nIMPORTANT: Live web search results are provided below. You MUST use these to answer — they contain current, up-to-date information. Do not rely on your training data for current events, facts, or data. Only use your training data for general knowledge or when the web results don't cover the topic.\n\nWeb results:\n${webContext}`;
+    prompt += `\n\nACCURACY RULE — CRITICAL: Live web search results are provided below. You MUST use these as your PRIMARY source for ALL factual information — including politics, current events, science, definitions, and any verifiable facts. Do NOT rely on your training data for any factual claims; training data may be outdated. If the web results don't cover the specific question, then you may use your training data, but clearly indicate when you're uncertain. The current date and time is provided above — answer time/date queries directly without searching.\n\nWeb results:\n${webContext}`;
+  } else {
+    prompt += `\n\nACCURACY RULE: For ALL factual questions (politics, history, science, definitions, current events, etc.), you MUST call the web_search function to verify information before answering. Your training data may be outdated. Only answer from training data if web search results are unavailable or the query is purely subjective/opinion-based. Answer time/date queries directly without searching.`;
   }
   prompt += `\n\nOUTPUT RULE: Respond ONLY in plain natural language. Never output JSON, raw objects, code blocks, reasoning, internal thoughts, or structured data. Never include your search process, reasoning steps, or tool call details. Just the answer — nothing else. If the user asks for code, only then may you output code blocks.`;
   return prompt;
@@ -160,7 +161,7 @@ const WEB_SEARCH_TOOL = {
   type: 'function',
   function: {
     name: 'web_search',
-    description: 'Search the internet for current information. Only use when you lack the knowledge to answer, or when the user asks for news, weather, prices, or other live data. Do NOT use for general knowledge or political facts your training data covers.',
+    description: 'Search the internet for current, accurate information. Use this for ANY factual query — politics, current events, science, definitions, history, or any verifiable information. Your training data may be outdated, so always verify with web_search. Do NOT use for subjective/opinion questions, creative writing, or casual conversation.',
     parameters: {
       type: 'object',
       properties: {
@@ -364,7 +365,9 @@ export default {
         const history = body.messages || [];
         const { tz, location } = await resolveUserGeo(request);
 
-        const systemPrompt = buildSystemPrompt(tz, location);
+        // Always proactively search the web for every query to ensure accuracy
+        const webContext = await webSearch(message);
+        const systemPrompt = buildSystemPrompt(tz, location, webContext);
 
         const messages = [
           { role: 'system', content: systemPrompt },
@@ -380,14 +383,7 @@ export default {
         }
 
         if (!content) {
-          const webContext = await webSearch(message);
-          const fbSystemPrompt = buildSystemPrompt(tz, location, webContext);
-          const fbMessages = [
-            { role: 'system', content: fbSystemPrompt },
-            ...history,
-            { role: 'user', content: message }
-          ];
-          content = await tryPollinations(fbMessages);
+          content = await tryPollinations(messages);
         }
 
         if (!content || content.trim() === '') content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
