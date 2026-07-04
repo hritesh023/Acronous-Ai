@@ -71,7 +71,7 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
-  prompt += `\n\nACCURACY RULE: You MUST always give accurate, up-to-date answers for EVERY query. Before answering any question involving facts, data, or information that could be time-sensitive, use the web_search tool to verify. Never rely solely on your training data — always confirm with live search results.`;
+  prompt += `\n\nACCURACY RULE: For time/date/clock queries, answer directly using the date and time already provided above — do NOT call web_search. For other factual or time-sensitive questions, use the web_search tool to verify rather than relying solely on your training data.`;
   if (webContext) {
     prompt += `\n\nIMPORTANT: Live web search results are provided below. You MUST use these to answer — they contain current, up-to-date information. Do not rely on your training data for current events, facts, or data. Only use your training data for general knowledge or when the web results don't cover the topic.\n\nWeb results:\n${webContext}`;
   }
