@@ -83,27 +83,15 @@ function buildSystemPrompt(tz, location, webContext) {
   return prompt;
 }
 
-async function webSearch(query) {
-  const currentYear = new Date().getFullYear();
-  // Build multiple query formulations to maximize result coverage
-  const queries = [query];
-  // Detect questions about current office holders / leaders / recent events
-  const currentAffairsPattern = /\b(who is|current|present|now|today|recent|latest|what is the)\b/i;
-  const leaderPattern = /\b(chief minister|prime minister|president|minister|chairman|ceo|governor|mayor|chancellor)\b/i;
-  if (currentAffairsPattern.test(query) || leaderPattern.test(query)) {
-    queries.push(`${query} ${currentYear}`);
-    queries.push(query.replace(currentAffairsPattern, '').trim() + ` ${currentYear}`);
-  }
-
-  // Try each query formulation until we get results
-  for (const q of queries) {
-    // Strategy 1: DuckDuckGo HTML search (most comprehensive)
-    try {
-      const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
-      });
-      if (resp.ok) {
-        const html = await resp.text();
+async function duckDuckGoSearch(q) {
+  // Strategy A: DuckDuckGo HTML
+  try {
+    const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+    });
+    if (resp.ok) {
+      const html = await resp.text();
+      if (html.includes('result__a') || html.includes('result__snippet')) {
         const results = [];
         const seen = new Set();
         const blocks = html.split('<a rel="nofollow" class="result__a"');
@@ -123,15 +111,17 @@ async function webSearch(query) {
         }
         if (results.length > 0) return results.join('\n');
       }
-    } catch {}
+    }
+  } catch {}
 
-    // Strategy 2: DuckDuckGo Lite API (simpler HTML, very stable)
-    try {
-      const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
-      });
-      if (resp.ok) {
-        const html = await resp.text();
+  // Strategy B: DuckDuckGo Lite
+  try {
+    const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+    });
+    if (resp.ok) {
+      const html = await resp.text();
+      if (html.includes('result-link')) {
         const results = [];
         const seen = new Set();
         const rows = html.split('<tr class="result">');
@@ -151,25 +141,101 @@ async function webSearch(query) {
         }
         if (results.length > 0) return results.join('\n');
       }
-    } catch {}
+    }
+  } catch {}
 
-    // Strategy 3: DuckDuckGo Instant Answer API (direct answers for queries like time, weather)
-    try {
-      const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&skip_disambig=1`);
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.AbstractText) return `- ${data.AbstractText}`;
-        if (data.Answer) return `- ${data.Answer}`;
-        if (data.Abstract) return `- ${data.Abstract}`;
-        if (data.RelatedTopics?.length > 0) {
-          return data.RelatedTopics.slice(0, 5).map(t => {
-            const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
-            return text ? `- ${text}` : null;
-          }).filter(Boolean).join('\n');
+  // Strategy C: DuckDuckGo Instant Answer API
+  try {
+    const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&skip_disambig=1`);
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.AbstractText) return `- ${data.AbstractText}`;
+      if (data.Answer) return `- ${data.Answer}`;
+      if (data.Abstract) return `- ${data.Abstract}`;
+      if (data.RelatedTopics?.length > 0) {
+        return data.RelatedTopics.slice(0, 5).map(t => {
+          const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
+          return text ? `- ${text}` : null;
+        }).filter(Boolean).join('\n');
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+async function bingSearch(q) {
+  try {
+    const resp = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(q)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.9' }
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    if (!html.includes('b_algo')) return null;
+    const results = [];
+    const seen = new Set();
+    const blocks = html.split('<li class="b_algo"');
+    for (let i = 1; i < blocks.length && results.length < 5; i++) {
+      const block = blocks[i];
+      const titleMatch = block.match(/<a[^>]*href="https?:\/\/[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+      const snippetMatch = block.match(/<p[^>]*class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+      if (titleMatch) {
+        const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+        const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
+        const key = title.toLowerCase().slice(0, 50);
+        if (title && title.length > 2 && !seen.has(key)) {
+          seen.add(key);
+          results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
         }
       }
-    } catch {}
+    }
+    return results.length > 0 ? results.join('\n') : null;
+  } catch { return null; }
+}
+
+async function wikipediaSearch(query) {
+  try {
+    const searchResp = await fetch(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=3&format=json`);
+    if (!searchResp.ok) return null;
+    const searchData = await searchResp.json();
+    const titles = searchData[1];
+    const descriptions = searchData[2];
+    if (!titles || titles.length === 0) return null;
+
+    const results = [];
+    for (let i = 0; i < titles.length && results.length < 3; i++) {
+      const pageResp = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i])}`);
+      if (pageResp.ok) {
+        const page = await pageResp.json();
+        if (page.extract) {
+          const snippet = page.extract.replace(/\n+/g, ' ').slice(0, 300);
+          results.push(`- ${page.title}: ${snippet}`);
+        }
+      }
+    }
+    return results.length > 0 ? results.join('\n') : null;
+  } catch { return null; }
+}
+
+async function webSearch(query) {
+  const currentYear = new Date().getFullYear();
+  const queries = [query];
+  const currentAffairsPattern = /\b(who is|current|present|now|today|recent|latest|what is the)\b/i;
+  const leaderPattern = /\b(chief minister|prime minister|president|minister|chairman|ceo|governor|mayor|chancellor|king|queen|emperor|sultan)\b/i;
+  if (currentAffairsPattern.test(query) || leaderPattern.test(query)) {
+    queries.push(`${query} ${currentYear}`);
+    queries.push(query.replace(currentAffairsPattern, '').trim() + ` ${currentYear}`);
   }
+
+  for (const q of queries) {
+    let result = await duckDuckGoSearch(q);
+    if (result) return result;
+    result = await bingSearch(q);
+    if (result) return result;
+  }
+
+  const wikiResult = await wikipediaSearch(query);
+  if (wikiResult) return wikiResult;
 
   return null;
 }
