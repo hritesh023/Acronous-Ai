@@ -419,20 +419,27 @@ async function callOpenRouter(messages, env) {
   const models = [
     env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
     env.FAST_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free',
-    'google/gemini-2.0-flash-001',
+    'mistralai/mistral-saba:free',
+    'cohere/command-r7b-12-2024:free',
+    'cognitivecomputations/dolphin3.0-mistral-24b:free',
   ];
   for (const model of models) {
-    try {
-      const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ messages, model, max_tokens: 1536, temperature: 0.7 })
-      });
-      if (!resp.ok) continue;
-      const data = await resp.json();
-      const content = data?.choices?.[0]?.message?.content;
-      if (content && content.trim()) return content;
-    } catch { continue; }
+    for (let retry = 0; retry < 2; retry++) {
+      try {
+        const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+          body: JSON.stringify({ messages, model, max_tokens: 1536, temperature: 0.7 })
+        });
+        if (!resp.ok) {
+          if (resp.status === 429) await new Promise(r => setTimeout(r, 800));
+          continue;
+        }
+        const data = await resp.json();
+        const content = data?.choices?.[0]?.message?.content;
+        if (content && content.trim()) return content;
+      } catch { continue; }
+    }
   }
   return null;
 }
@@ -461,17 +468,23 @@ async function callOpenRouterVision(messages, env) {
 }
 
 async function tryPollinations(messages) {
-  try {
-    const resp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model: 'openai', private: true })
-    });
-    if (!resp.ok) return null;
-    const text = await resp.text();
-    const trimmed = text?.trim();
-    return trimmed ? cleanResponse(trimmed) : null;
-  } catch { return null; }
+  const pollModels = ['openai', 'mistral', 'llama', 'deepseek'];
+  for (const model of pollModels) {
+    for (let retry = 0; retry < 2; retry++) {
+      try {
+        const resp = await fetch('https://text.pollinations.ai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, model, private: true })
+        });
+        if (!resp.ok) { if (resp.status === 429) await new Promise(r => setTimeout(r, 500)); continue; }
+        const text = await resp.text();
+        const trimmed = text?.trim();
+        if (trimmed) return cleanResponse(trimmed);
+      } catch { continue; }
+    }
+  }
+  return null;
 }
 
 async function tryOpenRouterImage(prompt, env) {
@@ -624,13 +637,14 @@ export default {
         ];
 
         let content = null;
-        if (env.OPENROUTER_API_KEY) {
-          const raw = await callOpenRouter(messages, env);
-          if (raw && raw.trim()) content = cleanResponse(raw);
-        }
-        if (!content || !content.trim()) {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (env.OPENROUTER_API_KEY) {
+            const raw = await callOpenRouter(messages, env);
+            if (raw && raw.trim()) { content = cleanResponse(raw); break; }
+          }
           const pollMsg = await tryPollinations(messages);
-          if (pollMsg && pollMsg.trim()) content = pollMsg;
+          if (pollMsg && pollMsg.trim()) { content = pollMsg; break; }
+          if (attempt < 2) await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
         }
         if (content) content = content.trim();
 
