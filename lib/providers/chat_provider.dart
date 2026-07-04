@@ -1303,7 +1303,7 @@ class ChatProvider extends ChangeNotifier {
         } catch (_) {}
         // All edit attempts failed — return error instead of silently falling through
         return {
-          'response': "I wasn't able to apply that edit to your image. Please try describing your edit differently — for example: 'change the background to a beach' or 'make this a cartoon style'.",
+          'response': '',
           'image_data': '',
           'type': 'chat',
         };

@@ -582,7 +582,7 @@ async function handleMultipartVision(request, env, systemPrompt) {
     ];
     content = await callOpenRouter(fallbackMessages, env);
   }
-  if (!content) content = "I received your image. I'm having trouble analyzing it right now. Please try again.";
+  if (!content) content = '';
 
   return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
 }
@@ -633,11 +633,10 @@ export default {
           if (pollMsg && pollMsg.trim()) content = pollMsg;
         }
         if (content) content = content.trim();
-        if (!content) content = "I'm not able to generate a response at this time. Please try again.";
 
-        return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
+        return jsonOk({ response: content || '', session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: "I'm not able to generate a response at this time. Please try again.", session_id: 'default', type: 'chat' });
+        return jsonOk({ response: '', session_id: 'default', type: 'chat' });
       }
     }
 
@@ -687,11 +686,11 @@ export default {
           content = await callOpenRouter(fallbackMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = "I received your image. I'm having trouble analyzing it right now. Please try again.";
+        if (!content || !content.trim()) content = '';
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError("I encountered an issue processing your image. Please try again.");
+        return jsonError('');
       }
     }
 
@@ -750,11 +749,11 @@ export default {
           content = await callOpenRouter(textMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = "I received your file. I'm having trouble processing it right now. Please try again.";
+        if (!content || !content.trim()) content = '';
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError("I encountered an issue processing your file. Please try again.");
+        return jsonError('');
       }
     }
 
@@ -771,12 +770,12 @@ export default {
         if (!imageBase64) imageBase64 = await tryWorkersAI(prompt, env);
 
         if (imageBase64) {
-          return jsonOk({ response: 'Generated image based on your request.', image_data: imageBase64, type: 'image_gen' });
+          return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen' });
         }
 
-        return jsonError("I couldn't generate the image right now. Please try again with a different description.");
+        return jsonError('');
       } catch (error) {
-        return jsonError("I encountered an issue generating the image. Please try again.");
+        return jsonError('');
       }
     }
 
@@ -805,16 +804,16 @@ export default {
         }
 
         if (editedBase64) {
-          return jsonOk({ response: 'Edited image based on your request.', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
         return jsonOk({
-          response: "I wasn't able to edit the image directly. Let me analyze it and suggest what can be done.",
+          response: '',
           session_id: sessionId,
           type: 'chat',
         });
       } catch (error) {
-        return jsonError("I encountered an issue editing the image. Please try again.");
+        return jsonError('');
       }
     }
 
@@ -865,11 +864,11 @@ export default {
           content = await callOpenRouter(textMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = "I wasn't able to analyze this image. Please try again with a clearer image.";
+        if (!content || !content.trim()) content = '';
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError("I encountered an issue analyzing the image. Please try again.");
+        return jsonError('');
       }
     }
 
@@ -881,9 +880,9 @@ export default {
         if (!query.trim()) return jsonError('Please provide a search query.');
 
         const results = await webSearch(query);
-        return jsonOk({ results: results || 'No results found.', query, type: 'search' });
+        return jsonOk({ results: results || '', query, type: 'search' });
       } catch (error) {
-        return jsonError('Search failed. Please try again.');
+        return jsonError('');
       }
     }
 
@@ -909,7 +908,7 @@ export default {
 
         return jsonOk({ response: content, type: 'chat' });
       } catch (error) {
-        return jsonError('Failed to generate response.');
+        return jsonError('');
       }
     }
 
