@@ -72,9 +72,7 @@ function buildSystemPrompt(tz, location, webContext) {
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
   if (webContext) {
-    prompt += `\n\nACCURACY RULE — CRITICAL: Live web search results are provided below. You MUST use these as your PRIMARY source for ALL factual information — including politics, current events, science, definitions, and any verifiable facts. Do NOT rely on your training data for any factual claims; training data may be outdated. If the web results don't cover the specific question, then you may use your training data, but clearly indicate when you're uncertain. The current date and time is provided above — answer time/date queries directly without searching.\n\nWeb results:\n${webContext}`;
-  } else {
-    prompt += `\n\nACCURACY RULE: For ALL factual questions (politics, history, science, definitions, current events, etc.), you MUST call the web_search function to verify information before answering. Your training data may be outdated. Only answer from training data if web search results are unavailable or the query is purely subjective/opinion-based. Answer time/date queries directly without searching.`;
+    prompt += `\n\nACCURACY RULE — CRITICAL: Live web search results are provided below. You MUST use these as your PRIMARY source for ALL factual information — including politics, current events, science, definitions, and any verifiable facts. Do NOT rely on your training data for any factual claims; training data may be outdated. If the web results don't cover the specific question, then you may use your training data, but clearly indicate when you're uncertain.\n\nWeb results:\n${webContext}`;
   }
   prompt += `\n\nOUTPUT RULE — ABSOLUTE: Never output JSON, XML, YAML, or any structured data. Never wrap your response in code blocks unless the user explicitly asks for code. Never include your reasoning, thought process, internal steps, or search details. Never output objects with keys like "role", "content", "reasoning", "tool_calls". Respond ONLY in plain natural language — paragraphs or simple dash bullet points. This is critical: the user should never see JSON or code in your response.`;
   return prompt;
@@ -157,84 +155,18 @@ async function webSearch(query) {
   return null;
 }
 
-const WEB_SEARCH_TOOL = {
-  type: 'function',
-  function: {
-    name: 'web_search',
-    description: 'Search the internet for current, accurate information. Use this for ANY factual query — politics, current events, science, definitions, history, or any verifiable information. Your training data may be outdated, so always verify with web_search. Do NOT use for subjective/opinion questions, creative writing, or casual conversation.',
-    parameters: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'The search query to look up on the internet' }
-      },
-      required: ['query']
-    }
-  }
-};
-
-function extractFromJsonWrapper(msg) {
-  if (!msg?.content || typeof msg.content !== 'string') return msg;
-  const trimmed = msg.content.trim();
-  if (!trimmed.startsWith('{')) return msg;
-
-  // Try strict JSON parse first
-  try {
-    const obj = JSON.parse(trimmed);
-    if (obj && typeof obj === 'object') {
-      const toolCalls = obj.tool_calls || null;
-      const content = obj.content || obj.answer || null;
-      if (content || toolCalls) {
-        return { role: 'assistant', content, tool_calls: toolCalls };
-      }
-    }
-  } catch {}
-
-  // Regex fallback: extract tool_calls array (handles unescaped quotes in reasoning)
-  const tcMatch = trimmed.match(/"tool_calls"\s*:\s*(\[[\s\S]*?\](?=\s*\}$|\s*,\s*))/);
-  if (tcMatch) {
-    try {
-      const toolCalls = JSON.parse(tcMatch[1]);
-      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
-        return { role: 'assistant', content: null, tool_calls: toolCalls };
-      }
-    } catch {}
-  }
-
-  // Regex fallback: extract content field
-  const contentMatch = trimmed.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-  if (contentMatch) {
-    const content = contentMatch[1].replace(/\\"/g, '"');
-    if (content) return { role: 'assistant', content, tool_calls: null };
-  }
-
-  return msg;
-}
-
 function stripJsonLeak(text) {
   if (!text) return text;
   let c = text;
-  // Strip from first JSON wrapper pattern (role/reasoning/tool_calls) to end of string
-  // Uses [\s\S]* to handle nested JSON unlike [^}]* which breaks on } inside strings
   c = c.replace(/\s*\{["\s]*(?:role|reasoning|tool_calls)["\s]*:[\s\S]*$/g, '');
-  // Strip JSON code fences
   c = c.replace(/```(?:json)?[\s\S]*?```/g, '');
-  // Strip any trailing JSON closing characters (braces, brackets, quotes)
   c = c.replace(/[\s"'\}\]\)]+$/, '');
   return c.trim() || text;
 }
 
 function cleanResponse(text) {
   if (!text) return text;
-
-  // Strip reasoning blocks (e.g.  ... or ...)
-  let clean = text.replace(/(?:^|\n)\s*[\*]*reasoning[\*]*\s*:?\s*[\s\S]*?(?=\n\s*(?:answer|response|tool_calls|$))/i, '');
-
-  // Strip leading/trailing JSON-like reasoning wrapper
-  clean = clean.replace(/^\s*\{\s*"reasoning"\s*:.*?"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}\s*/i, '');
-
-  // Strip any JSON leakage (role/reasoning/tool_calls wrappers)
-  clean = stripJsonLeak(clean);
-
+  let clean = stripJsonLeak(text);
   clean = clean
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
     .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
@@ -242,17 +174,9 @@ function cleanResponse(text) {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
-
-  // If cleaning left empty, return original
   if (!clean) return text.trim();
 
-  // Safety net: if still wrapped in JSON, try to extract content
-  if (clean.startsWith('{')) {
-    const extracted = extractFromJsonWrapper({ content: clean });
-    if (extracted?.content) return extracted.content;
-  }
-
-  // Final check: if still looks like JSON (has key:value pattern), strip one more time
+  // Safety net: if still looks like JSON, try to extract content
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
     try {
       const parsed = JSON.parse(clean);
@@ -260,14 +184,12 @@ function cleanResponse(text) {
       if (parsed.answer) return parsed.answer;
     } catch {}
   }
-
   return clean;
 }
 
-async function callOpenRouter(messages, env, tools) {
+async function callOpenRouter(messages, env) {
   if (!env.OPENROUTER_API_KEY) return null;
   const body = { messages, model: env.OPENROUTER_MODEL, max_tokens: 1536, temperature: 0.7 };
-  if (tools) body.tools = tools;
   return fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
@@ -275,48 +197,8 @@ async function callOpenRouter(messages, env, tools) {
   }).then(async resp => {
     if (!resp.ok) return null;
     const data = await resp.json();
-    return data?.choices?.[0]?.message || null;
+    return data?.choices?.[0]?.message?.content || null;
   }).catch(() => null);
-}
-
-async function callOpenRouterWithTools(messages, env) {
-  let msg = await callOpenRouter(messages, env, [WEB_SEARCH_TOOL]);
-  if (!msg) return null;
-
-  msg = extractFromJsonWrapper(msg);
-
-  const msgs = [...messages];
-  let loopCount = 0;
-  while (msg.tool_calls?.length > 0 && loopCount < 3) {
-    loopCount++;
-    msgs.push({ role: 'assistant', content: msg.content || null, tool_calls: msg.tool_calls });
-
-    for (const tc of msg.tool_calls) {
-      if (tc.function.name === 'web_search') {
-        let query = '';
-        try { query = JSON.parse(tc.function.arguments).query || ''; } catch {}
-        const results = await webSearch(query);
-        msgs.push({ role: 'tool', tool_call_id: tc.id, content: results || 'No search results found for that query.' });
-      }
-    }
-
-    msg = await callOpenRouter(msgs, env);
-    if (!msg) return null;
-    msg = extractFromJsonWrapper(msg);
-  }
-
-  return msg;
-}
-
-function lastResortClean(content) {
-  if (!content || typeof content !== 'string') return content;
-  let c = content.trim();
-  // Strip JSON wrappers with reasoning/tool_calls
-  c = c.replace(/^\s*\{\s*"reasoning"[\s\S]*?"tool_calls"[\s\S]*?\}\s*$/i, '');
-  c = c.replace(/^\s*\{\s*"role"[\s\S]*?"content"\s*:\s*"((?:[^"\\]|\\.)*)"[\s\S]*?\}\s*$/i, (_, g1) => g1.replace(/\\"/g, '"'));
-  // Strip leading "reasoning:" or "thought:" labels
-  c = c.replace(/^(?:reasoning|thought|thinking|internal)\s*:?\s*/i, '');
-  return c || content;
 }
 
 function tryPollinations(messages) {
@@ -403,17 +285,15 @@ export default {
         let content = null;
 
         if (env.OPENROUTER_API_KEY) {
-          const msg = await callOpenRouterWithTools(messages, env);
-          if (msg?.content) content = cleanResponse(lastResortClean(msg.content));
+          const raw = await callOpenRouter(messages, env);
+          if (raw) content = cleanResponse(raw);
         }
 
         if (!content) {
           content = await tryPollinations(messages);
         }
 
-        // Final safety: strip any remaining JSON leakage from the response
         if (content) {
-          content = stripJsonLeak(content);
           content = content.trim();
         }
 
