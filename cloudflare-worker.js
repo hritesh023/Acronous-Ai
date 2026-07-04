@@ -171,15 +171,42 @@ const WEB_SEARCH_TOOL = {
   }
 };
 
-function tryParseToolCallContent(content) {
-  if (!content || typeof content !== 'string') return null;
-  const trimmed = content.trim();
-  if (!trimmed.startsWith('{')) return null;
+function extractFromJsonWrapper(msg) {
+  if (!msg?.content || typeof msg.content !== 'string') return msg;
+  const trimmed = msg.content.trim();
+  if (!trimmed.startsWith('{')) return msg;
+
+  // Try strict JSON parse first
   try {
     const obj = JSON.parse(trimmed);
-    if (obj?.tool_calls && Array.isArray(obj.tool_calls)) return obj.tool_calls;
+    if (obj && typeof obj === 'object') {
+      const toolCalls = obj.tool_calls || null;
+      const content = obj.content || obj.answer || null;
+      if (content || toolCalls) {
+        return { role: 'assistant', content, tool_calls: toolCalls };
+      }
+    }
   } catch {}
-  return null;
+
+  // Regex fallback: extract tool_calls array (handles unescaped quotes in reasoning)
+  const tcMatch = trimmed.match(/"tool_calls"\s*:\s*(\[[\s\S]*?\](?=\s*\}$|\s*,\s*))/);
+  if (tcMatch) {
+    try {
+      const toolCalls = JSON.parse(tcMatch[1]);
+      if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+        return { role: 'assistant', content: null, tool_calls: toolCalls };
+      }
+    } catch {}
+  }
+
+  // Regex fallback: extract content field
+  const contentMatch = trimmed.match(/"content"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (contentMatch) {
+    const content = contentMatch[1].replace(/\\"/g, '"');
+    if (content) return { role: 'assistant', content, tool_calls: null };
+  }
+
+  return msg;
 }
 
 function cleanResponse(text) {
@@ -187,11 +214,19 @@ function cleanResponse(text) {
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
     .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
-    .replace(/\{"role":"assistant","reasoning":[\s\S]*?"tool_calls":\[[\s\S]*?\]\}/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
-  if (!clean || clean === text.trim()) return text.trim();
+
+  // If cleaning left empty, return original
+  if (!clean) return text.trim();
+
+  // Safety net: if still wrapped in reasoning JSON, try to extract content
+  if (clean.startsWith('{')) {
+    const extracted = extractFromJsonWrapper({ content: clean });
+    if (extracted?.content) return extracted.content;
+  }
+
   return clean;
 }
 
@@ -214,11 +249,7 @@ async function callOpenRouterWithTools(messages, env) {
   let msg = await callOpenRouter(messages, env, [WEB_SEARCH_TOOL]);
   if (!msg) return null;
 
-  // Some models output tool calls as JSON text instead of structured API - detect and handle
-  if (!msg.tool_calls && msg.content) {
-    const parsed = tryParseToolCallContent(msg.content);
-    if (parsed) msg = { role: 'assistant', content: null, tool_calls: parsed };
-  }
+  msg = extractFromJsonWrapper(msg);
 
   const msgs = [...messages];
   let loopCount = 0;
@@ -237,12 +268,7 @@ async function callOpenRouterWithTools(messages, env) {
 
     msg = await callOpenRouter(msgs, env);
     if (!msg) return null;
-
-    // Also check follow-up for embedded tool calls
-    if (!msg.tool_calls && msg.content) {
-      const parsed = tryParseToolCallContent(msg.content);
-      if (parsed) msg = { role: 'assistant', content: null, tool_calls: parsed };
-    }
+    msg = extractFromJsonWrapper(msg);
   }
 
   return msg;
