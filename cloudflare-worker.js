@@ -80,42 +80,49 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
-  prompt += `\n\nCRITICAL: The current year is ${year}. Your training data has a knowledge cutoff and does NOT include recent events (especially recent elections, political changes, appointments, sports results, or scientific breakthroughs). You MUST treat any information older than ${year} as potentially outdated.`;
+  prompt += `\n\nCRITICAL ACCURACY RULE: The current year is ${year}. Your training data has a knowledge cutoff and is COMPLETELY OUTDATED for ANY information about who holds political office, election results, appointments, sports championships, scientific breakthroughs, prices, or any time-sensitive facts. You MUST NEVER use your training data for these types of factual claims.`;
   if (webContext) {
-    prompt += `\n\nLive web search results from ${formatted} are below. Use these as your PRIMARY source for factual claims — they reflect current, up-to-date information. If the search results contain the answer, base your response on them. If the search results don't fully answer the question, combine them with your knowledge but clearly indicate what comes from search results vs your training data.\n\nWeb results:\n${webContext}`;
+    prompt += `\n\nLIVE WEB SEARCH RESULTS from ${formatted} are below. These are the ONLY source of current, accurate information you have. You MUST base your ENTIRE answer on these results. If the results contain the answer, summarize them accurately. If the results DON'T contain enough information to answer the question, say "I don't have enough information to answer that accurately" — do NOT guess, do NOT fall back to your outdated training data.\n\nWeb results:\n${webContext}`;
   } else {
-    prompt += `\n\nNote: Live web search results are not available right now. Use your training data to answer, but be careful with highly time-sensitive topics. If you're uncertain about current information, you can say so, but don't overuse "I don't have enough information" — use your best knowledge and just note when you're unsure.`;
+    prompt += `\n\nWARNING: Live web search results are unavailable. Your training data is OUTDATED for time-sensitive topics. If the user asks about current political leaders, recent events, sports results, or any time-sensitive factual information, you MUST clearly state that you cannot provide current information and suggest they try again later. For general knowledge questions (history, science, math, etc.), you may answer using your training data.`;
   }
   prompt += `\n\nOUTPUT RULE — ABSOLUTE: Never output JSON, XML, YAML, or any structured data. Never wrap your response in code blocks unless the user explicitly asks for code. Never include your reasoning, thought process, internal steps, or search details. Never output objects with keys like "role", "content", "reasoning", "tool_calls". Respond ONLY in plain natural language — paragraphs or simple dash bullet points. This is critical: the user should never see JSON or code in your response.`;
   return prompt;
 }
 
 async function searchSearxng(query) {
-  for (const searxngUrl of SEARXNG_URLS) {
-    try {
-      const searchUrl = new URL(searxngUrl);
-      searchUrl.searchParams.set('q', query);
-      searchUrl.searchParams.set('format', 'json');
-      searchUrl.searchParams.set('language', 'en');
-      searchUrl.searchParams.set('pageno', '1');
-      searchUrl.searchParams.set('categories', 'general');
+  const fetches = SEARXNG_URLS.map(searxngUrl =>
+    (async () => {
+      try {
+        const searchUrl = new URL(searxngUrl);
+        searchUrl.searchParams.set('q', query);
+        searchUrl.searchParams.set('format', 'json');
+        searchUrl.searchParams.set('language', 'en');
+        searchUrl.searchParams.set('pageno', '1');
+        searchUrl.searchParams.set('categories', 'general');
 
-      const response = await fetch(searchUrl.toString(), {
-        headers: { 'Accept': 'application/json', 'User-Agent': 'Acronous-AI/1.0.0' },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!response.ok) continue;
+        const response = await fetch(searchUrl.toString(), {
+          headers: { 'Accept': 'application/json', 'User-Agent': 'Acronous-AI/1.0.0' },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (!response.ok) return null;
 
-      const data = await response.json();
-      const rawResults = data.results || [];
-      if (rawResults.length === 0) continue;
+        const data = await response.json();
+        const rawResults = data.results || [];
+        if (rawResults.length === 0) return null;
 
-      return rawResults.slice(0, 8).map(r => {
-        const title = r.title || '';
-        const content = r.content || r.snippet || '';
-        return `- ${title}${content ? `: ${content}` : ''}`;
-      }).filter(Boolean).join('\n');
-    } catch { continue; }
+        return rawResults.slice(0, 8).map(r => {
+          const title = r.title || '';
+          const content = r.content || r.snippet || '';
+          return `- ${title}${content ? `: ${content}` : ''}`;
+        }).filter(Boolean).join('\n');
+      } catch { return null; }
+    })()
+  );
+
+  const results = await Promise.allSettled(fetches);
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) return r.value;
   }
   return null;
 }
@@ -259,14 +266,22 @@ async function wikipediaSearch(query) {
 async function webSearch(query) {
   const currentYear = new Date().getFullYear();
   const queries = [query];
-  const currentAffairsPattern = /\b(who is|current|present|now|today|recent|latest|what is the)\b/i;
-  const leaderPattern = /\b(chief minister|prime minister|president|minister|chairman|ceo|governor|mayor|chancellor|king|queen|emperor|sultan)\b/i;
-  if (currentAffairsPattern.test(query) || leaderPattern.test(query)) {
+
+  const isTimeSensitive = /\b(who is|current|present|now|today|recent|latest|what is the|election|winner|score|appointed|became|new |update)\b/i.test(query);
+  const hasLeaderTitle = /\b(chief minister|prime minister|president|minister|chairman|ceo|governor|mayor|chancellor|king|queen|emperor|sultan|mp|mla)\b/i.test(query);
+
+  if (isTimeSensitive || hasLeaderTitle) {
     queries.push(`${query} ${currentYear}`);
-    queries.push(query.replace(currentAffairsPattern, '').trim() + ` ${currentYear}`);
+    queries.push(`${query} ${currentYear} latest`);
+    queries.push(`${query} after 2023`);
+    if (hasLeaderTitle) {
+      queries.push(query.replace(/\b(who is|current|present)\b/i, '').trim() + ` ${currentYear}`);
+      queries.push(`${query} 2024 2025 2026`);
+    }
   }
 
   for (const q of queries) {
+    if (!q.trim()) continue;
     let result = await searchSearxng(q);
     if (result) return result;
     result = await duckDuckGoSearch(q);
