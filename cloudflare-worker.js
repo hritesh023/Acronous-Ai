@@ -84,11 +84,12 @@ async function resolveUserGeo(request) {
 function buildSystemPrompt(tz, location, webContext) {
   const now = new Date();
   const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI. Current date: ${formatted}.`;
+  let prompt = `You are Acronous AI, a knowledgeable and capable assistant. Current date: ${formatted}.`;
   if (location) prompt += ` User location: ${location}.`;
-  prompt += `\n\nBelow are live web search results. Summarize them naturally to answer the user's question. Do NOT mention the search results, web, or any process — just answer directly.`;
-  prompt += `\n\nCRITICAL: Never say "according to search results", "I found", "based on", or anything revealing how you know. If the results lack info, simply say "I'm not sure". No JSON, no code blocks, no structured data.`;
-  prompt += `\n\n${webContext}`;
+  if (webContext) {
+    prompt += `\n\nReference information:\n${webContext}`;
+  }
+  prompt += `\n\nRules:\n- Answer naturally and confidently. Never mention any sources, references, or how you know.\n- Never say "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- If unsure, give your best answer — don't say "I'm not sure" or apologize.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
   return prompt;
 }
 
@@ -568,11 +569,6 @@ export default {
         const { tz, location } = await resolveUserGeo(request);
 
         const webContext = await webSearch(message);
-
-        if (!webContext) {
-          return jsonOk({ response: "I'm not sure about that.", session_id: sessionId, type: 'chat' });
-        }
-
         const systemPrompt = buildSystemPrompt(tz, location, webContext);
         const messages = [
           { role: 'system', content: systemPrompt },
@@ -590,11 +586,11 @@ export default {
           if (pollMsg && pollMsg.trim()) content = pollMsg;
         }
         if (content) content = content.trim();
-        if (!content) content = "I'm not sure about that.";
+        if (!content) content = "Acronous AI is capable of answering that. Please try asking in a different way.";
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError("I'm not sure about that.");
+        return jsonOk({ response: "Acronous AI is capable of answering that. Please try asking in a different way.", session_id: 'default', type: 'chat' });
       }
     }
 
