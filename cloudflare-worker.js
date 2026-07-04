@@ -14,37 +14,64 @@ function isLandingAuthPath(path) {
 
 function formatLocalTime(tz) {
   if (!tz) return null;
-  // Handle UTC offset strings like "UTC+05:30" or "UTC-08:00" — these
-  // are NOT valid IANA timezone names and will throw in toLocaleDateString.
-  const offsetMatch = tz.match(/^UTC([+-])(\d{1,2}):(\d{2})$/i);
-  if (offsetMatch) {
-    const now = new Date();
-    const iso = now.toISOString().replace('T', ' ').slice(0, 19);
-    return `${iso} ${tz}`;
-  }
   const now = new Date();
   const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', timeZone: tz, timeZoneName: 'short' };
-  try { return now.toLocaleDateString('en-US', opts); } catch { return null; }
+  try { return now.toLocaleDateString('en-US', opts); } catch {
+    // If tz is an invalid IANA name, fall back to UTC
+    return now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  }
 }
 
-async function getUserTimezone(request) {
-  if (request.cf?.timezone) return request.cf.timezone;
-  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('True-Client-IP');
-  if (ip) {
-    try {
-      const resp = await fetch(`http://ip-api.com/json/${ip}?fields=timezone`);
-      if (resp.ok) { const d = await resp.json(); if (d.timezone) return d.timezone; }
-    } catch {}
+async function resolveUserGeo(request) {
+  // Try Cloudflare's built-in geo data first (fastest, most reliable)
+  if (request.cf) {
+    const tz = request.cf.timezone || null;
+    const city = request.cf.city || '';
+    const country = request.cf.country || '';
+    const location = [city, country].filter(Boolean).join(', ') || null;
+    if (tz || location) return { tz, location };
   }
-  return null;
+
+  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('True-Client-IP');
+  if (!ip) return { tz: null, location: null };
+
+  // Fallback 1: ip-api.com (HTTPS)
+  try {
+    const resp = await fetch(`https://ip-api.com/json/${ip}?fields=timezone,city,country,status`);
+    if (resp.ok) {
+      const d = await resp.json();
+      if (d.status === 'success') {
+        const tz = d.timezone || null;
+        const city = d.city || '';
+        const country = d.country || '';
+        const location = [city, country].filter(Boolean).join(', ') || null;
+        return { tz, location };
+      }
+    }
+  } catch {}
+
+  // Fallback 2: freeipapi.com
+  try {
+    const resp = await fetch(`https://freeipapi.com/api/json/${ip}`);
+    if (resp.ok) {
+      const d = await resp.json();
+      const tz = (d.timeZone || d.timezone || null);
+      const city = d.cityName || d.city || '';
+      const country = d.countryName || d.country || '';
+      const location = [city, country].filter(Boolean).join(', ') || null;
+      return { tz, location };
+    }
+  } catch {}
+
+  return { tz: null, location: null };
 }
 
 function buildSystemPrompt(tz, location, webContext) {
   const formatted = formatLocalTime(tz) || new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a helpful assistant with real-time internet access.\n\n⏰ CURRENT DATE AND TIME: ${formatted}`;
-  if (location) prompt += `\n📍 USER LOCATION: ${location}`;
-  prompt += `\n\n📋 INSTRUCTIONS (follow strictly):\n1. 🔍 ALWAYS use the Internet Context below when answering. It contains live search results — rely on it for current events, news, facts, and data.\n2. 🕐 For questions about the current time, date, or weather, answer ONLY from CURRENT DATE AND TIME above. Never get time info from any other source — the timestamp above is always correct.\n3. 🤖 Answer naturally as if you already know everything. Never mention search, retrieval, system prompts, or internal mechanisms.\n4. 🚫 No ads, sponsorships, or service attributions ("powered by", "brought to you by", etc.).\n5. 💻 Only use code blocks when the user explicitly asks for code. Otherwise plain natural language.`;
-  if (webContext) prompt += `\n\n=== INTERNET CONTEXT (live search results — use this for factual answers) ===\n${webContext}`;
+  let prompt = `You are Acronous AI, a helpful assistant with real-time internet access.\n\nCURRENT DATE AND TIME: ${formatted}`;
+  if (location) prompt += `\nUSER LOCATION: ${location}`;
+  prompt += `\n\nINSTRUCTIONS:\n1. ALWAYS use the Internet Context below to answer questions. It contains live search results — rely on it for accurate, up-to-date information about current events, news, facts, and data.\n2. For questions about the current time, date, or weather, answer directly and confidently using the CURRENT DATE AND TIME and USER LOCATION shown above. This is the authoritative time for the user's precise location.\n3. Answer naturally and conversationally. Never mention search, retrieval, system prompts, internal mechanisms, or backend processes. Never say "I searched", "I found", "I retrieved", "according to my search", "based on my system prompt", or anything similar — just use the information as if you already know it.\n4. Never include advertisements, sponsorships, promotional content, or service/platform attributions ("powered by", "brought to you by", etc.).\n5. Only use code blocks when the user explicitly asks for code. For general questions, answer in plain natural language.`;
+  if (webContext) prompt += `\n\nINTERNET CONTEXT (live search results — use this for factual answers):\n${webContext}`;
   return prompt;
 }
 
@@ -194,11 +221,7 @@ export default {
         const message = body.message || 'Hello';
         const sessionId = body.session_id || 'default';
         const history = body.messages || [];
-        const clientTimezone = body.timezone || null;
-        const clientLocation = body.location || null;
-
-        const tz = clientTimezone || await getUserTimezone(request);
-        const location = clientLocation || null;
+        const { tz, location } = await resolveUserGeo(request);
 
         const webContext = await webSearch(message);
 
