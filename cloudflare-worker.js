@@ -111,11 +111,13 @@ async function searchSearxng(query) {
         const rawResults = data.results || [];
         if (rawResults.length === 0) return null;
 
-        return rawResults.slice(0, 8).map(r => {
+        const items = rawResults.slice(0, 5).map(r => {
           const title = r.title || '';
-          const content = r.content || r.snippet || '';
+          const content = (r.content || r.snippet || '').slice(0, 200);
           return `- ${title}${content ? `: ${content}` : ''}`;
         }).filter(Boolean).join('\n');
+        if (items.length > 3000) return items.slice(0, 3000);
+        return items;
       } catch { return null; }
     })()
   );
@@ -329,16 +331,25 @@ function cleanResponse(text) {
 
 async function callOpenRouter(messages, env) {
   if (!env.OPENROUTER_API_KEY) return null;
-  const body = { messages, model: env.OPENROUTER_MODEL, max_tokens: 1536, temperature: 0.7 };
-  return fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-    body: JSON.stringify(body)
-  }).then(async resp => {
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    return data?.choices?.[0]?.message?.content || null;
-  }).catch(() => null);
+  const models = [
+    env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
+    env.FAST_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free',
+    'google/gemini-2.0-flash-001',
+  ];
+  for (const model of models) {
+    try {
+      const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+        body: JSON.stringify({ messages, model, max_tokens: 1536, temperature: 0.7 })
+      });
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const content = data?.choices?.[0]?.message?.content;
+      if (content && content.trim()) return content;
+    } catch { continue; }
+  }
+  return null;
 }
 
 async function callOpenRouterVision(messages, env) {
@@ -356,24 +367,26 @@ async function callOpenRouterVision(messages, env) {
       });
       if (resp.ok) {
         const data = await resp.json();
-        const content = data?.choices?.[0]?.message?.content || null;
-        if (content) return content;
+        const content = data?.choices?.[0]?.message?.content;
+        if (content && content.trim()) return content;
       }
     } catch { continue; }
   }
   return null;
 }
 
-function tryPollinations(messages) {
-  return fetch('https://text.pollinations.ai', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, model: 'openai', private: true })
-  }).then(async resp => {
+async function tryPollinations(messages) {
+  try {
+    const resp = await fetch('https://text.pollinations.ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, model: 'openai', private: true })
+    });
     if (!resp.ok) return null;
     const text = await resp.text();
-    return (text && text.trim()) ? cleanResponse(text) : null;
-  }).catch(() => null);
+    const trimmed = text?.trim();
+    return trimmed ? cleanResponse(trimmed) : null;
+  } catch { return null; }
 }
 
 async function tryOpenRouterImage(prompt, env) {
@@ -486,7 +499,7 @@ async function handleMultipartVision(request, env, systemPrompt) {
   }
   if (!content) content = "I received your image. I'm having trouble analyzing it right now. Please try again.";
 
-  return jsonOk({ response: cleanResponse(content), session_id: sessionId, type: 'chat' });
+  return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
 }
 
 export default {
@@ -510,9 +523,11 @@ export default {
     if (path === '/v1/chat' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const message = body.message || 'Hello';
+        const message = (body.message || '').trim();
+        if (!message) return jsonError('Please provide a message.');
         const sessionId = body.session_id || 'default';
-        const history = body.messages || [];
+        let history = body.messages || [];
+        if (history.length > 20) history = history.slice(-20);
         const { tz, location } = await resolveUserGeo(request);
 
         const webContext = await webSearch(message);
@@ -528,22 +543,20 @@ export default {
 
         if (env.OPENROUTER_API_KEY) {
           const raw = await callOpenRouter(messages, env);
-          if (raw) content = cleanResponse(raw);
+          if (raw && raw.trim()) content = cleanResponse(raw);
         }
 
-        if (!content) {
-          content = await tryPollinations(messages);
+        if (!content || !content.trim()) {
+          const pollMsg = await tryPollinations(messages);
+          if (pollMsg && pollMsg.trim()) content = pollMsg;
         }
 
-        if (content) {
-          content = content.trim();
-        }
+        if (content) content = content.trim();
+        if (!content) content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
 
-        if (!content || content === '') content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
-
-        return new Response(JSON.stringify({ response: content, session_id: sessionId, type: 'chat' }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return new Response(JSON.stringify({ response: "I encountered an issue. Please try again in a moment." }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        return jsonError("I encountered an issue. Please try again in a moment.");
       }
     }
 
