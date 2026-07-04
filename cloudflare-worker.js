@@ -3,6 +3,17 @@ const LANDING_WORKER = 'https://acronous-landing.workers.dev';
 
 const LANDING_AUTH_PATHS = ['/api/auth/', '/login', '/login.html', '/signup', '/signup.html', '/dashboard', '/dashboard.html', '/logout'];
 
+const SEARXNG_URLS = [
+  'https://searx.be/search',
+  'https://search.sapti.me/search',
+  'https://searx.thegreenwebfoundation.org/search',
+  'https://searx.tuxcloud.net/search',
+  'https://searx.work/search',
+  'https://searx.info/search',
+  'https://search.mdosch.de/search',
+  'https://northboot.xyz/search',
+];
+
 function isApiPath(path) {
   return path === '/v1/chat' || path === '/v1/wakeup' || path === '/health' ||
     path.startsWith('/v1/') || path.startsWith('/api/');
@@ -17,13 +28,11 @@ function formatLocalTime(tz) {
   const now = new Date();
   const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', timeZone: tz, timeZoneName: 'short' };
   try { return now.toLocaleDateString('en-US', opts); } catch {
-    // If tz is an invalid IANA name, fall back to UTC
     return now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   }
 }
 
 async function resolveUserGeo(request) {
-  // Try Cloudflare's built-in geo data first (fastest, most reliable)
   if (request.cf) {
     const tz = request.cf.timezone || null;
     const city = request.cf.city || '';
@@ -35,7 +44,6 @@ async function resolveUserGeo(request) {
   const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('True-Client-IP');
   if (!ip) return { tz: null, location: null };
 
-  // Fallback 1: ip-api.com (HTTPS)
   try {
     const resp = await fetch(`https://ip-api.com/json/${ip}?fields=timezone,city,country,status`);
     if (resp.ok) {
@@ -50,7 +58,6 @@ async function resolveUserGeo(request) {
     }
   } catch {}
 
-  // Fallback 2: freeipapi.com
   try {
     const resp = await fetch(`https://freeipapi.com/api/json/${ip}`);
     if (resp.ok) {
@@ -73,21 +80,51 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
-  prompt += `\n\nCRITICAL IMPORTANT: The current year is ${year}. Your training data has a knowledge cutoff and does NOT include recent events (especially recent elections, political changes, appointments, sports results, or scientific breakthroughs). You MUST treat any information older than ${year} as potentially outdated.`;
+  prompt += `\n\nCRITICAL: The current year is ${year}. Your training data has a knowledge cutoff and does NOT include recent events (especially recent elections, political changes, appointments, sports results, or scientific breakthroughs). You MUST treat any information older than ${year} as potentially outdated.`;
   if (webContext) {
-    prompt += `\n\nACCURACY RULE — ABSOLUTE: Live web search results from ${formatted} are below. You are FORBIDDEN from using your internal training data for ANY factual claim that contradicts these results. You MUST answer based SOLELY on the search results below. If the results don't contain the answer, say "I don't have enough information" — do NOT guess, do NOT fall back to your training data. This is critical: your training data about who holds political office, election winners, and current events is months or years out of date.\n\nWeb results:\n${webContext}`;
+    prompt += `\n\nLive web search results from ${formatted} are below. Use these as your PRIMARY source for factual claims — they reflect current, up-to-date information. If the search results contain the answer, base your response on them. If the search results don't fully answer the question, combine them with your knowledge but clearly indicate what comes from search results vs your training data.\n\nWeb results:\n${webContext}`;
   } else {
-    prompt += `\n\nACCURACY RULE: No live web results are available. Only answer if you are highly confident in the accuracy of your training data. For any factual, political, or current-event question where you are not 100% certain, say "I don't have enough information to answer that accurately" instead of guessing. Never fabricate information.`;
+    prompt += `\n\nNote: Live web search results are not available right now. Use your training data to answer, but be careful with highly time-sensitive topics. If you're uncertain about current information, you can say so, but don't overuse "I don't have enough information" — use your best knowledge and just note when you're unsure.`;
   }
   prompt += `\n\nOUTPUT RULE — ABSOLUTE: Never output JSON, XML, YAML, or any structured data. Never wrap your response in code blocks unless the user explicitly asks for code. Never include your reasoning, thought process, internal steps, or search details. Never output objects with keys like "role", "content", "reasoning", "tool_calls". Respond ONLY in plain natural language — paragraphs or simple dash bullet points. This is critical: the user should never see JSON or code in your response.`;
   return prompt;
 }
 
+async function searchSearxng(query) {
+  for (const searxngUrl of SEARXNG_URLS) {
+    try {
+      const searchUrl = new URL(searxngUrl);
+      searchUrl.searchParams.set('q', query);
+      searchUrl.searchParams.set('format', 'json');
+      searchUrl.searchParams.set('language', 'en');
+      searchUrl.searchParams.set('pageno', '1');
+      searchUrl.searchParams.set('categories', 'general');
+
+      const response = await fetch(searchUrl.toString(), {
+        headers: { 'Accept': 'application/json', 'User-Agent': 'Acronous-AI/1.0.0' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const rawResults = data.results || [];
+      if (rawResults.length === 0) continue;
+
+      return rawResults.slice(0, 8).map(r => {
+        const title = r.title || '';
+        const content = r.content || r.snippet || '';
+        return `- ${title}${content ? `: ${content}` : ''}`;
+      }).filter(Boolean).join('\n');
+    } catch { continue; }
+  }
+  return null;
+}
+
 async function duckDuckGoSearch(q) {
-  // Strategy A: DuckDuckGo HTML
   try {
     const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' },
+      signal: AbortSignal.timeout(6000),
     });
     if (resp.ok) {
       const html = await resp.text();
@@ -114,10 +151,10 @@ async function duckDuckGoSearch(q) {
     }
   } catch {}
 
-  // Strategy B: DuckDuckGo Lite
   try {
     const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(6000),
     });
     if (resp.ok) {
       const html = await resp.text();
@@ -144,9 +181,10 @@ async function duckDuckGoSearch(q) {
     }
   } catch {}
 
-  // Strategy C: DuckDuckGo Instant Answer API
   try {
-    const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&skip_disambig=1`);
+    const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&skip_disambig=1`, {
+      signal: AbortSignal.timeout(5000),
+    });
     if (resp.ok) {
       const data = await resp.json();
       if (data.AbstractText) return `- ${data.AbstractText}`;
@@ -167,7 +205,8 @@ async function duckDuckGoSearch(q) {
 async function bingSearch(q) {
   try {
     const resp = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.9' }
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.9' },
+      signal: AbortSignal.timeout(6000),
     });
     if (!resp.ok) return null;
     const html = await resp.text();
@@ -228,7 +267,9 @@ async function webSearch(query) {
   }
 
   for (const q of queries) {
-    let result = await duckDuckGoSearch(q);
+    let result = await searchSearxng(q);
+    if (result) return result;
+    result = await duckDuckGoSearch(q);
     if (result) return result;
     result = await bingSearch(q);
     if (result) return result;
@@ -261,7 +302,6 @@ function cleanResponse(text) {
     .trim();
   if (!clean) return text.trim();
 
-  // Safety net: if still looks like JSON, try to extract content
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
     try {
       const parsed = JSON.parse(clean);
@@ -284,6 +324,29 @@ async function callOpenRouter(messages, env) {
     const data = await resp.json();
     return data?.choices?.[0]?.message?.content || null;
   }).catch(() => null);
+}
+
+async function callOpenRouterVision(messages, env) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  const models = [
+    env.VISION_MODEL || 'google/gemini-2.5-flash-lite',
+    env.FALLBACK_VISION_MODEL || 'nvidia/nemotron-nano-12b-v2-vl:free',
+  ];
+  for (const model of models) {
+    try {
+      const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+        body: JSON.stringify({ model, messages, max_tokens: 2048, temperature: 0.3 })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const content = data?.choices?.[0]?.message?.content || null;
+        if (content) return content;
+      }
+    } catch { continue; }
+  }
+  return null;
 }
 
 function tryPollinations(messages) {
@@ -332,6 +395,24 @@ async function tryPollinationsImage(prompt) {
   } catch { return null; }
 }
 
+async function tryPollinationsImageEdit(imageBase64, prompt) {
+  try {
+    const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt,
+        img: imageBase64,
+        width: 1024,
+        height: 1024,
+        nofeed: true,
+      }),
+    });
+    if (!resp.ok) return null;
+    return arrayBufferToBase64(await resp.arrayBuffer());
+  } catch { return null; }
+}
+
 async function tryWorkersAI(prompt, env) {
   if (!env.AI) return null;
   try {
@@ -339,6 +420,58 @@ async function tryWorkersAI(prompt, env) {
     if (result?.image) return result.image;
     return null;
   } catch { return null; }
+}
+
+function jsonOk(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+  });
+}
+
+function jsonError(msg, status = 200) {
+  return jsonOk({ response: msg, type: 'error' }, status);
+}
+
+async function handleMultipartVision(request, env, systemPrompt) {
+  const formData = await request.formData();
+  const file = formData.get('file');
+  const message = formData.get('message') || 'Analyze this image.';
+  const sessionId = formData.get('session_id') || 'default';
+  const timezone = formData.get('timezone') || '';
+  const location = formData.get('location') || '';
+  const historyRaw = formData.get('messages') || '';
+
+  if (!file) return jsonError('No image file provided.');
+
+  const fileBytes = await file.arrayBuffer();
+  const base64 = arrayBufferToBase64(fileBytes);
+  const mimeType = file.type || 'image/jpeg';
+
+  let history = [];
+  if (historyRaw) {
+    try { history = JSON.parse(historyRaw); } catch {}
+  }
+
+  const systemMsg = { role: 'system', content: systemPrompt };
+  const userContent = [
+    { type: 'text', text: message },
+    { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+  ];
+  const visionMessages = [systemMsg, ...history, { role: 'user', content: userContent }];
+
+  let content = await callOpenRouterVision(visionMessages, env);
+  if (!content) {
+    const fallbackMessages = [
+      systemMsg,
+      ...history,
+      { role: 'user', content: `[Image attached] ${message}\n\nPlease analyze the image the user sent.` },
+    ];
+    content = await callOpenRouter(fallbackMessages, env);
+  }
+  if (!content) content = "I received your image. I'm having trouble analyzing it right now. Please try again.";
+
+  return jsonOk({ response: cleanResponse(content), session_id: sessionId, type: 'chat' });
 }
 
 export default {
@@ -367,7 +500,6 @@ export default {
         const history = body.messages || [];
         const { tz, location } = await resolveUserGeo(request);
 
-        // Always proactively search the web for every query to ensure accuracy
         const webContext = await webSearch(message);
         const systemPrompt = buildSystemPrompt(tz, location, webContext);
 
@@ -400,12 +532,129 @@ export default {
       }
     }
 
+    if (path === '/v1/chat/image' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const message = formData.get('message') || '';
+        const sessionId = formData.get('session_id') || 'default';
+        const historyRaw = formData.get('messages') || '';
+
+        if (!file) return jsonError('No image file provided.');
+
+        const fileBytes = await file.arrayBuffer();
+        const base64 = arrayBufferToBase64(fileBytes);
+        const mimeType = file.type || 'image/jpeg';
+
+        let history = [];
+        if (historyRaw) {
+          try { history = JSON.parse(historyRaw); } catch {}
+        }
+
+        const webContext = await webSearch(message);
+        const systemPrompt = buildSystemPrompt(
+          formData.get('timezone') || null,
+          formData.get('location') || null,
+          webContext
+        );
+
+        const userContent = [
+          { type: 'text', text: message || 'What can you tell me about this image?' },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+        ];
+        const visionMessages = [
+          { role: 'system', content: systemPrompt },
+          ...history,
+          { role: 'user', content: userContent },
+        ];
+
+        let content = await callOpenRouterVision(visionMessages, env);
+        if (!content) {
+          const fallbackMessages = [
+            { role: 'system', content: systemPrompt },
+            ...history,
+            { role: 'user', content: `${message}\n\n[The user attached an image for context]` },
+          ];
+          content = await callOpenRouter(fallbackMessages, env);
+        }
+        if (content) content = cleanResponse(content);
+        if (!content || !content.trim()) content = "I received your image. I'm having trouble analyzing it right now. Please try again.";
+
+        return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
+      } catch (error) {
+        return jsonError("I encountered an issue processing your image. Please try again.");
+      }
+    }
+
+    if (path === '/v1/chat/file' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const message = formData.get('message') || '';
+        const sessionId = formData.get('session_id') || 'default';
+        const historyRaw = formData.get('messages') || '';
+
+        if (!file) return jsonError('No file provided.');
+
+        const fileBytes = await file.arrayBuffer();
+        const base64 = arrayBufferToBase64(fileBytes);
+        const fileName = file.name || 'file';
+        const mimeType = file.type || 'application/octet-stream';
+
+        let history = [];
+        if (historyRaw) {
+          try { history = JSON.parse(historyRaw); } catch {}
+        }
+
+        const webContext = await webSearch(message);
+        const systemPrompt = buildSystemPrompt(null, null, webContext);
+
+        const llmPrompt = `The user uploaded a file named "${fileName}" (type: ${mimeType}). Their message: "${message}". Please analyze this file and respond helpfully. If it's a code file, review the code. If it's a document, summarize it.`;
+
+        let userMsgContent;
+        if (mimeType.startsWith('image/')) {
+          userMsgContent = [
+            { type: 'text', text: llmPrompt },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+          ];
+        } else {
+          const fileContent = new TextDecoder().decode(fileBytes).slice(0, 50000);
+          userMsgContent = `${llmPrompt}\n\nFile contents:\n${fileContent}`;
+        }
+
+        const visionMessages = [
+          { role: 'system', content: systemPrompt },
+          ...history,
+          { role: 'user', content: userMsgContent },
+        ];
+
+        let content = null;
+        if (mimeType.startsWith('image/')) {
+          content = await callOpenRouterVision(visionMessages, env);
+        }
+        if (!content) {
+          const textMessages = [
+            { role: 'system', content: systemPrompt },
+            ...history,
+            { role: 'user', content: typeof userMsgContent === 'string' ? userMsgContent : `${llmPrompt}\n\n[Image attached: ${fileName}]` },
+          ];
+          content = await callOpenRouter(textMessages, env);
+        }
+        if (content) content = cleanResponse(content);
+        if (!content || !content.trim()) content = "I received your file. I'm having trouble processing it right now. Please try again.";
+
+        return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
+      } catch (error) {
+        return jsonError("I encountered an issue processing your file. Please try again.");
+      }
+    }
+
     if ((path === '/v1/image/generate' || path === '/api/image/generate') && request.method === 'POST') {
       try {
         const body = await request.json();
         const prompt = body.prompt || body.message || '';
         if (!prompt.trim()) {
-          return new Response(JSON.stringify({ response: 'Please provide a description for the image.', type: 'error' }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+          return jsonError('Please provide a description for the image.');
         }
 
         let imageBase64 = await tryPollinationsImage(prompt);
@@ -413,25 +662,158 @@ export default {
         if (!imageBase64) imageBase64 = await tryWorkersAI(prompt, env);
 
         if (imageBase64) {
-          return new Response(JSON.stringify({ response: 'Generated image based on your request.', image_data: imageBase64, type: 'image_gen' }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+          return jsonOk({ response: 'Generated image based on your request.', image_data: imageBase64, type: 'image_gen' });
         }
 
-        return new Response(JSON.stringify({ response: "I couldn't generate the image right now. Please try again with a different description.", type: 'error' }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        return jsonError("I couldn't generate the image right now. Please try again with a different description.");
       } catch (error) {
-        return new Response(JSON.stringify({ response: "I encountered an issue generating the image. Please try again." }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        return jsonError("I encountered an issue generating the image. Please try again.");
+      }
+    }
+
+    if (path === '/v1/image/edit' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const editPrompt = formData.get('message') || formData.get('prompt') || '';
+        const sessionId = formData.get('session_id') || 'default';
+
+        if (!file) return jsonError('No image file provided for editing.');
+        if (!editPrompt.trim()) return jsonError('Please describe how you want to edit the image.');
+
+        const fileBytes = await file.arrayBuffer();
+        const imageBase64 = arrayBufferToBase64(fileBytes);
+
+        let editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
+        if (!editedBase64 && env.AI) {
+          try {
+            const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
+              prompt: editPrompt,
+              image: [...new Uint8Array(fileBytes)],
+            });
+            if (result?.image) editedBase64 = result.image;
+          } catch {}
+        }
+
+        if (editedBase64) {
+          return jsonOk({ response: 'Edited image based on your request.', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        return jsonOk({
+          response: "I wasn't able to edit the image directly. Let me analyze it and suggest what can be done.",
+          session_id: sessionId,
+          type: 'chat',
+        });
+      } catch (error) {
+        return jsonError("I encountered an issue editing the image. Please try again.");
+      }
+    }
+
+    if (path === '/api/image/analyze' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const sessionId = formData.get('session_id') || 'default';
+        const analysisType = formData.get('analysis_type') || 'general';
+        const historyRaw = formData.get('messages') || '';
+
+        if (!file) return jsonError('No image file provided for analysis.');
+
+        const fileBytes = await file.arrayBuffer();
+        const base64 = arrayBufferToBase64(fileBytes);
+        const mimeType = file.type || 'image/jpeg';
+
+        let history = [];
+        if (historyRaw) {
+          try { history = JSON.parse(historyRaw); } catch {}
+        }
+
+        const analysisPrompts = {
+          general: 'Analyze this image in detail. Describe what you see, including objects, people, text, colors, composition, and any notable details.',
+          document: 'Analyze this document image. Extract and read any text content, describe the layout, and summarize the key information.',
+          object: 'Identify and describe the main objects in this image. Provide details about their appearance, quantity, and arrangement.',
+          text: 'Extract and read any text visible in this image. Preserve the original formatting and structure as much as possible.',
+        };
+        const analysisPrompt = analysisPrompts[analysisType] || analysisPrompts.general;
+
+        const userContent = [
+          { type: 'text', text: analysisPrompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+        ];
+        const visionMessages = [
+          { role: 'system', content: 'You are an AI image analysis assistant. Analyze images thoroughly and provide detailed, accurate descriptions.' },
+          ...history,
+          { role: 'user', content: userContent },
+        ];
+
+        let content = await callOpenRouterVision(visionMessages, env);
+        if (!content) {
+          const textMessages = [
+            { role: 'system', content: 'You are an AI image analysis assistant.' },
+            ...history,
+            { role: 'user', content: `${analysisPrompt}\n\n[Image attached for analysis]` },
+          ];
+          content = await callOpenRouter(textMessages, env);
+        }
+        if (content) content = cleanResponse(content);
+        if (!content || !content.trim()) content = "I wasn't able to analyze this image. Please try again with a clearer image.";
+
+        return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
+      } catch (error) {
+        return jsonError("I encountered an issue analyzing the image. Please try again.");
+      }
+    }
+
+    if (path === '/api/tools/search' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const query = body.query || body.q || '';
+        const maxResults = body.max_results || 5;
+        if (!query.trim()) return jsonError('Please provide a search query.');
+
+        const results = await webSearch(query);
+        return jsonOk({ results: results || 'No results found.', query, type: 'search' });
+      } catch (error) {
+        return jsonError('Search failed. Please try again.');
+      }
+    }
+
+    if (path === '/v1/chat/generate-natural-response' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const prompt = body.prompt || '';
+        if (!prompt.trim()) return jsonError('Please provide a prompt.');
+
+        const messages = [
+          { role: 'system', content: 'Generate a natural, conversational response. Be concise and helpful. Never output JSON or structured data.' },
+          { role: 'user', content: prompt },
+        ];
+
+        let content = null;
+        if (env.OPENROUTER_API_KEY) {
+          const raw = await callOpenRouter(messages, env);
+          if (raw) content = cleanResponse(raw);
+        }
+        if (!content) content = await tryPollinations(messages);
+        if (content) content = content.trim();
+        if (!content) content = '';
+
+        return jsonOk({ response: content, type: 'chat' });
+      } catch (error) {
+        return jsonError('Failed to generate response.');
       }
     }
 
     if (path === '/v1/wakeup' && request.method === 'GET') {
-      return new Response(JSON.stringify({ status: 'ok' }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      return jsonOk({ status: 'ok' });
     }
 
     if (path === '/health' && request.method === 'GET') {
-      return new Response(JSON.stringify({ status: 'ok', service: 'acronous-ai' }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      return jsonOk({ status: 'ok', service: 'acronous-ai' });
     }
 
     if (isApiPath(path)) {
-      return new Response(JSON.stringify({ error: 'Not found', message: 'The requested endpoint does not exist' }), { status: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      return jsonOk({ error: 'Not found', message: 'The requested endpoint does not exist' }, 404);
     }
 
     const targetUrl = PAGES_ORIGIN + path + url.search;
