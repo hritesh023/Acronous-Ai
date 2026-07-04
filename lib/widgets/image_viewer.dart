@@ -1,9 +1,8 @@
 import 'dart:convert';
-import 'dart:html' as html;
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:web/web.dart' as web;
 
 class ImageViewer extends StatefulWidget {
   final Uint8List imageBytes;
@@ -51,9 +50,10 @@ class _ImageViewerState extends State<ImageViewer>
     if (kIsWeb) {
       final blob = base64Encode(widget.imageBytes);
       final dataUri = 'data:image/png;base64,$blob';
-      final anchor = html.AnchorElement(href: dataUri)
-        ..target = '_blank'
-        ..download = name;
+      final anchor = web.HTMLAnchorElement();
+      anchor.href = dataUri;
+      anchor.target = '_blank';
+      anchor.download = name;
       anchor.click();
     }
   }

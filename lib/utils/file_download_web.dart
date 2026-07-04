@@ -1,12 +1,13 @@
 import 'dart:convert';
-import 'dart:html' as html;
 import 'dart:typed_data';
+import 'package:web/web.dart' as web;
 
 void downloadFile(Uint8List bytes, String name) {
   final blob = base64Encode(bytes);
   final dataUri = 'data:application/octet-stream;base64,$blob';
-  final anchor = html.AnchorElement(href: dataUri)
-    ..target = '_blank'
-    ..download = name;
+  final anchor = web.HTMLAnchorElement();
+  anchor.href = dataUri;
+  anchor.target = '_blank';
+  anchor.download = name;
   anchor.click();
 }

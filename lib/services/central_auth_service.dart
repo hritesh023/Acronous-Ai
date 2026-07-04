@@ -1,9 +1,8 @@
 import 'dart:convert';
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:web/web.dart' as web;
 
 class CentralAuthService {
   static final CentralAuthService instance = CentralAuthService._();
@@ -28,7 +27,7 @@ class CentralAuthService {
 
   String get _authUrl {
     try {
-      final uri = Uri.parse(html.window.location.href);
+      final uri = Uri.parse(web.window.location.href);
       final host = uri.host;
       // Local dev: use current origin. Production: centralized auth at acronous.com.
       if (host == 'localhost' || host == '127.0.0.1') {
@@ -86,14 +85,14 @@ class CentralAuthService {
 
   void _extractTokenFromUrl() {
     try {
-      final uri = Uri.parse(html.window.location.href);
+      final uri = Uri.parse(web.window.location.href);
       final token = uri.queryParameters['token'];
       if (token != null && token.isNotEmpty) {
         _token = token;
         _tokenFromUrl = true;
         // Clean URL without reloading
         final cleanUrl = uri.origin + uri.path;
-        html.window.history.replaceState(null, '', cleanUrl);
+        web.window.history.replaceState(null, '', cleanUrl);
       }
     } catch (_) {}
   }
@@ -227,8 +226,8 @@ class CentralAuthService {
   }
 
   void redirectToLogin() {
-    final currentUrl = html.window.location.href;
-    html.window.location.href = '$_authUrl/login?_=${DateTime.now().millisecondsSinceEpoch}&redirect=${Uri.encodeComponent(currentUrl)}';
+    final currentUrl = web.window.location.href;
+    web.window.location.href = '$_authUrl/login?_=${DateTime.now().millisecondsSinceEpoch}&redirect=${Uri.encodeComponent(currentUrl)}';
   }
 
   String get authUrl => _authUrl;

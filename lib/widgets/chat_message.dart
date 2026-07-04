@@ -1,7 +1,7 @@
-import 'dart:io';
 import 'dart:convert';
-import 'dart:html' as html;
+import 'dart:io' show File;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import '../constants/app_constants.dart';
 import '../models/message.dart';
 import '../providers/chat_provider.dart';
+import '../utils/file_save.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/markdown_renderer.dart';
 
@@ -513,8 +514,7 @@ class ChatMessageWidget extends StatelessWidget {
 
   void _saveToDisk(BuildContext context, Uint8List bytes, String name) {
     try {
-      final file = File('${Directory.systemTemp.path}/$name');
-      file.writeAsBytesSync(bytes);
+      saveFileToDisk(bytes, name);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Saved: $name'),
@@ -576,9 +576,10 @@ class ChatMessageWidget extends StatelessWidget {
     final mime = mimeTypes[ext] ?? 'application/octet-stream';
     final blob = base64Encode(bytes);
     final dataUri = 'data:$mime;base64,$blob';
-    final anchor = html.AnchorElement(href: dataUri)
-      ..target = '_blank'
-      ..download = name;
+    final anchor = web.HTMLAnchorElement();
+    anchor.href = dataUri;
+    anchor.target = '_blank';
+    anchor.download = name;
     anchor.click();
   }
 
