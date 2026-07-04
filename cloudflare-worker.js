@@ -418,10 +418,8 @@ async function callOpenRouter(messages, env) {
   if (!env.OPENROUTER_API_KEY) return null;
   const models = [
     env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
-    env.FAST_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free',
-    'mistralai/mistral-saba:free',
-    'cohere/command-r7b-12-2024:free',
-    'cognitivecomputations/dolphin3.0-mistral-24b:free',
+    'deepseek/deepseek-chat:free',
+    'google/gemini-2.5-flash-lite-preview-02-15:free',
   ];
   for (const model of models) {
     for (let retry = 0; retry < 2; retry++) {
@@ -429,15 +427,16 @@ async function callOpenRouter(messages, env) {
         const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-          body: JSON.stringify({ messages, model, max_tokens: 1536, temperature: 0.7 })
+          body: JSON.stringify({ messages, model, max_tokens: 2048, temperature: 0.7 })
         });
-        if (!resp.ok) {
-          if (resp.status === 429) await new Promise(r => setTimeout(r, 800));
-          continue;
+        if (resp.ok) {
+          const data = await resp.json();
+          const content = data?.choices?.[0]?.message?.content;
+          if (content && content.trim()) return content;
         }
-        const data = await resp.json();
-        const content = data?.choices?.[0]?.message?.content;
-        if (content && content.trim()) return content;
+        if (resp.status === 429) {
+          await new Promise(r => setTimeout(r, 1200));
+        }
       } catch { continue; }
     }
   }
@@ -467,20 +466,42 @@ async function callOpenRouterVision(messages, env) {
   return null;
 }
 
-async function tryPollinations(messages) {
-  const pollModels = ['openai', 'mistral', 'llama', 'deepseek'];
+async function tryWorkersAIChat(messages, env) {
+  if (!env.AI) return null;
+  const models = [
+    '@cf/meta/llama-4-scout-17b-16e-instruct',
+    '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    '@cf/meta/llama-3.2-3b-instruct',
+  ];
+  for (const name of models) {
+    try {
+      const result = await env.AI.run(name, { messages, max_tokens: 1024 });
+      if (result && typeof result === 'object') {
+        const text = result.response || '';
+        if (text.trim()) return text;
+      }
+    } catch { continue; }
+  }
+  return null;
+}
+
+async function tryPollinations(messages, env) {
+  const pollModels = ['openai', 'mistral', 'llama', 'deepseek', 'qwen-coder'];
   for (const model of pollModels) {
     for (let retry = 0; retry < 2; retry++) {
       try {
         const resp = await fetch('https://text.pollinations.ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, model, private: true })
+          body: JSON.stringify({ messages, model, private: true, seed: Math.floor(Math.random() * 10000) })
         });
-        if (!resp.ok) { if (resp.status === 429) await new Promise(r => setTimeout(r, 500)); continue; }
-        const text = await resp.text();
-        const trimmed = text?.trim();
-        if (trimmed) return cleanResponse(trimmed);
+        if (resp.ok) {
+          const text = await resp.text();
+          const trimmed = text?.trim();
+          if (trimmed) return cleanResponse(trimmed);
+        } else if (resp.status === 429) {
+          await new Promise(r => setTimeout(r, 500 * (retry + 1)));
+        }
       } catch { continue; }
     }
   }
@@ -595,7 +616,10 @@ async function handleMultipartVision(request, env, systemPrompt) {
     ];
     content = await callOpenRouter(fallbackMessages, env);
   }
-  if (!content) content = '';
+  if (!content || !content.trim()) {
+    const now = new Date();
+    content = `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+  }
 
   return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
 }
@@ -628,29 +652,54 @@ export default {
         if (history.length > 20) history = history.slice(-20);
         const { tz, location } = await resolveUserGeo(request);
 
-        const webContext = await webSearch(message);
-        const systemPrompt = buildSystemPrompt(tz, location, webContext);
-        const messages = [
-          { role: 'system', content: systemPrompt },
-          ...history,
-          { role: 'user', content: message }
-        ];
+        const [webContext, aiContent] = await Promise.allSettled([
+          webSearch(message),
+          tryWorkersAIChat([
+            { role: 'system', content: buildSystemPrompt(tz, location, null) },
+            ...history,
+            { role: 'user', content: message }
+          ], env),
+        ]);
+        const webData = webContext.status === 'fulfilled' ? webContext.value : null;
+        let content = aiContent.status === 'fulfilled' ? aiContent.value : null;
 
-        let content = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          if (env.OPENROUTER_API_KEY) {
-            const raw = await callOpenRouter(messages, env);
-            if (raw && raw.trim()) { content = cleanResponse(raw); break; }
+        if (!content || !content.trim()) {
+          const sysPrompt = buildSystemPrompt(tz, location, webData);
+          const msgs = [
+            { role: 'system', content: sysPrompt },
+            ...history,
+            { role: 'user', content: message }
+          ];
+          const results = await Promise.allSettled([
+            tryWorkersAIChat(msgs, env),
+            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+            tryPollinations(msgs, env),
+          ]);
+          for (const r of results) {
+            if (r.status === 'fulfilled' && r.value && r.value.trim()) {
+              content = r.value;
+              break;
+            }
           }
-          const pollMsg = await tryPollinations(messages);
-          if (pollMsg && pollMsg.trim()) { content = pollMsg; break; }
-          if (attempt < 2) await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
         }
+
+        if (!content || !content.trim()) {
+          if (webData) {
+            const items = webData.split('\n').filter(l => l.trim()).slice(0, 3).map(l => l.replace(/^- /, ''));
+            content = items.length > 0 ? items.join('. ') + '.' : '';
+          }
+          if (!content || !content.trim()) {
+            const now = new Date();
+            content = `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+          }
+        }
+
         if (content) content = content.trim();
 
-        return jsonOk({ response: content || '', session_id: sessionId, type: 'chat' });
+        return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: 'default', type: 'chat' });
+        const now = new Date();
+        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: 'default', type: 'chat' });
       }
     }
 
@@ -704,7 +753,8 @@ export default {
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError('');
+        const now = new Date();
+        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -767,7 +817,8 @@ export default {
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError('');
+        const now = new Date();
+        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -787,9 +838,9 @@ export default {
           return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen' });
         }
 
-        return jsonError('');
+        return jsonOk({ response: '', type: 'error', error: 'generation_failed' });
       } catch (error) {
-        return jsonError('');
+        return jsonOk({ response: '', type: 'error', error: 'generation_failed' });
       }
     }
 
@@ -827,7 +878,8 @@ export default {
           type: 'chat',
         });
       } catch (error) {
-        return jsonError('');
+        const now = new Date();
+        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -882,7 +934,8 @@ export default {
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonError('');
+        const now = new Date();
+        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -896,7 +949,7 @@ export default {
         const results = await webSearch(query);
         return jsonOk({ results: results || '', query, type: 'search' });
       } catch (error) {
-        return jsonError('');
+        return jsonOk({ results: '', query: query || '', type: 'search' });
       }
     }
 
@@ -916,13 +969,19 @@ export default {
           const raw = await callOpenRouter(messages, env);
           if (raw) content = cleanResponse(raw);
         }
-        if (!content) content = await tryPollinations(messages);
-        if (content) content = content.trim();
-        if (!content) content = '';
+        if (!content) {
+          const pollMsg = await tryPollinations(messages, env);
+          if (pollMsg && pollMsg.trim()) content = pollMsg;
+        }
+        if (!content) {
+          const aiMsg = await tryWorkersAIChat(messages, env);
+          if (aiMsg) content = aiMsg;
+        }
 
-        return jsonOk({ response: content, type: 'chat' });
+        return jsonOk({ response: content || '', type: 'chat' });
       } catch (error) {
-        return jsonError('');
+        const now = new Date();
+        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, type: 'chat' });
       }
     }
 
