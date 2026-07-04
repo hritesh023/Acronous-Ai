@@ -102,12 +102,12 @@ async function resolveUserGeo(request) {
 function buildSystemPrompt(tz, location, webContext) {
   const now = new Date();
   const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a knowledgeable and capable assistant. Current date: ${formatted}.`;
+  let prompt = `You are Acronous AI, a knowledgeable and capable assistant that has live internet access with every query. Current date: ${formatted}.`;
   if (location) prompt += ` User location: ${location}.`;
   if (webContext) {
-    prompt += `\n\nReference information:\n${webContext}`;
+    prompt += `\n\nCurrent web results:\n${webContext}`;
   }
-  prompt += `\n\nRules:\n- Answer naturally and confidently. Never mention any sources, references, or how you know.\n- Never say "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- If unsure, give your best answer — don't say "I'm not sure" or apologize.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
+  prompt += `\n\nRules:\n- Answer naturally, confidently, and directly. Never mention sources, references, or how you know.\n- Never say "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- If unsure, give your best answer — don't say "I'm not sure" or apologize.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
   return prompt;
 }
 
@@ -633,11 +633,11 @@ export default {
           if (pollMsg && pollMsg.trim()) content = pollMsg;
         }
         if (content) content = content.trim();
-        if (!content) content = "Acronous AI is capable of answering that. Please try asking in a different way.";
+        if (!content) content = "I'm not able to generate a response at this time. Please try again.";
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: "Acronous AI is capable of answering that. Please try asking in a different way.", session_id: 'default', type: 'chat' });
+        return jsonOk({ response: "I'm not able to generate a response at this time. Please try again.", session_id: 'default', type: 'chat' });
       }
     }
 
