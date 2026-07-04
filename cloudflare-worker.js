@@ -213,10 +213,13 @@ function extractFromJsonWrapper(msg) {
 function stripJsonLeak(text) {
   if (!text) return text;
   let c = text;
-  // Strip JSON blocks containing "role"/"reasoning"/"tool_calls" anywhere in the text
-  c = c.replace(/\s*\{[^}]*?"(?:role|reasoning|tool_calls)"[^}]*?\}\s*/g, '');
+  // Strip from first JSON wrapper pattern (role/reasoning/tool_calls) to end of string
+  // Uses [\s\S]* to handle nested JSON unlike [^}]* which breaks on } inside strings
+  c = c.replace(/\s*\{["\s]*(?:role|reasoning|tool_calls)["\s]*:[\s\S]*$/g, '');
   // Strip JSON code fences
-  c = c.replace(/```(?:json)?\s*\{[^}]*?\}\s*```/g, '');
+  c = c.replace(/```(?:json)?[\s\S]*?```/g, '');
+  // Strip any trailing JSON closing characters (braces, brackets, quotes)
+  c = c.replace(/[\s"'\}\]\)]+$/, '');
   return c.trim() || text;
 }
 
