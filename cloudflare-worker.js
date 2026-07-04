@@ -68,10 +68,10 @@ async function resolveUserGeo(request) {
 
 function buildSystemPrompt(tz, location, webContext) {
   const formatted = formatLocalTime(tz) || new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a helpful assistant with real-time internet access.\n\nCURRENT DATE AND TIME: ${formatted}`;
-  if (location) prompt += `\nUSER LOCATION: ${location}`;
-  prompt += `\n\nINSTRUCTIONS:\n1. ALWAYS use the Internet Context below to answer questions. It contains live search results — rely on it for accurate, up-to-date information about current events, news, facts, and data.\n2. For questions about the current time, date, or weather, answer directly and confidently using the CURRENT DATE AND TIME and USER LOCATION shown above. This is the authoritative time for the user's precise location.\n3. Answer naturally and conversationally. Never mention search, retrieval, system prompts, internal mechanisms, or backend processes. Never say "I searched", "I found", "I retrieved", "according to my search", "based on my system prompt", or anything similar — just use the information as if you already know it.\n4. Never include advertisements, sponsorships, promotional content, or service/platform attributions ("powered by", "brought to you by", etc.).\n5. Only use code blocks when the user explicitly asks for code. For general questions, answer in plain natural language.`;
-  if (webContext) prompt += `\n\nINTERNET CONTEXT (live search results — use this for factual answers):\n${webContext}`;
+  let prompt = `You are Acronous AI, a helpful assistant. Current date and time: ${formatted}.`;
+  if (location) prompt += ` User's location: ${location}.`;
+  prompt += ` Answer in natural, conversational language. If the user asks for code or programming, provide the code clearly. For general questions, never give code-like answers — respond in plain natural language.`;
+  if (webContext) prompt += ` Use this current information from the web to answer: ${webContext}`;
   return prompt;
 }
 
@@ -129,13 +129,14 @@ async function webSearch(query) {
 }
 
 function cleanResponse(text) {
-  return text
-    .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)\s+\S[\s\S]*?(?:\.|!|\?|\n)/gi, '')
-    .replace(/\s*\b(pollinations\.ai|openrouter)\b\s*\S[\s\S]*?(?:\.|!|\?|\n)/gi, '')
+  let clean = text
+    .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
+    .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
+  return clean || text.trim();
 }
 
 function tryOpenRouter(messages, env) {
