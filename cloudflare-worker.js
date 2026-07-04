@@ -72,7 +72,9 @@ function buildSystemPrompt(tz, location, webContext) {
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
   if (webContext) {
-    prompt += `\n\nACCURACY RULE — CRITICAL: Live web search results are provided below. You MUST use these as your PRIMARY source for ALL factual information — including politics, current events, science, definitions, and any verifiable facts. Do NOT rely on your training data for any factual claims; training data may be outdated. If the web results don't cover the specific question, then you may use your training data, but clearly indicate when you're uncertain.\n\nWeb results:\n${webContext}`;
+    prompt += `\n\nACCURACY RULE — CRITICAL: Live web search results are below. You MUST use them as your PRIMARY source for ALL factual information (politics, current events, science, definitions, etc.). Do NOT rely on your training data — it may be outdated. If web results don't cover the question, say you don't have enough information rather than guessing or using outdated knowledge.\n\nWeb results:\n${webContext}`;
+  } else {
+    prompt += `\n\nACCURACY RULE: No live web results are available. Only answer if you are highly confident in the accuracy of your training data. For any factual, political, or current-event question where you are not 100% certain, say "I don't have enough information to answer that accurately" instead of guessing. Never fabricate information.`;
   }
   prompt += `\n\nOUTPUT RULE — ABSOLUTE: Never output JSON, XML, YAML, or any structured data. Never wrap your response in code blocks unless the user explicitly asks for code. Never include your reasoning, thought process, internal steps, or search details. Never output objects with keys like "role", "content", "reasoning", "tool_calls". Respond ONLY in plain natural language — paragraphs or simple dash bullet points. This is critical: the user should never see JSON or code in your response.`;
   return prompt;
