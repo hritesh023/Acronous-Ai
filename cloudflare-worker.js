@@ -68,36 +68,36 @@ async function resolveUserGeo(request) {
 
 function buildSystemPrompt(tz, location, webContext) {
   const formatted = formatLocalTime(tz) || new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a helpful assistant. Current date and time: ${formatted}.`;
+  let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
-  prompt += ` Answer in natural, conversational language. If the user asks for code or programming, provide the code clearly. For general questions, never give code-like answers — respond in plain natural language.`;
-  if (webContext) prompt += ` Use this current information from the web to answer: ${webContext}`;
+  prompt += ` Answer in natural, conversational language.`;
+  if (webContext) {
+    prompt += `\n\nIMPORTANT: Live web search results are provided below. You MUST use these to answer — they contain current, up-to-date information. Do not rely on your training data for current events, facts, or data. Only use your training data for general knowledge or when the web results don't cover the topic.\n\nWeb results:\n${webContext}`;
+  }
+  prompt += `\n\nIf the user asks for code or programming, provide the code clearly. For general questions, never give code-like answers — respond in plain natural language.`;
   return prompt;
 }
 
 async function webSearch(query) {
-  const results = [];
-  const errors = [];
-
-  // Primary: DuckDuckGo HTML search with robust parsing
+  // Strategy 1: DuckDuckGo HTML search (most comprehensive)
   try {
     const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
     });
     if (resp.ok) {
       const html = await resp.text();
+      const results = [];
       const seen = new Set();
-      const resultBlocks = html.split('<a rel="nofollow" class="result__a"');
-      for (let i = 1; i < resultBlocks.length && results.length < 5; i++) {
-        const block = resultBlocks[i];
+      const blocks = html.split('<a rel="nofollow" class="result__a"');
+      for (let i = 1; i < blocks.length && results.length < 5; i++) {
+        const block = blocks[i];
         const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
         const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-        const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
         if (titleMatch) {
-          const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").trim();
-          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").trim() : '';
-          const key = title.toLowerCase();
-          if (title && !seen.has(key)) {
+          const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) {
             seen.add(key);
             results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
           }
@@ -105,9 +105,37 @@ async function webSearch(query) {
       }
       if (results.length > 0) return results.join('\n');
     }
-  } catch (e) { errors.push(e.message); }
+  } catch {}
 
-  // Fallback 1: DuckDuckGo Instant Answer API
+  // Strategy 2: DuckDuckGo Lite API (simpler HTML, very stable)
+  try {
+    const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+    });
+    if (resp.ok) {
+      const html = await resp.text();
+      const results = [];
+      const seen = new Set();
+      const rows = html.split('<tr class="result">');
+      for (let i = 1; i < rows.length && results.length < 5; i++) {
+        const row = rows[i];
+        const linkMatch = row.match(/<a[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/);
+        const snippetMatch = row.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/);
+        if (linkMatch) {
+          const title = linkMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) {
+            seen.add(key);
+            results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+          }
+        }
+      }
+      if (results.length > 0) return results.join('\n');
+    }
+  } catch {}
+
+  // Strategy 3: DuckDuckGo Instant Answer API (direct answers for queries like time, weather)
   try {
     const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&skip_disambig=1`);
     if (resp.ok) {
@@ -116,14 +144,13 @@ async function webSearch(query) {
       if (data.Answer) return `- ${data.Answer}`;
       if (data.Abstract) return `- ${data.Abstract}`;
       if (data.RelatedTopics?.length > 0) {
-        const topics = data.RelatedTopics.slice(0, 5);
-        return topics.map(t => {
+        return data.RelatedTopics.slice(0, 5).map(t => {
           const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
           return text ? `- ${text}` : null;
         }).filter(Boolean).join('\n');
       }
     }
-  } catch (e) { errors.push(e.message); }
+  } catch {}
 
   return null;
 }
@@ -144,7 +171,7 @@ function tryOpenRouter(messages, env) {
   return fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-    body: JSON.stringify({ messages, model: env.OPENROUTER_MODEL, max_tokens: 1024, temperature: 0.7 })
+    body: JSON.stringify({ messages, model: env.OPENROUTER_MODEL, max_tokens: 1536, temperature: 0.7 })
   }).then(async resp => {
     if (!resp.ok) return null;
     const data = await resp.json();
