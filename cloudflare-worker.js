@@ -91,16 +91,18 @@ async function tryPollinations(message, systemPrompt) {
   } catch { return null; }
 }
 
-async function tryHuggingFaceImage(prompt) {
+async function tryOpenRouterImage(prompt, env) {
+  if (!env.OPENROUTER_API_KEY) return null;
   try {
-    const resp = await fetch('https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0', {
+    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/images/generations`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ inputs: prompt })
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model: 'black-forest-labs/FLUX.1-schnell-free', prompt, n: 1 })
     });
     if (!resp.ok) return null;
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(await resp.arrayBuffer())));
-    return base64;
+    const data = await resp.json();
+    if (data?.data?.[0]?.b64_json) return data.data[0].b64_json;
+    return null;
   } catch { return null; }
 }
 
@@ -169,8 +171,8 @@ export default {
           return new Response(JSON.stringify({ response: 'Please provide a description for the image.', type: 'error' }), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
         }
 
-        let imageBase64 = await tryHuggingFaceImage(prompt);
-        if (!imageBase64) imageBase64 = await tryPollinationsImage(prompt);
+        let imageBase64 = await tryPollinationsImage(prompt);
+        if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
         if (!imageBase64) imageBase64 = await tryWorkersAI(prompt, env);
 
         if (imageBase64) {
