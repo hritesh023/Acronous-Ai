@@ -155,6 +155,21 @@ async function webSearch(query) {
   return null;
 }
 
+const WEB_SEARCH_TOOL = {
+  type: 'function',
+  function: {
+    name: 'web_search',
+    description: 'Search the internet for current, up-to-date information about any topic. Use this when you need recent news, live data, facts that may have changed, or any information beyond your training data.',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'The search query to look up on the internet' }
+      },
+      required: ['query']
+    }
+  }
+};
+
 function cleanResponse(text) {
   let clean = text
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
@@ -166,18 +181,45 @@ function cleanResponse(text) {
   return clean || text.trim();
 }
 
-function tryOpenRouter(messages, env) {
+async function callOpenRouter(messages, env, tools) {
   if (!env.OPENROUTER_API_KEY) return null;
+  const body = { messages, model: env.OPENROUTER_MODEL, max_tokens: 1536, temperature: 0.7 };
+  if (tools) body.tools = tools;
   return fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-    body: JSON.stringify({ messages, model: env.OPENROUTER_MODEL, max_tokens: 1536, temperature: 0.7 })
+    body: JSON.stringify(body)
   }).then(async resp => {
     if (!resp.ok) return null;
     const data = await resp.json();
-    const content = data?.choices?.[0]?.message?.content;
-    return (content && content.trim()) ? cleanResponse(content) : null;
+    return data?.choices?.[0]?.message || null;
   }).catch(() => null);
+}
+
+async function callOpenRouterWithTools(messages, env) {
+  let msg = await callOpenRouter(messages, env, [WEB_SEARCH_TOOL]);
+  if (!msg) return null;
+
+  const msgs = [...messages];
+  let loopCount = 0;
+  while (msg.tool_calls?.length > 0 && loopCount < 3) {
+    loopCount++;
+    msgs.push({ role: 'assistant', content: msg.content || null, tool_calls: msg.tool_calls });
+
+    for (const tc of msg.tool_calls) {
+      if (tc.function.name === 'web_search') {
+        let query = '';
+        try { query = JSON.parse(tc.function.arguments).query || ''; } catch {}
+        const results = await webSearch(query);
+        msgs.push({ role: 'tool', tool_call_id: tc.id, content: results || 'No search results found for that query.' });
+      }
+    }
+
+    msg = await callOpenRouter(msgs, env);
+    if (!msg) return null;
+  }
+
+  return msg;
 }
 
 function tryPollinations(messages) {
@@ -251,9 +293,7 @@ export default {
         const history = body.messages || [];
         const { tz, location } = await resolveUserGeo(request);
 
-        const webContext = await webSearch(message);
-
-        const systemPrompt = buildSystemPrompt(tz, location, webContext);
+        const systemPrompt = buildSystemPrompt(tz, location);
 
         const messages = [
           { role: 'system', content: systemPrompt },
@@ -261,8 +301,24 @@ export default {
           { role: 'user', content: message }
         ];
 
-        let content = await tryOpenRouter(messages, env);
-        if (!content) content = await tryPollinations(messages);
+        let content = null;
+
+        if (env.OPENROUTER_API_KEY) {
+          const msg = await callOpenRouterWithTools(messages, env);
+          if (msg?.content) content = cleanResponse(msg.content);
+        }
+
+        if (!content) {
+          const webContext = await webSearch(message);
+          const fbSystemPrompt = buildSystemPrompt(tz, location, webContext);
+          const fbMessages = [
+            { role: 'system', content: fbSystemPrompt },
+            ...history,
+            { role: 'user', content: message }
+          ];
+          content = await tryPollinations(fbMessages);
+        }
+
         if (!content || content.trim() === '') content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
 
         return new Response(JSON.stringify({ response: content, session_id: sessionId, type: 'chat' }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
