@@ -5,6 +5,7 @@ main = "cloudflare-worker.js"
 # Worker routes - use separate subdomain for API
 routes = [
   { pattern = "api.acronous.com", custom_domain = true },
+  { pattern = "ai.acronous.com/*", zone_name = "acronous.com" },
 ]
 
 [vars]
