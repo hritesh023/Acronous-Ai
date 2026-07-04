@@ -564,20 +564,12 @@ class ApiClient {
     });
   }
 
-  Future<Map<String, dynamic>> generateNaturalResponse(
-    String prompt,
-  ) async {
-    return _post('/v1/chat/generate-natural-response', {
-      'prompt': prompt,
-    });
+  Future<Map<String, dynamic>> generateNaturalResponse(String prompt) async {
+    return _post('/v1/chat/generate-natural-response', {'prompt': prompt});
   }
 
-  Future<Map<String, dynamic>> generateFriendlyMessage(
-    String prompt,
-  ) async {
-    return _post('/v1/chat/generate-friendly-message', {
-      'prompt': prompt,
-    });
+  Future<Map<String, dynamic>> generateFriendlyMessage(String prompt) async {
+    return _post('/v1/chat/generate-friendly-message', {'prompt': prompt});
   }
 
   Future<Map<String, dynamic>> transcribeAudio(File file) async {
@@ -735,7 +727,7 @@ class ApiClient {
     return _post('/api/tools/generate-file', {
       'content': content,
       'format': format,
-      if (filename != null) 'filename': filename,
+      'filename': ?filename,
     });
   }
 

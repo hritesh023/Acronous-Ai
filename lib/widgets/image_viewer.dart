@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:html' as html;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -74,11 +73,7 @@ class _ImageViewerState extends State<ImageViewer>
           ),
           actions: [
             IconButton(
-              icon: Icon(
-                Icons.download_rounded,
-                color: Colors.white,
-                size: 24,
-              ),
+              icon: Icon(Icons.download_rounded, color: Colors.white, size: 24),
               tooltip: 'Download image',
               onPressed: _downloadImage,
             ),

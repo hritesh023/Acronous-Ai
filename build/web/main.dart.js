@@ -47350,7 +47350,7 @@ n.vj()
 s=1
 break
 case 15:a2=!0
-if(!(J.bq(f)===0&&!J.d(e,"image_gen")))if(!(J.bq(j)===0&&J.d(e,"image_gen")))a2=J.bq(i)===0&&!J.d(e,"error")&&!J.d(e,"chat")
+if(!(J.bq(f)===0&&!J.d(e,"image_gen")))if(!(J.bq(j)===0&&J.d(e,"image_gen")))a2=J.bq(i)===0&&!J.d(e,"error")&&!J.d(e,"chat")&&!J.d(e,"image_gen")
 s=a2?19:20
 break
 case 19:s=l<2?21:22

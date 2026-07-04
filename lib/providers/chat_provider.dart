@@ -451,7 +451,7 @@ class ChatProvider extends ChangeNotifier {
         // Ensure no empty responses are processed - this is a critical safeguard
         if ((rawContent.isEmpty && respType != 'image_gen') || 
             (imageData.isEmpty && respType == 'image_gen') || 
-            (fileData.isEmpty && respType != 'error' && respType != 'chat')) {
+            (fileData.isEmpty && respType != 'error' && respType != 'chat' && respType != 'image_gen')) {
           if (attempt < 2) {
             await Future.delayed(const Duration(seconds: 2));
             continue;
