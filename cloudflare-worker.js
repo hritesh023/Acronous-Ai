@@ -20,7 +20,25 @@ const SEARXNG_URLS = [
   'https://s.mble.dk/search',
   'https://searx.tyil.nl/search',
   'https://search.us.projectsegfau.lt/search',
+  'https://searx.tiekoetter.com/search',
+  'https://searx.priv.au/search',
+  'https://searx.daetalytica.io/search',
+  'https://searx.wtfbr.net/search',
+  'https://searx.si/search',
+  'https://searx.net.ec/search',
+  'https://searx.gnu.org.ua/search',
+  'https://searx.fmac.xyz/search',
+  'https://searx.hu/search',
+  'https://searx.no/search',
+  'https://searx.se/search',
+  'https://searx.de/search',
+  'https://searx.chef.search',
+  'https://searx.mv/search',
+  'https://searx.parity.team/search',
+  'https://searx.zzls.xyz/search',
 ];
+
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function isApiPath(path) {
   return path === '/v1/chat' || path === '/v1/wakeup' || path === '/health' ||
@@ -93,38 +111,41 @@ function buildSystemPrompt(tz, location, webContext) {
   return prompt;
 }
 
-async function searchSearxng(query) {
-  const fetches = SEARXNG_URLS.map(searxngUrl =>
+function stripHtml(html) {
+  return html.replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+}
+
+function parseResults(items) {
+  return items.slice(0, 5).map(r => {
+    const title = r.title || '';
+    const content = (r.content || r.snippet || '').slice(0, 200);
+    return `- ${title}${content ? `: ${content}` : ''}`;
+  }).filter(Boolean).join('\n');
+}
+
+async function searchSearxng(query, timeout = 3500) {
+  const fetches = SEARXNG_URLS.map(url =>
     (async () => {
       try {
-        const searchUrl = new URL(searxngUrl);
-        searchUrl.searchParams.set('q', query);
-        searchUrl.searchParams.set('format', 'json');
-        searchUrl.searchParams.set('language', 'en');
-        searchUrl.searchParams.set('pageno', '1');
-        searchUrl.searchParams.set('categories', 'general');
-
-        const response = await fetch(searchUrl.toString(), {
-          headers: { 'Accept': 'application/json', 'User-Agent': 'Acronous-AI/1.0.0' },
-          signal: AbortSignal.timeout(4000),
+        const u = new URL(url);
+        u.searchParams.set('q', query);
+        u.searchParams.set('format', 'json');
+        u.searchParams.set('language', 'en');
+        u.searchParams.set('pageno', '1');
+        u.searchParams.set('categories', 'general');
+        const resp = await fetch(u.toString(), {
+          headers: { 'Accept': 'application/json', 'User-Agent': 'Acronous-AI/2.0' },
+          signal: AbortSignal.timeout(timeout),
         });
-        if (!response.ok) return null;
-
-        const data = await response.json();
-        const rawResults = data.results || [];
-        if (rawResults.length === 0) return null;
-
-        const items = rawResults.slice(0, 5).map(r => {
-          const title = r.title || '';
-          const content = (r.content || r.snippet || '').slice(0, 200);
-          return `- ${title}${content ? `: ${content}` : ''}`;
-        }).filter(Boolean).join('\n');
-        if (items.length > 3000) return items.slice(0, 3000);
-        return items;
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        const raw = data.results || [];
+        if (raw.length === 0) return null;
+        const items = parseResults(raw);
+        return items.length > 3000 ? items.slice(0, 3000) : items;
       } catch { return null; }
     })()
   );
-
   const results = await Promise.allSettled(fetches);
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value) return r.value;
@@ -132,112 +153,176 @@ async function searchSearxng(query) {
   return null;
 }
 
-async function duckDuckGoSearch(q) {
-  try {
-    const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (resp.ok) {
+async function duckDuckGoSearch(query) {
+  const strategies = [
+    async () => {
+      const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+        headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return null;
       const html = await resp.text();
-      if (html.includes('result__a') || html.includes('result__snippet')) {
-        const results = [];
-        const seen = new Set();
-        const blocks = html.split('<a rel="nofollow" class="result__a"');
-        for (let i = 1; i < blocks.length && results.length < 5; i++) {
-          const block = blocks[i];
-          const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
-          const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-          if (titleMatch) {
-            const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
-            const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
-            const key = title.toLowerCase().slice(0, 50);
-            if (title && title.length > 2 && !seen.has(key)) {
-              seen.add(key);
-              results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
-            }
-          }
+      const results = []; const seen = new Set();
+      const blocks = html.split('<a rel="nofollow" class="result__a"');
+      for (let i = 1; i < blocks.length && results.length < 5; i++) {
+        const b = blocks[i];
+        const t = b.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+        const s = b.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+        if (t) {
+          const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
         }
-        if (results.length > 0) return results.join('\n');
       }
-    }
-  } catch {}
-
-  try {
-    const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (resp.ok) {
+      return results.length > 0 ? results.join('\n') : null;
+    },
+    async () => {
+      const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return null;
       const html = await resp.text();
-      if (html.includes('result-link')) {
-        const results = [];
-        const seen = new Set();
-        const rows = html.split('<tr class="result">');
-        for (let i = 1; i < rows.length && results.length < 5; i++) {
-          const row = rows[i];
-          const linkMatch = row.match(/<a[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/);
-          const snippetMatch = row.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/);
-          if (linkMatch) {
-            const title = linkMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
-            const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
-            const key = title.toLowerCase().slice(0, 50);
-            if (title && title.length > 2 && !seen.has(key)) {
-              seen.add(key);
-              results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
-            }
-          }
+      const results = []; const seen = new Set();
+      const rows = html.split('<tr class="result">');
+      for (let i = 1; i < rows.length && results.length < 5; i++) {
+        const row = rows[i];
+        const link = row.match(/<a[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/);
+        const snip = row.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/);
+        if (link) {
+          const title = stripHtml(link[1]); const snippet = snip ? stripHtml(snip[1]) : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
         }
-        if (results.length > 0) return results.join('\n');
       }
-    }
-  } catch {}
-
-  try {
-    const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&skip_disambig=1`, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (resp.ok) {
+      return results.length > 0 ? results.join('\n') : null;
+    },
+    async () => {
+      const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000),
+      });
+      if (!resp.ok) return null;
       const data = await resp.json();
       if (data.AbstractText) return `- ${data.AbstractText}`;
       if (data.Answer) return `- ${data.Answer}`;
-      if (data.Abstract) return `- ${data.Abstract}`;
       if (data.RelatedTopics?.length > 0) {
         return data.RelatedTopics.slice(0, 5).map(t => {
-          const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
+          const text = t.Text || (t.Result ? stripHtml(t.Result) : '');
           return text ? `- ${text}` : null;
         }).filter(Boolean).join('\n');
       }
-    }
-  } catch {}
-
+      return null;
+    },
+    async () => {
+      const form = new FormData();
+      form.append('q', query);
+      const resp = await fetch('https://html.duckduckgo.com/html/', {
+        method: 'POST', body: form,
+        headers: { 'User-Agent': UA },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return null;
+      const html = await resp.text();
+      const results = []; const seen = new Set();
+      const blocks = html.split('<a rel="nofollow" class="result__a"');
+      for (let i = 1; i < blocks.length && results.length < 5; i++) {
+        const b = blocks[i];
+        const t = b.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+        const s = b.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+        if (t) {
+          const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
+        }
+      }
+      return results.length > 0 ? results.join('\n') : null;
+    },
+  ];
+  const results = await Promise.allSettled(strategies.map(fn => fn()));
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) return r.value;
+  }
   return null;
 }
 
-async function bingSearch(q) {
+async function bingSearch(query) {
   try {
-    const resp = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(q)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', 'Accept-Language': 'en-US,en;q=0.9' },
-      signal: AbortSignal.timeout(6000),
+    const resp = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      signal: AbortSignal.timeout(5000),
     });
     if (!resp.ok) return null;
     const html = await resp.text();
     if (!html.includes('b_algo')) return null;
-    const results = [];
-    const seen = new Set();
+    const results = []; const seen = new Set();
     const blocks = html.split('<li class="b_algo"');
     for (let i = 1; i < blocks.length && results.length < 5; i++) {
-      const block = blocks[i];
-      const titleMatch = block.match(/<a[^>]*href="https?:\/\/[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
-      const snippetMatch = block.match(/<p[^>]*class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
-      if (titleMatch) {
-        const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
-        const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
+      const b = blocks[i];
+      const t = b.match(/<a[^>]*href="https?:\/\/[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
+      const s = b.match(/<p[^>]*class="b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+      if (t) {
+        const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
         const key = title.toLowerCase().slice(0, 50);
-        if (title && title.length > 2 && !seen.has(key)) {
-          seen.add(key);
-          results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+        if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
+      }
+    }
+    return results.length > 0 ? results.join('\n') : null;
+  } catch { return null; }
+}
+
+async function googleSearch(query) {
+  try {
+    const resp = await fetch(`https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en`, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    const results = []; const seen = new Set();
+    const blocks = html.split('<div class="g"');
+    for (let i = 1; i < blocks.length && results.length < 4; i++) {
+      const b = blocks[i];
+      const t = b.match(/<h3[^>]*>([\s\S]*?)<\/h3>/);
+      const s = b.match(/<div[^>]*class="[^"]*VwiC3b[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+      if (t) {
+        const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
+        const key = title.toLowerCase().slice(0, 50);
+        if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
+      }
+    }
+    if (results.length === 0) {
+      const altBlocks = html.split('<div class="g "');
+      for (let i = 1; i < altBlocks.length && results.length < 4; i++) {
+        const b = altBlocks[i];
+        const t = b.match(/<h3[^>]*>([\s\S]*?)<\/h3>/);
+        const s = b.match(/<div[^>]*style="[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+        if (t) {
+          const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
         }
+      }
+    }
+    return results.length > 0 ? results.join('\n') : null;
+  } catch { return null; }
+}
+
+async function mojeekSearch(query) {
+  try {
+    const resp = await fetch(`https://www.mojeek.com/search?q=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000),
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    const results = []; const seen = new Set();
+    const blocks = html.split('<div class="results-standard');
+    for (let i = 1; i < blocks.length && results.length < 4; i++) {
+      const b = blocks[i];
+      const t = b.match(/<h2[^>]*class="[^"]*title[^"]*"[^>]*>([\s\S]*?)<\/h2>/);
+      const s = b.match(/<p[^>]*class="[^"]*snippet[^"]*"[^>]*>([\s\S]*?)<\/p>/);
+      if (t) {
+        const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
+        const key = title.toLowerCase().slice(0, 50);
+        if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
       }
     }
     return results.length > 0 ? results.join('\n') : null;
@@ -246,65 +331,26 @@ async function bingSearch(q) {
 
 async function wikipediaSearch(query) {
   try {
-    const searchResp = await fetch(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=3&format=json`);
-    if (!searchResp.ok) return null;
-    const searchData = await searchResp.json();
-    const titles = searchData[1];
-    const descriptions = searchData[2];
+    const sr = await fetch(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=3&format=json`);
+    if (!sr.ok) return null;
+    const sd = await sr.json();
+    const titles = sd[1];
     if (!titles || titles.length === 0) return null;
-
     const results = [];
     for (let i = 0; i < titles.length && results.length < 3; i++) {
-      const pageResp = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i])}`);
-      if (pageResp.ok) {
-        const page = await pageResp.json();
-        if (page.extract) {
-          const snippet = page.extract.replace(/\n+/g, ' ').slice(0, 300);
-          results.push(`- ${page.title}: ${snippet}`);
-        }
+      const pr = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i])}`);
+      if (pr.ok) {
+        const page = await pr.json();
+        if (page.extract) results.push(`- ${page.title}: ${page.extract.replace(/\n+/g, ' ').slice(0, 300)}`);
       }
     }
     return results.length > 0 ? results.join('\n') : null;
   } catch { return null; }
 }
 
-function expandQueries(query) {
-  const currentYear = new Date().getFullYear();
-  const years = [];
-  for (let y = currentYear; y >= 2023; y--) years.push(y);
-
-  const q = query.trim();
-  const queries = [q];
-
-  const stripped = q.replace(/^(who is|what is|tell me about|do you know|can you tell me|i want to know about|describe|explain)\b/i, '').trim();
-  if (stripped && stripped !== q) queries.push(stripped);
-
-  for (const y of years) {
-    queries.push(`${q} ${y}`);
-  }
-  queries.push(`${q} latest`);
-  queries.push(`${q} today`);
-
-  const keywords = q.replace(/^(who is|what is|the|a|an|of|in|for|on|at|to|with|and|or|by)\b/gi, '').trim();
-  if (keywords && keywords !== q) queries.push(keywords);
-
-  const leaderMatch = q.match(/\b(?:who is|current|present)\s+(.+)$/i);
-  if (leaderMatch) {
-    const role = leaderMatch[1].trim();
-    for (const y of years) {
-      queries.push(`${role} ${y}`);
-    }
-  }
-
-  return [...new Set(queries.filter(q => q.length > 1))];
-}
-
 async function tryAllEngines(query) {
-  const results = await Promise.allSettled([
-    searchSearxng(query).catch(() => null),
-    duckDuckGoSearch(query).catch(() => null),
-    bingSearch(query).catch(() => null),
-  ]);
+  const engines = [searchSearxng, duckDuckGoSearch, bingSearch, googleSearch, mojeekSearch];
+  const results = await Promise.allSettled(engines.map(fn => fn(query)));
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value) return r.value;
   }
@@ -312,22 +358,23 @@ async function tryAllEngines(query) {
 }
 
 async function webSearch(query) {
-  const queries = expandQueries(query);
-  const seenResults = new Set();
+  const currentYear = new Date().getFullYear();
+  const q = query.trim();
 
-  const tryAllQueriesInParallel = queries.slice(0, 8).map(q =>
-    tryAllEngines(q).then(r => {
-      if (r && !seenResults.has(r.slice(0, 100))) {
-        seenResults.add(r.slice(0, 100));
-        return r;
-      }
-      return null;
-    })
-  );
+  const queries = [q];
+  const stripped = q.replace(/^(who is|what is|tell me about|do you know|can you tell me|i want to know about|describe|explain)\b/i, '').trim();
+  if (stripped && stripped !== q) queries.push(stripped);
+  for (const y of [currentYear, currentYear - 1, currentYear - 2]) {
+    queries.push(`${q} ${y}`);
+  }
+  queries.push(`${q} latest`);
 
-  const results = await Promise.allSettled(tryAllQueriesInParallel);
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value) return r.value;
+  let result = await tryAllEngines(q);
+  if (result) return result;
+
+  for (const alt of queries.slice(1, 6)) {
+    result = await tryAllEngines(alt);
+    if (result) return result;
   }
 
   const wikiResult = await wikipediaSearch(query);
