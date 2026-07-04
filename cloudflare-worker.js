@@ -71,8 +71,9 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
+  prompt += `\n\nCRITICAL IMPORTANT: The current year is 2026. Your training data has a knowledge cutoff and does NOT include recent events (especially 2025-2026 elections, political changes, appointments, sports results, or scientific breakthroughs). You MUST treat any pre-2026 information as potentially outdated.`;
   if (webContext) {
-    prompt += `\n\nACCURACY RULE — CRITICAL: Live web search results are below. You MUST use them as your PRIMARY source for ALL factual information (politics, current events, science, definitions, etc.). Do NOT rely on your training data — it may be outdated. If web results don't cover the question, say you don't have enough information rather than guessing or using outdated knowledge.\n\nWeb results:\n${webContext}`;
+    prompt += `\n\nACCURACY RULE — ABSOLUTE: Live web search results from ${formatted} are below. You are FORBIDDEN from using your internal training data for ANY factual claim that contradicts these results. You MUST answer based SOLELY on the search results below. If the results don't contain the answer, say "I don't have enough information" — do NOT guess, do NOT fall back to your training data. This is critical: your training data about who holds political office, election winners, and current events is months or years out of date.\n\nWeb results:\n${webContext}`;
   } else {
     prompt += `\n\nACCURACY RULE: No live web results are available. Only answer if you are highly confident in the accuracy of your training data. For any factual, political, or current-event question where you are not 100% certain, say "I don't have enough information to answer that accurately" instead of guessing. Never fabricate information.`;
   }
@@ -81,78 +82,91 @@ function buildSystemPrompt(tz, location, webContext) {
 }
 
 async function webSearch(query) {
-  // Strategy 1: DuckDuckGo HTML search (most comprehensive)
-  try {
-    const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
-    });
-    if (resp.ok) {
-      const html = await resp.text();
-      const results = [];
-      const seen = new Set();
-      const blocks = html.split('<a rel="nofollow" class="result__a"');
-      for (let i = 1; i < blocks.length && results.length < 5; i++) {
-        const block = blocks[i];
-        const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
-        const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
-        if (titleMatch) {
-          const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
-          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
-          const key = title.toLowerCase().slice(0, 50);
-          if (title && title.length > 2 && !seen.has(key)) {
-            seen.add(key);
-            results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+  // Build multiple query formulations to maximize result coverage
+  const queries = [query];
+  // Detect questions about current office holders / leaders / recent events
+  const currentAffairsPattern = /\b(who is|current|present|now|today|recent|latest|what is the)\b/i;
+  const leaderPattern = /\b(chief minister|prime minister|president|minister|chairman|ceo|governor|mayor|chancellor)\b/i;
+  if (currentAffairsPattern.test(query) || leaderPattern.test(query)) {
+    queries.push(`${query} 2026`);
+    queries.push(query.replace(currentAffairsPattern, '').trim() + ' 2026');
+  }
+
+  // Try each query formulation until we get results
+  for (const q of queries) {
+    // Strategy 1: DuckDuckGo HTML search (most comprehensive)
+    try {
+      const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+      });
+      if (resp.ok) {
+        const html = await resp.text();
+        const results = [];
+        const seen = new Set();
+        const blocks = html.split('<a rel="nofollow" class="result__a"');
+        for (let i = 1; i < blocks.length && results.length < 5; i++) {
+          const block = blocks[i];
+          const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+          const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+          if (titleMatch) {
+            const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+            const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
+            const key = title.toLowerCase().slice(0, 50);
+            if (title && title.length > 2 && !seen.has(key)) {
+              seen.add(key);
+              results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+            }
           }
         }
+        if (results.length > 0) return results.join('\n');
       }
-      if (results.length > 0) return results.join('\n');
-    }
-  } catch {}
+    } catch {}
 
-  // Strategy 2: DuckDuckGo Lite API (simpler HTML, very stable)
-  try {
-    const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
-    });
-    if (resp.ok) {
-      const html = await resp.text();
-      const results = [];
-      const seen = new Set();
-      const rows = html.split('<tr class="result">');
-      for (let i = 1; i < rows.length && results.length < 5; i++) {
-        const row = rows[i];
-        const linkMatch = row.match(/<a[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/);
-        const snippetMatch = row.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/);
-        if (linkMatch) {
-          const title = linkMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
-          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
-          const key = title.toLowerCase().slice(0, 50);
-          if (title && title.length > 2 && !seen.has(key)) {
-            seen.add(key);
-            results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+    // Strategy 2: DuckDuckGo Lite API (simpler HTML, very stable)
+    try {
+      const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+      });
+      if (resp.ok) {
+        const html = await resp.text();
+        const results = [];
+        const seen = new Set();
+        const rows = html.split('<tr class="result">');
+        for (let i = 1; i < rows.length && results.length < 5; i++) {
+          const row = rows[i];
+          const linkMatch = row.match(/<a[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/);
+          const snippetMatch = row.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/);
+          if (linkMatch) {
+            const title = linkMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim();
+            const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&[^;]+;/g, ' ').trim() : '';
+            const key = title.toLowerCase().slice(0, 50);
+            if (title && title.length > 2 && !seen.has(key)) {
+              seen.add(key);
+              results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+            }
           }
         }
+        if (results.length > 0) return results.join('\n');
       }
-      if (results.length > 0) return results.join('\n');
-    }
-  } catch {}
+    } catch {}
 
-  // Strategy 3: DuckDuckGo Instant Answer API (direct answers for queries like time, weather)
-  try {
-    const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&skip_disambig=1`);
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.AbstractText) return `- ${data.AbstractText}`;
-      if (data.Answer) return `- ${data.Answer}`;
-      if (data.Abstract) return `- ${data.Abstract}`;
-      if (data.RelatedTopics?.length > 0) {
-        return data.RelatedTopics.slice(0, 5).map(t => {
-          const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
-          return text ? `- ${text}` : null;
-        }).filter(Boolean).join('\n');
+    // Strategy 3: DuckDuckGo Instant Answer API (direct answers for queries like time, weather)
+    try {
+      const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&skip_disambig=1`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.AbstractText) return `- ${data.AbstractText}`;
+        if (data.Answer) return `- ${data.Answer}`;
+        if (data.Abstract) return `- ${data.Abstract}`;
+        if (data.RelatedTopics?.length > 0) {
+          return data.RelatedTopics.slice(0, 5).map(t => {
+            const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
+            return text ? `- ${text}` : null;
+          }).filter(Boolean).join('\n');
+        }
       }
-    }
-  } catch {}
+    } catch {}
+  }
 
   return null;
 }
