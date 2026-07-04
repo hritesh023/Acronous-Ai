@@ -76,7 +76,7 @@ function buildSystemPrompt(tz, location, webContext) {
   } else {
     prompt += `\n\nACCURACY RULE: For ALL factual questions (politics, history, science, definitions, current events, etc.), you MUST call the web_search function to verify information before answering. Your training data may be outdated. Only answer from training data if web search results are unavailable or the query is purely subjective/opinion-based. Answer time/date queries directly without searching.`;
   }
-  prompt += `\n\nOUTPUT RULE: Respond ONLY in plain natural language. Never output JSON, raw objects, code blocks, reasoning, internal thoughts, or structured data. Never include your search process, reasoning steps, or tool call details. Just the answer — nothing else. If the user asks for code, only then may you output code blocks.`;
+  prompt += `\n\nOUTPUT RULE — ABSOLUTE: Never output JSON, XML, YAML, or any structured data. Never wrap your response in code blocks unless the user explicitly asks for code. Never include your reasoning, thought process, internal steps, or search details. Never output objects with keys like "role", "content", "reasoning", "tool_calls". Respond ONLY in plain natural language — paragraphs or simple dash bullet points. This is critical: the user should never see JSON or code in your response.`;
   return prompt;
 }
 
@@ -210,6 +210,16 @@ function extractFromJsonWrapper(msg) {
   return msg;
 }
 
+function stripJsonLeak(text) {
+  if (!text) return text;
+  let c = text;
+  // Strip JSON blocks containing "role"/"reasoning"/"tool_calls" anywhere in the text
+  c = c.replace(/\s*\{[^}]*?"(?:role|reasoning|tool_calls)"[^}]*?\}\s*/g, '');
+  // Strip JSON code fences
+  c = c.replace(/```(?:json)?\s*\{[^}]*?\}\s*```/g, '');
+  return c.trim() || text;
+}
+
 function cleanResponse(text) {
   if (!text) return text;
 
@@ -218,6 +228,9 @@ function cleanResponse(text) {
 
   // Strip leading/trailing JSON-like reasoning wrapper
   clean = clean.replace(/^\s*\{\s*"reasoning"\s*:.*?"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}\s*/i, '');
+
+  // Strip any JSON leakage (role/reasoning/tool_calls wrappers)
+  clean = stripJsonLeak(clean);
 
   clean = clean
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
@@ -230,10 +243,19 @@ function cleanResponse(text) {
   // If cleaning left empty, return original
   if (!clean) return text.trim();
 
-  // Safety net: if still wrapped in reasoning JSON, try to extract content
+  // Safety net: if still wrapped in JSON, try to extract content
   if (clean.startsWith('{')) {
     const extracted = extractFromJsonWrapper({ content: clean });
     if (extracted?.content) return extracted.content;
+  }
+
+  // Final check: if still looks like JSON (has key:value pattern), strip one more time
+  if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
+    try {
+      const parsed = JSON.parse(clean);
+      if (parsed.content) return parsed.content;
+      if (parsed.answer) return parsed.answer;
+    } catch {}
   }
 
   return clean;
@@ -386,7 +408,13 @@ export default {
           content = await tryPollinations(messages);
         }
 
-        if (!content || content.trim() === '') content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
+        // Final safety: strip any remaining JSON leakage from the response
+        if (content) {
+          content = stripJsonLeak(content);
+          content = content.trim();
+        }
+
+        if (!content || content === '') content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
 
         return new Response(JSON.stringify({ response: content, session_id: sessionId, type: 'chat' }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
       } catch (error) {
