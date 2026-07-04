@@ -75,7 +75,7 @@ function buildSystemPrompt(tz, location, webContext) {
   if (webContext) {
     prompt += `\n\nIMPORTANT: Live web search results are provided below. You MUST use these to answer — they contain current, up-to-date information. Do not rely on your training data for current events, facts, or data. Only use your training data for general knowledge or when the web results don't cover the topic.\n\nWeb results:\n${webContext}`;
   }
-  prompt += `\n\nIf the user asks for code or programming, provide the code clearly. For general questions, never give code-like answers — respond in plain natural language.`;
+  prompt += `\n\nOUTPUT RULE: Never output JSON, raw objects, or code-like formatting in your response unless the user explicitly asks for code. Always respond in plain, natural conversational language. If you need to search the web, use the web_search tool — never include search reasoning or tool call details in your response text.`;
   return prompt;
 }
 
@@ -171,15 +171,28 @@ const WEB_SEARCH_TOOL = {
   }
 };
 
+function tryParseToolCallContent(content) {
+  if (!content || typeof content !== 'string') return null;
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('{')) return null;
+  try {
+    const obj = JSON.parse(trimmed);
+    if (obj?.tool_calls && Array.isArray(obj.tool_calls)) return obj.tool_calls;
+  } catch {}
+  return null;
+}
+
 function cleanResponse(text) {
   let clean = text
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
     .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
+    .replace(/\{"role":"assistant","reasoning":[\s\S]*?"tool_calls":\[[\s\S]*?\]\}/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
-  return clean || text.trim();
+  if (!clean || clean === text.trim()) return text.trim();
+  return clean;
 }
 
 async function callOpenRouter(messages, env, tools) {
@@ -201,6 +214,12 @@ async function callOpenRouterWithTools(messages, env) {
   let msg = await callOpenRouter(messages, env, [WEB_SEARCH_TOOL]);
   if (!msg) return null;
 
+  // Some models output tool calls as JSON text instead of structured API - detect and handle
+  if (!msg.tool_calls && msg.content) {
+    const parsed = tryParseToolCallContent(msg.content);
+    if (parsed) msg = { role: 'assistant', content: null, tool_calls: parsed };
+  }
+
   const msgs = [...messages];
   let loopCount = 0;
   while (msg.tool_calls?.length > 0 && loopCount < 3) {
@@ -218,6 +237,12 @@ async function callOpenRouterWithTools(messages, env) {
 
     msg = await callOpenRouter(msgs, env);
     if (!msg) return null;
+
+    // Also check follow-up for embedded tool calls
+    if (!msg.tool_calls && msg.content) {
+      const parsed = tryParseToolCallContent(msg.content);
+      if (parsed) msg = { role: 'assistant', content: null, tool_calls: parsed };
+    }
   }
 
   return msg;
