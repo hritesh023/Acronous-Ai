@@ -1,5 +1,5 @@
 name = "acronous-ai"
-compatibility_date = "2026-07-03"
+compatibility_date = "2026-07-04"
 main = "cloudflare-worker.js"
 
 # Worker routes - use separate subdomain for API

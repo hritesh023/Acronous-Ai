@@ -230,11 +230,21 @@ async function tryOpenRouterImage(prompt, env) {
   } catch { return null; }
 }
 
+function arrayBufferToBase64(buf) {
+  let binary = '';
+  const bytes = new Uint8Array(buf);
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
 async function tryPollinationsImage(prompt) {
   try {
     const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt) + '?width=1024&height=1024&nofeed=true');
     if (!resp.ok) return null;
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(await resp.arrayBuffer())));
+    const base64 = arrayBufferToBase64(await resp.arrayBuffer());
     return base64;
   } catch { return null; }
 }

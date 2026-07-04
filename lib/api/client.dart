@@ -149,7 +149,7 @@ class ApiClient {
     final client = http.Client();
     try {
       final response = await client
-          .get(Uri.parse('$url/v1/health'))
+          .get(Uri.parse('$url/health'))
           .timeout(timeout);
       if (response.statusCode != 200) return false;
       try {
@@ -633,7 +633,7 @@ class ApiClient {
     while (DateTime.now().isBefore(deadline)) {
       try {
         final resp = await _get(
-          '/v1/ready',
+          '/v1/wakeup',
           timeout: const Duration(seconds: 5),
         );
         if (resp['status'] == 'ok') return true;
