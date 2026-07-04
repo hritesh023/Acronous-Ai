@@ -67,11 +67,13 @@ async function resolveUserGeo(request) {
 }
 
 function buildSystemPrompt(tz, location, webContext) {
-  const formatted = formatLocalTime(tz) || new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const now = new Date();
+  const year = now.getFullYear();
+  const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
-  prompt += `\n\nCRITICAL IMPORTANT: The current year is 2026. Your training data has a knowledge cutoff and does NOT include recent events (especially 2025-2026 elections, political changes, appointments, sports results, or scientific breakthroughs). You MUST treat any pre-2026 information as potentially outdated.`;
+  prompt += `\n\nCRITICAL IMPORTANT: The current year is ${year}. Your training data has a knowledge cutoff and does NOT include recent events (especially recent elections, political changes, appointments, sports results, or scientific breakthroughs). You MUST treat any information older than ${year} as potentially outdated.`;
   if (webContext) {
     prompt += `\n\nACCURACY RULE — ABSOLUTE: Live web search results from ${formatted} are below. You are FORBIDDEN from using your internal training data for ANY factual claim that contradicts these results. You MUST answer based SOLELY on the search results below. If the results don't contain the answer, say "I don't have enough information" — do NOT guess, do NOT fall back to your training data. This is critical: your training data about who holds political office, election winners, and current events is months or years out of date.\n\nWeb results:\n${webContext}`;
   } else {
@@ -82,14 +84,15 @@ function buildSystemPrompt(tz, location, webContext) {
 }
 
 async function webSearch(query) {
+  const currentYear = new Date().getFullYear();
   // Build multiple query formulations to maximize result coverage
   const queries = [query];
   // Detect questions about current office holders / leaders / recent events
   const currentAffairsPattern = /\b(who is|current|present|now|today|recent|latest|what is the)\b/i;
   const leaderPattern = /\b(chief minister|prime minister|president|minister|chairman|ceo|governor|mayor|chancellor)\b/i;
   if (currentAffairsPattern.test(query) || leaderPattern.test(query)) {
-    queries.push(`${query} 2026`);
-    queries.push(query.replace(currentAffairsPattern, '').trim() + ' 2026');
+    queries.push(`${query} ${currentYear}`);
+    queries.push(query.replace(currentAffairsPattern, '').trim() + ` ${currentYear}`);
   }
 
   // Try each query formulation until we get results
