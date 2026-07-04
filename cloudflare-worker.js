@@ -75,7 +75,7 @@ function buildSystemPrompt(tz, location, webContext) {
   if (webContext) {
     prompt += `\n\nIMPORTANT: Live web search results are provided below. You MUST use these to answer — they contain current, up-to-date information. Do not rely on your training data for current events, facts, or data. Only use your training data for general knowledge or when the web results don't cover the topic.\n\nWeb results:\n${webContext}`;
   }
-  prompt += `\n\nOUTPUT RULE: Never output JSON, raw objects, or code-like formatting in your response unless the user explicitly asks for code. Always respond in plain, natural conversational language. If you need to search the web, use the web_search tool — never include search reasoning or tool call details in your response text.`;
+  prompt += `\n\nOUTPUT RULE: Respond ONLY in plain natural language. Never output JSON, raw objects, code blocks, reasoning, internal thoughts, or structured data. Never include your search process, reasoning steps, or tool call details. Just the answer — nothing else. If the user asks for code, only then may you output code blocks.`;
   return prompt;
 }
 
@@ -210,7 +210,15 @@ function extractFromJsonWrapper(msg) {
 }
 
 function cleanResponse(text) {
-  let clean = text
+  if (!text) return text;
+
+  // Strip reasoning blocks (e.g.  ... or ...)
+  let clean = text.replace(/(?:^|\n)\s*[\*]*reasoning[\*]*\s*:?\s*[\s\S]*?(?=\n\s*(?:answer|response|tool_calls|$))/i, '');
+
+  // Strip leading/trailing JSON-like reasoning wrapper
+  clean = clean.replace(/^\s*\{\s*"reasoning"\s*:.*?"tool_calls"\s*:\s*\[[\s\S]*?\]\s*\}\s*/i, '');
+
+  clean = clean
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
     .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
@@ -272,6 +280,17 @@ async function callOpenRouterWithTools(messages, env) {
   }
 
   return msg;
+}
+
+function lastResortClean(content) {
+  if (!content || typeof content !== 'string') return content;
+  let c = content.trim();
+  // Strip JSON wrappers with reasoning/tool_calls
+  c = c.replace(/^\s*\{\s*"reasoning"[\s\S]*?"tool_calls"[\s\S]*?\}\s*$/i, '');
+  c = c.replace(/^\s*\{\s*"role"[\s\S]*?"content"\s*:\s*"((?:[^"\\]|\\.)*)"[\s\S]*?\}\s*$/i, (_, g1) => g1.replace(/\\"/g, '"'));
+  // Strip leading "reasoning:" or "thought:" labels
+  c = c.replace(/^(?:reasoning|thought|thinking|internal)\s*:?\s*/i, '');
+  return c || content;
 }
 
 function tryPollinations(messages) {
@@ -357,7 +376,7 @@ export default {
 
         if (env.OPENROUTER_API_KEY) {
           const msg = await callOpenRouterWithTools(messages, env);
-          if (msg?.content) content = cleanResponse(msg.content);
+          if (msg?.content) content = cleanResponse(lastResortClean(msg.content));
         }
 
         if (!content) {
