@@ -3,10 +3,12 @@
 ## Architecture
 
 ### Chat (Text)
-- **Primary**: Pollinations Text API (`https://text.pollinations.ai`) — free, no API key needed, uses `openai` model
-- **Fallback**: OpenRouter (`OPENROUTER_API_KEY`) — used when Pollinations fails
+- **Primary**: OpenRouter (`OPENROUTER_API_KEY`) — main LLM provider
+- **Fallback**: Pollinations Text API (`https://text.pollinations.ai`) — free, no API key needed, used when OpenRouter fails
 - **Timeouts**: Generous (30s greeting, 90s simple, 3m moderate, 5m complex) — no hard limits
 - **All responses LLM-generated** — no hardcoded fallback text
+- **Web Search**: DuckDuckGo HTML search (primary) + Instant Answer API (fallback) — always-on for EVERY user query to ensure internet-aware answers
+- **Chat Memory**: Full conversation history (`messages` array) is sent with every API call to both OpenRouter and Pollinations, ensuring context awareness across the entire conversation
 
 ### Image Generation (Text-to-Image)
 - **Pollinations.ai** image generation (`https://image.pollinations.ai/prompt/...`) — free, no API key needed
@@ -37,7 +39,7 @@
 
 ## API Setup
 
-### Pollinations (always free, no key)
+### Pollinations (always free, no key, fallback for chat)
 - Chat: POST `https://text.pollinations.ai` with `{ messages: [...], model: "openai", private: true }`
 - Images: GET `https://image.pollinations.ai/prompt/{encoded}`
 - Img2img: GET with `&img=` parameter for image-to-image editing

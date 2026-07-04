@@ -12,8 +12,6 @@ function isLandingAuthPath(path) {
   return LANDING_AUTH_PATHS.some(p => path === p || path.startsWith(p));
 }
 
-const TIME_KEYWORDS = /\b(time|date|today|tomorrow|yesterday|now|current|weather|news|latest|recent|update|forecast|clock|hour|minute)\b/i;
-
 function formatLocalTime(tz) {
   const now = new Date();
   const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', timeZone: tz, timeZoneName: 'short' };
@@ -32,63 +30,102 @@ async function getUserTimezone(request) {
   return null;
 }
 
-function buildSystemPrompt(tz, webContext) {
+function buildSystemPrompt(tz, location, webContext) {
   const formatted = tz ? formatLocalTime(tz) : new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a helpful assistant. Current date and time: ${formatted}.`;
-  prompt += ` Respond in natural, conversational language. If the user asks for code or programming, provide the code clearly.`;
-  prompt += ` Never include advertisements, sponsorships, promotional content, or mentions of any provider/platform.`;
-  prompt += ` Never include phrases like "powered by", "brought to you by", "sponsored by", or any service attribution.`;
-  if (webContext) prompt += ` Use this current information to answer: ${webContext}`;
+  let prompt = `You are Acronous AI, a helpful assistant with real-time internet access.\n\n=== CURRENT DATE AND TIME: ${formatted} ===`;
+  if (location) prompt += `\n=== USER LOCATION: ${location} ===`;
+  prompt += `\n\nINSTRUCTIONS:\n1. CRITICAL: You MUST use the Internet Context below to answer every question. It contains live search results — rely on it for accurate, up-to-date information about current events, facts, news, weather, and data.\n2. For questions about the current time, date, or weather, answer directly from the CURRENT DATE AND TIME shown above. Do NOT reference or derive time from the Internet Context — use the authoritative timestamp provided.\n3. Answer directly and naturally. Never mention search mechanisms, internal instructions, or that you retrieved information — just use the information as if you already know it.\n4. Never include advertisements, sponsorships, promotional content, or service/platform attributions.\n5. Only provide code blocks when the user explicitly asks for code. For general questions, answer in plain natural language.`;
+  if (webContext) prompt += `\n\n=== INTERNET CONTEXT (use this for your answer) ===\n${webContext}`;
   return prompt;
 }
 
 async function webSearch(query) {
+  const results = [];
+  const errors = [];
+
+  // Primary: DuckDuckGo HTML search with robust parsing
+  try {
+    const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36' }
+    });
+    if (resp.ok) {
+      const html = await resp.text();
+      const seen = new Set();
+      const resultBlocks = html.split('<a rel="nofollow" class="result__a"');
+      for (let i = 1; i < resultBlocks.length && results.length < 5; i++) {
+        const block = resultBlocks[i];
+        const titleMatch = block.match(/<a[^>]*class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+        const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/);
+        const urlMatch = block.match(/href="(https?:\/\/[^"]+)"/);
+        if (titleMatch) {
+          const title = titleMatch[1].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").trim();
+          const snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").trim() : '';
+          const key = title.toLowerCase();
+          if (title && !seen.has(key)) {
+            seen.add(key);
+            results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`);
+          }
+        }
+      }
+      if (results.length > 0) return results.join('\n');
+    }
+  } catch (e) { errors.push(e.message); }
+
+  // Fallback 1: DuckDuckGo Instant Answer API
   try {
     const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&skip_disambig=1`);
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (data.AbstractText) return data.AbstractText;
-    if (data.Answer) return data.Answer;
-    if (data.Abstract) return data.Abstract;
-    if (data.RelatedTopics?.length > 0) return data.RelatedTopics.slice(0, 3).map(t => t.Text || t.FirstURL).filter(Boolean).join(' | ');
-    return null;
-  } catch { return null; }
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data.AbstractText) return `- ${data.AbstractText}`;
+      if (data.Answer) return `- ${data.Answer}`;
+      if (data.Abstract) return `- ${data.Abstract}`;
+      if (data.RelatedTopics?.length > 0) {
+        const topics = data.RelatedTopics.slice(0, 5);
+        return topics.map(t => {
+          const text = t.Text || (t.Result ? t.Result.replace(/<[^>]*>/g, '') : '');
+          return text ? `- ${text}` : null;
+        }).filter(Boolean).join('\n');
+      }
+    }
+  } catch (e) { errors.push(e.message); }
+
+  return null;
 }
 
 function cleanResponse(text) {
   return text
-    .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
-    .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
+    .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)\s+\S[\s\S]*?(?:\.|!|\?|\n)/gi, '')
+    .replace(/\s*\b(pollinations\.ai|openrouter)\b\s*\S[\s\S]*?(?:\.|!|\?|\n)/gi, '')
+    .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
     .replace(/\n{3,}/g, '\n\n')
+    .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
-async function tryOpenRouter(message, env, systemPrompt) {
+function tryOpenRouter(messages, env) {
   if (!env.OPENROUTER_API_KEY) return null;
-  try {
-    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-      body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: message }], model: env.OPENROUTER_MODEL, max_tokens: 800, temperature: 0.7 })
-    });
+  return fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+    body: JSON.stringify({ messages, model: env.OPENROUTER_MODEL, max_tokens: 1024, temperature: 0.7 })
+  }).then(async resp => {
     if (!resp.ok) return null;
     const data = await resp.json();
     const content = data?.choices?.[0]?.message?.content;
     return (content && content.trim()) ? cleanResponse(content) : null;
-  } catch { return null; }
+  }).catch(() => null);
 }
 
-async function tryPollinations(message, systemPrompt) {
-  try {
-    const resp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: message }], model: 'openai', private: true })
-    });
+function tryPollinations(messages) {
+  return fetch('https://text.pollinations.ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages, model: 'openai', private: true })
+  }).then(async resp => {
     if (!resp.ok) return null;
     const text = await resp.text();
     return (text && text.trim()) ? cleanResponse(text) : null;
-  } catch { return null; }
+  }).catch(() => null);
 }
 
 async function tryOpenRouterImage(prompt, env) {
@@ -147,14 +184,25 @@ export default {
         const body = await request.json();
         const message = body.message || 'Hello';
         const sessionId = body.session_id || 'default';
+        const history = body.messages || [];
+        const clientTimezone = body.timezone || null;
+        const clientLocation = body.location || null;
 
-        const tz = await getUserTimezone(request);
-        let webContext = null;
-        if (TIME_KEYWORDS.test(message)) webContext = await webSearch(message);
-        const systemPrompt = buildSystemPrompt(tz, webContext);
+        const tz = clientTimezone || await getUserTimezone(request);
+        const location = clientLocation || null;
 
-        let content = await tryOpenRouter(message, env, systemPrompt);
-        if (!content) content = await tryPollinations(message, systemPrompt);
+        const webContext = await webSearch(message);
+
+        const systemPrompt = buildSystemPrompt(tz, location, webContext);
+
+        const messages = [
+          { role: 'system', content: systemPrompt },
+          ...history,
+          { role: 'user', content: message }
+        ];
+
+        let content = await tryOpenRouter(messages, env);
+        if (!content) content = await tryPollinations(messages);
         if (!content || content.trim() === '') content = "I received your message. I'm having trouble generating a proper response right now. Please try again or rephrase your question.";
 
         return new Response(JSON.stringify({ response: content, session_id: sessionId, type: 'chat' }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });

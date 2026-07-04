@@ -31,7 +31,7 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static final RegExp _privateInfoLinePattern = RegExp(
-    r'(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by pollinations|pollinations\.ai|openrouter[.\s])',
+    r'(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by pollinations|pollinations\.ai|openrouter[.\s]|based on (my|the|our) (web )?search|according to (my|the|our) (web )?(search|results?|findings?)|i (searched|looked up|checked|found|retrieved|gathered) (online|the web|information|data)|let me (search|look up|check|find))',
     caseSensitive: false,
   );
 
@@ -42,7 +42,6 @@ class ChatProvider extends ChangeNotifier {
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
     if (cleaned.isEmpty) return text.trim();
-    // Strip individual lines containing provider/internal info instead of blanking whole response
     final lines = cleaned.split('\n');
     final filtered = lines.where((line) {
       return !_privateInfoLinePattern.hasMatch(line.trim());
