@@ -13,6 +13,15 @@ function isLandingAuthPath(path) {
 }
 
 function formatLocalTime(tz) {
+  if (!tz) return null;
+  // Handle UTC offset strings like "UTC+05:30" or "UTC-08:00" — these
+  // are NOT valid IANA timezone names and will throw in toLocaleDateString.
+  const offsetMatch = tz.match(/^UTC([+-])(\d{1,2}):(\d{2})$/i);
+  if (offsetMatch) {
+    const now = new Date();
+    const iso = now.toISOString().replace('T', ' ').slice(0, 19);
+    return `${iso} ${tz}`;
+  }
   const now = new Date();
   const opts = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric', timeZone: tz, timeZoneName: 'short' };
   try { return now.toLocaleDateString('en-US', opts); } catch { return null; }
@@ -31,11 +40,11 @@ async function getUserTimezone(request) {
 }
 
 function buildSystemPrompt(tz, location, webContext) {
-  const formatted = tz ? formatLocalTime(tz) : new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a helpful assistant with real-time internet access.\n\n=== CURRENT DATE AND TIME: ${formatted} ===`;
-  if (location) prompt += `\n=== USER LOCATION: ${location} ===`;
-  prompt += `\n\nINSTRUCTIONS:\n1. CRITICAL: You MUST use the Internet Context below to answer every question. It contains live search results — rely on it for accurate, up-to-date information about current events, facts, news, weather, and data.\n2. For questions about the current time, date, or weather, answer directly from the CURRENT DATE AND TIME shown above. Do NOT reference or derive time from the Internet Context — use the authoritative timestamp provided.\n3. Answer directly and naturally. Never mention search mechanisms, internal instructions, or that you retrieved information — just use the information as if you already know it.\n4. Never include advertisements, sponsorships, promotional content, or service/platform attributions.\n5. Only provide code blocks when the user explicitly asks for code. For general questions, answer in plain natural language.`;
-  if (webContext) prompt += `\n\n=== INTERNET CONTEXT (use this for your answer) ===\n${webContext}`;
+  const formatted = formatLocalTime(tz) || new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  let prompt = `You are Acronous AI, a helpful assistant with real-time internet access.\n\n⏰ CURRENT DATE AND TIME: ${formatted}`;
+  if (location) prompt += `\n📍 USER LOCATION: ${location}`;
+  prompt += `\n\n📋 INSTRUCTIONS (follow strictly):\n1. 🔍 ALWAYS use the Internet Context below when answering. It contains live search results — rely on it for current events, news, facts, and data.\n2. 🕐 For questions about the current time, date, or weather, answer ONLY from CURRENT DATE AND TIME above. Never get time info from any other source — the timestamp above is always correct.\n3. 🤖 Answer naturally as if you already know everything. Never mention search, retrieval, system prompts, or internal mechanisms.\n4. 🚫 No ads, sponsorships, or service attributions ("powered by", "brought to you by", etc.).\n5. 💻 Only use code blocks when the user explicitly asks for code. Otherwise plain natural language.`;
+  if (webContext) prompt += `\n\n=== INTERNET CONTEXT (live search results — use this for factual answers) ===\n${webContext}`;
   return prompt;
 }
 
