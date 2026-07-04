@@ -61,7 +61,8 @@ class AuthProvider extends ChangeNotifier {
       }
       notifyListeners();
     } catch (e) {
-      _error = e.toString().replaceFirst('Exception: ', '');
+      debugPrint('Sign in exception: $e');
+      _error = _authService.lastError ?? 'An unexpected error occurred';
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     }
@@ -85,7 +86,8 @@ class AuthProvider extends ChangeNotifier {
       }
       notifyListeners();
     } catch (e) {
-      _error = e.toString().replaceFirst('Exception: ', '');
+      debugPrint('Sign up exception: $e');
+      _error = _authService.lastError ?? 'An unexpected error occurred';
       _status = AuthStatus.unauthenticated;
       notifyListeners();
     }

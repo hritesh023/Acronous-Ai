@@ -166,7 +166,9 @@ class CentralAuthService {
       }
       try {
         final data = jsonDecode(res.body);
-        lastError = data['error'] ?? 'Login failed';
+        final backendMsg = (data['error'] as String?) ?? '';
+        debugPrint('Sign in failed: $backendMsg');
+        lastError = res.statusCode == 401 ? 'Invalid email or password' : 'Login failed';
       } catch (_) {
         lastError = 'Login failed (${res.statusCode})';
       }
@@ -203,7 +205,9 @@ class CentralAuthService {
       }
       try {
         final data = jsonDecode(res.body);
-        lastError = data['error'] ?? 'Sign up failed';
+        final backendMsg = (data['error'] as String?) ?? '';
+        debugPrint('Sign up failed: $backendMsg');
+        lastError = 'Sign up failed';
       } catch (_) {
         lastError = 'Sign up failed (${res.statusCode})';
       }
