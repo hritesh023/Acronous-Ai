@@ -71,7 +71,7 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a helpful assistant with live internet access. Current date and time: ${formatted}.`;
   if (location) prompt += ` User's location: ${location}.`;
   prompt += ` Answer in natural, conversational language.`;
-  prompt += `\n\nACCURACY RULE: For time/date/clock queries, answer directly using the date and time already provided above — do NOT call web_search. For other factual or time-sensitive questions, use the web_search tool to verify rather than relying solely on your training data.`;
+  prompt += `\n\nACCURACY RULE: Answer from your training data for general knowledge (politics, history, science, definitions, etc.). The current date and time is provided above — answer time/date queries directly without searching. Only call web_search if the user explicitly asks for current/live data (news, weather, prices) or if you genuinely do not know the answer.`;
   if (webContext) {
     prompt += `\n\nIMPORTANT: Live web search results are provided below. You MUST use these to answer — they contain current, up-to-date information. Do not rely on your training data for current events, facts, or data. Only use your training data for general knowledge or when the web results don't cover the topic.\n\nWeb results:\n${webContext}`;
   }
@@ -160,7 +160,7 @@ const WEB_SEARCH_TOOL = {
   type: 'function',
   function: {
     name: 'web_search',
-    description: 'Search the internet for current, up-to-date information about any topic. Use this when you need recent news, live data, facts that may have changed, or any information beyond your training data.',
+    description: 'Search the internet for current information. Only use when you lack the knowledge to answer, or when the user asks for news, weather, prices, or other live data. Do NOT use for general knowledge or political facts your training data covers.',
     parameters: {
       type: 'object',
       properties: {
