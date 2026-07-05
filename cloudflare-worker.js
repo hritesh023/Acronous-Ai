@@ -695,6 +695,142 @@ async function tryPollinationsImage(prompt) {
   } catch { return null; }
 }
 
+// ---------------------------------------------------------------------------
+// Mask generation — creates pixel-level masks for targeted editing
+// ---------------------------------------------------------------------------
+
+function parseEditTarget(prompt) {
+  const p = prompt.toLowerCase();
+  if (/\b(dress|gown|frock|skirt|outfit|clothing|clothes|attire|garment|wear|suit|shirt|t-shirt|tee|top|blouse|pants|jeans|trousers|jacket|coat|uniform|costume)\b/.test(p)) return 'clothing';
+  if (/\b(background|bg|backdrop|scene|setting|wall|surroundings)\b/.test(p)) return 'background';
+  if (/\b(face|expression|facial|smile|look|emotion|eyes|mouth|lips)\b/.test(p)) return 'face';
+  if (/\b(hair|hairstyle|haircut|beard|mustache)\b/.test(p)) return 'hair';
+  if (/\b(color|colour|recolor|recolour|shade|tint|hue)\b/.test(p)) return 'color';
+  return 'auto';
+}
+
+function createEditMask(width, height, editTarget) {
+  const channels = 4;
+  const total = width * height * channels;
+  const mask = new Uint8Array(total);
+  // Fill with black (0) = preserve, white (255) = edit
+  for (let i = 0; i < total; i++) mask[i] = 0;
+
+  const setPixel = (x, y, val) => {
+    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    const idx = (y * width + x) * 4;
+    mask[idx] = val; mask[idx+1] = val; mask[idx+2] = val; mask[idx+3] = 255;
+  };
+  const fillRect = (x0, y0, x1, y1, val) => {
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++)
+        setPixel(x, y, val);
+  };
+  const fillOval = (cx, cy, rx, ry, val) => {
+    for (let y = cy - ry; y <= cy + ry; y++)
+      for (let x = cx - rx; x <= cx + rx; x++) {
+        if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1)
+          setPixel(x, y, val);
+      }
+  };
+
+  switch (editTarget) {
+    case 'clothing': {
+      // Upper body region: from shoulders to waist
+      const yTop = Math.floor(height * 0.22);
+      const yBot = Math.floor(height * 0.72);
+      const xMargin = Math.floor(width * 0.08);
+      fillRect(xMargin, yTop, width - xMargin, yBot, 255);
+      // Add a gradient falloff at edges
+      for (let y = yTop; y <= yBot; y++) {
+        const fadeIn = Math.min(1, (y - yTop) / 20);
+        const fadeOut = Math.min(1, (yBot - y) / 20);
+        const alpha = Math.min(fadeIn, fadeOut);
+        for (let x = 0; x < xMargin; x++) {
+          const f = Math.min(1, x / xMargin);
+          setPixel(x, y, Math.floor(255 * (1 - f) * alpha));
+          setPixel(width - 1 - x, y, Math.floor(255 * (1 - f) * alpha));
+        }
+      }
+      break;
+    }
+    case 'background': {
+      // Invert: keep center, edit edges
+      const cx = Math.floor(width / 2);
+      const cy = Math.floor(height / 2);
+      const rx = Math.floor(width * 0.35);
+      const ry = Math.floor(height * 0.4);
+      fillOval(cx, cy, rx, ry, 0);
+      // Everything outside the oval = background = edit
+      for (let y = 0; y < height; y++)
+        for (let x = 0; x < width; x++) {
+          const dx = (x - cx) / rx, dy = (y - cy) / ry;
+          if (dx * dx + dy * dy > 1) setPixel(x, y, 255);
+        }
+      break;
+    }
+    case 'face': {
+      // Center oval for face
+      const cx = Math.floor(width / 2);
+      const cy = Math.floor(height * 0.30);
+      const rx = Math.floor(width * 0.15);
+      const ry = Math.floor(height * 0.2);
+      fillOval(cx, cy, rx, ry, 255);
+      break;
+    }
+    case 'hair': {
+      // Top portion
+      const yBot = Math.floor(height * 0.25);
+      fillRect(0, 0, width - 1, yBot, 255);
+      break;
+    }
+    default: {
+      // Auto: upper body (most likely edit target)
+      const yTop = Math.floor(height * 0.22);
+      const yBot = Math.floor(height * 0.72);
+      const xMargin = Math.floor(width * 0.08);
+      fillRect(xMargin, yTop, width - xMargin, yBot, 255);
+      break;
+    }
+  }
+  return mask;
+}
+
+function compositeImage(originalBytes, editedImageData, maskBytes) {
+  // Combine original and edited using mask:
+  //   mask white (255) = use edited pixel
+  //   mask black (0)   = use original pixel
+  //   gray values blend between the two
+  try {
+    const orig = new Uint8Array(originalBytes);
+    const edit = base64ToBytes(editedImageData);
+    const m = new Uint8Array(maskBytes);
+    const len = Math.min(orig.length, edit.length, m.length);
+    const out = new Uint8Array(len);
+    for (let i = 0; i < len; i += 4) {
+      const alpha = m[i] / 255; // 0-1 blend factor
+      const keep = 1 - alpha;
+      out[i]     = orig[i]     * keep + edit[i]     * alpha;
+      out[i + 1] = orig[i + 1] * keep + edit[i + 1] * alpha;
+      out[i + 2] = orig[i + 2] * keep + edit[i + 2] * alpha;
+      out[i + 3] = 255;
+    }
+    return arrayBufferToBase64(out.buffer);
+  } catch { return editedImageData; }
+}
+
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const len = bin.length;
+  const arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+// ---------------------------------------------------------------------------
+// Editing strategies
+// ---------------------------------------------------------------------------
+
 async function tryPollinationsImageEdit(imageBase64, prompt) {
   try {
     const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt), {
@@ -714,10 +850,8 @@ async function tryPollinationsImageEdit(imageBase64, prompt) {
 }
 
 async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription) {
-  // Build a more detailed prompt based on what we know about the image
   const contextDesc = imageDescription ? `Original image: ${imageDescription}. ` : '';
   const enhancedPrompt = `${contextDesc}${editPrompt}. High quality, photorealistic, detailed. Keep everything else identical.`;
-  
   try {
     const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhancedPrompt), {
       method: 'POST',
@@ -728,7 +862,7 @@ async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescripti
         width: 1024,
         height: 1024,
         nofeed: true,
-        model: 'turbo', // use better model if available
+        model: 'turbo',
       }),
     });
     if (!resp.ok) return null;
@@ -745,16 +879,17 @@ async function tryWorkersAI(prompt, env) {
   } catch { return null; }
 }
 
-async function tryWorkersAIEdit(imageBytes, editPrompt, env) {
-  // Use Workers AI with image input for editing (img2img)
+async function tryWorkersAIInpaint(imageBytes, maskBytes, prompt, width, height, env) {
+  // Workers AI inpainting — changes ONLY the masked region
   if (!env.AI) return null;
   try {
-    // Try SDXL with image input (img2img/inpainting)
     const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-      prompt: editPrompt,
+      prompt,
       image: [...new Uint8Array(imageBytes)],
-      strength: 0.85, // how much to transform
-      guidance_scale: 7.5,
+      mask: [...maskBytes],
+      strength: 0.9,
+      guidance: 7.5,
+      num_steps: 25,
     });
     if (result?.image) return result.image;
     return null;
@@ -762,21 +897,17 @@ async function tryWorkersAIEdit(imageBytes, editPrompt, env) {
 }
 
 async function tryEditorService(imageBytes, editPrompt, env) {
-  // Call the Python image editing microservice
   const serviceUrl = env.EDITOR_SERVICE_URL;
   if (!serviceUrl) return null;
-  
   try {
     const formData = new FormData();
     formData.append('file', new Blob([imageBytes], { type: 'image/jpeg' }), 'image.jpg');
     formData.append('prompt', editPrompt);
-
     const resp = await fetch(`${serviceUrl}/edit`, {
       method: 'POST',
       body: formData,
     });
     if (!resp.ok) return null;
-
     const data = await resp.json();
     if (data?.edited) return data.edited;
     return null;
@@ -784,7 +915,6 @@ async function tryEditorService(imageBytes, editPrompt, env) {
 }
 
 async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
-  // Use vision model to describe the image for better edit prompts
   if (!env.OPENROUTER_API_KEY) return null;
   try {
     const userContent = [
@@ -795,7 +925,6 @@ async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
       { role: 'system', content: 'You are an image analysis assistant. Describe images in detail for editing purposes.' },
       { role: 'user', content: userContent },
     ];
-
     const model = env.VISION_MODEL || 'google/gemini-2.5-flash-lite';
     const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
@@ -809,14 +938,12 @@ async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
 }
 
 async function craftEditPrompt(imageDescription, editPrompt) {
-  // Use LLM to craft an optimal edit prompt based on image description
   if (!imageDescription) return editPrompt;
   try {
     const messages = [
       { role: 'system', content: 'You craft precise image editing prompts. Given an image description and an edit request, create a detailed prompt for an AI image editor. The prompt should specify exactly what to change while preserving everything else. Be specific about colors, styles, and placement. Output ONLY the prompt, nothing else.' },
       { role: 'user', content: `Image: ${imageDescription}\nEdit request: ${editPrompt}\n\nCreate a detailed edit prompt:` }
     ];
-    // Use pollinations for this since it's free
     const resp = await fetch('https://text.pollinations.ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1142,56 +1269,86 @@ export default {
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const mimeType = file.type || 'image/jpeg';
 
+        // Determine what to edit from the prompt
+        const editTarget = parseEditTarget(editPrompt);
         let editedBase64 = null;
+        let imageDescription = null;
+        let enhancedPrompt = editPrompt;
 
-        // Strategy 1: Python Editor Service (best quality, if deployed)
+        // ── Strategy 1: Python Editor Service (best quality, real segmentation) ──
         editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // Strategy 2: Vision-guided editing - analyze image then craft better prompt
-        const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
-        const enhancedPrompt = imageDescription ? await craftEditPrompt(imageDescription, editPrompt) : editPrompt;
+        // ── Strategy 2: Mask-based inpainting (Workers AI) ──
+        // Create a pixel-level mask for the target region, generate new content only there,
+        // then composite back to preserve everything outside the mask exactly.
+        {
+          // Determine image dimensions for mask (assume square if unknown)
+          const imgWidth = 1024, imgHeight = 1024;
+          const mask = createEditMask(imgWidth, imgHeight, editTarget);
 
-        // Strategy 3: Better Pollinations with enhanced prompt
-        editedBase64 = await tryBetterPollinationsEdit(imageBase64, enhancedPrompt, imageDescription);
-        if (editedBase64) {
+          // Get vision context for better prompting
+          imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
+          enhancedPrompt = imageDescription ? (await craftEditPrompt(imageDescription, editPrompt)) || editPrompt : editPrompt;
+
+          const inpaintPrompt = enhancedPrompt + '. Change ONLY the specified region. Keep everything else pixel-identical, including face, background, pose, lighting, and colors.';
+
+          // Try Workers AI inpainting (mask-based)
+          const inpaintResult = await tryWorkersAIInpaint(fileBytes, mask, inpaintPrompt, imgWidth, imgHeight, env);
+          if (inpaintResult) {
+            // Composite: only keep changes inside the mask region
+            editedBase64 = compositeImage(fileBytes, inpaintResult, mask);
+            if (editedBase64) {
+              return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+            }
+          }
+        }
+
+        // ── Strategy 3: Enhanced Pollinations with vision context ──
+        if (!imageDescription) {
+          imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
+          enhancedPrompt = imageDescription ? (await craftEditPrompt(imageDescription, editPrompt)) || editPrompt : editPrompt;
+        }
+        // For Pollinations, also create a mask and try composite
+        const pollResult = await tryBetterPollinationsEdit(imageBase64, enhancedPrompt, imageDescription);
+        if (pollResult) {
+          // Try to composite with mask to preserve unchanged regions
+          const imgWidth = 1024, imgHeight = 1024;
+          const mask = createEditMask(imgWidth, imgHeight, editTarget);
+          editedBase64 = compositeImage(fileBytes, pollResult, mask);
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // Strategy 4: Workers AI with image input
-        editedBase64 = await tryWorkersAIEdit(fileBytes, enhancedPrompt, env);
-        if (editedBase64) {
-          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
-        }
-
-        // Strategy 5: Original Pollinations img2img (fallback)
+        // ── Strategy 4: Standard Pollinations ──
         editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
         if (editedBase64) {
+          const imgWidth = 1024, imgHeight = 1024;
+          const mask = createEditMask(imgWidth, imgHeight, editTarget);
+          editedBase64 = compositeImage(fileBytes, editedBase64, mask);
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // Strategy 6: Workers AI text-to-image as last resort
+        // ── Strategy 5: Workers AI text-to-image (last resort) ──
         if (env.AI) {
           try {
             const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
               prompt: enhancedPrompt,
               image: [...new Uint8Array(fileBytes)],
             });
-            if (result?.image) editedBase64 = result.image;
+            if (result?.image) {
+              const imgWidth = 1024, imgHeight = 1024;
+              const mask = createEditMask(imgWidth, imgHeight, editTarget);
+              editedBase64 = compositeImage(fileBytes, result.image, mask);
+            }
           } catch {}
         }
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // All strategies failed - return empty so LLM can apologize naturally
-        return jsonOk({
-          response: '',
-          session_id: sessionId,
-          type: 'chat',
-        });
+        return jsonOk({ response: '', session_id: sessionId, type: 'chat' });
       } catch (error) {
         return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
@@ -1210,12 +1367,16 @@ export default {
 
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
+        const editTarget = parseEditTarget(editPrompt);
+        const imgWidth = 1024, imgHeight = 1024;
 
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null);
         if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
 
         if (editedBase64) {
+          const mask = createEditMask(imgWidth, imgHeight, editTarget);
+          editedBase64 = compositeImage(fileBytes, editedBase64, mask);
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
         return jsonOk({ response: '', session_id: sessionId, type: 'chat' });
@@ -1235,14 +1396,18 @@ export default {
 
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
+        const editTarget = parseEditTarget(prompt);
 
         let result = null;
         const description = await analyzeImageWithVision(imageBase64, file.type || 'image/jpeg', prompt, env);
-        const enhanced = description ? await craftEditPrompt(description, prompt) : prompt;
+        const enhanced = description ? (await craftEditPrompt(description, prompt)) || prompt : prompt;
         result = await tryBetterPollinationsEdit(imageBase64, enhanced, description);
         if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt);
 
         if (result) {
+          const imgWidth = 1024, imgHeight = 1024;
+          const mask = createEditMask(imgWidth, imgHeight, editTarget);
+          result = compositeImage(fileBytes, result, mask);
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
         return jsonOk({ content: '', type: 'chat' });
