@@ -695,6 +695,15 @@ async function tryPollinationsImage(prompt) {
   } catch { return null; }
 }
 
+async function tryWorkersImage(prompt, env) {
+  if (!env.AI) return null;
+  try {
+    const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', { prompt });
+    if (result?.image) return result.image;
+    return null;
+  } catch { return null; }
+}
+
 // ---------------------------------------------------------------------------
 // Image dimension reader — extracts pixel dimensions from JPEG/PNG headers
 // ---------------------------------------------------------------------------
@@ -742,6 +751,20 @@ function getImageDimensions(bytes) {
     }
   }
   return null;
+}
+
+function getImageDimensionsFromBase64(base64) {
+  try {
+    const binaryStr = atob(base64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+    return getImageDimensions(bytes);
+  } catch { return null; }
+}
+
+function dimensionsToPromptSuffix(width, height) {
+  if (width && height) return `&width=${width}&height=${height}`;
+  return '';
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +849,7 @@ function createEditMask(width, height, editTarget) {
 // Build a prompt that tells the AI exactly what to change and what to keep
 function buildEditPrompt(editTarget, userPrompt, imageDescription) {
   const context = imageDescription ? `Context: ${imageDescription.slice(0, 300)}. ` : '';
-  const keep = 'CRITICAL: Keep everything else COMPLETELY UNCHANGED — face, hair, body, pose, lighting, background, colors, style, and composition must remain pixel-identical. Only modify the specified region.';
+  const keep = 'Keep everything else unchanged. Only modify the specified part.';
   switch (editTarget) {
     case 'clothing':
       return `${context}Edit the clothing/outfit: ${userPrompt}. ${keep}`;
@@ -945,12 +968,14 @@ async function tryHuggingFaceEdit(imageBytes, prompt, env) {
 }
 
 // ── Strategy D: Pollinations img2img (free fallback) ──
-async function tryPollinationsImageEdit(imageBase64, prompt) {
+// IMPORTANT: Uses original image dimensions to avoid generating at wrong size
+async function tryPollinationsImageEdit(imageBase64, prompt, width, height) {
   try {
+    const dims = dimensionsToPromptSuffix(width, height);
     const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ img: imageBase64, width: 1024, height: 1024, nofeed: true }),
+      body: JSON.stringify({ img: imageBase64, width: width || 1024, height: height || 1024, nofeed: true }),
     });
     if (!resp.ok) return null;
     const buf = await resp.arrayBuffer();
@@ -959,7 +984,7 @@ async function tryPollinationsImageEdit(imageBase64, prompt) {
   } catch { return null; }
 }
 
-async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription) {
+async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, width, height) {
   const ctx = imageDescription ? `Original: ${imageDescription.slice(0, 200)}. ` : '';
   const enhanced = `${ctx}${editPrompt}. High quality, detailed. Keep everything else identical.`;
   for (const model of ['turbo', 'flux', 'sdxl']) {
@@ -967,7 +992,7 @@ async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescripti
       const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhanced), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ img: imageBase64, width: 1024, height: 1024, nofeed: true, model }),
+        body: JSON.stringify({ img: imageBase64, width: width || 1024, height: height || 1024, nofeed: true, model }),
       });
       if (!resp.ok) continue;
       const buf = await resp.arrayBuffer();
@@ -986,7 +1011,7 @@ async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
       { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
     ];
     const messages = [
-      { role: 'system', content: 'You are an image analysis assistant. Describe images in detail for editing purposes.' },
+      { role: 'system', content: 'You are an image analysis assistant. Describe what you see in detail.' },
       { role: 'user', content: userContent },
     ];
     const model = env.VISION_MODEL || 'google/gemini-2.5-flash-lite';
@@ -999,6 +1024,57 @@ async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
     const data = await resp.json();
     return data?.choices?.[0]?.message?.content || null;
   } catch { return null; }
+}
+
+// ── LLM-based intent classification for image requests ──
+// Classifies user intent as: 'edit', 'generate', 'analyze', or 'chat'
+// Uses the LLM so the chatbot intelligently understands what the user wants
+async function classifyImageIntent(userMessage, env) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  const intentPrompt = `Classify the user's request into exactly one category:
+- "edit" if they want to modify/change/alter/transform/enhance an existing image
+- "generate" if they want to create a new image from scratch
+- "analyze" if they want to describe/explain/analyze/inspect the image
+- "chat" if they're just talking about the image or asking a general question
+
+User request: "${userMessage}"
+
+Respond with ONLY one word: edit, generate, analyze, or chat. No punctuation, no explanation.`;
+  try {
+    const messages = [
+      { role: 'system', content: 'You classify image-related user intent. Respond with exactly one word.' },
+      { role: 'user', content: intentPrompt }
+    ];
+    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages, max_tokens: 10, temperature: 0 })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const text = (data?.choices?.[0]?.message?.content || '').trim().toLowerCase();
+    if (['edit', 'generate', 'analyze', 'chat'].includes(text)) return text;
+    return null;
+  } catch { return null; }
+}
+
+async function generateNaturalApology(reason, env) {
+  if (!env.OPENROUTER_API_KEY) return "I'm sorry, I couldn't do that. Could you try a different request?";
+  try {
+    const messages = [
+      { role: 'system', content: 'You are a helpful assistant. Apologize briefly and naturally for being unable to complete a request. Be concise (1-2 sentences). Never mention technical details, limitations, or internal systems.' },
+      { role: 'user', content: `I couldn't complete this request: ${reason}. Apologize to the user and suggest they try a different approach.` }
+    ];
+    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages, max_tokens: 100, temperature: 0.7 })
+    });
+    if (!resp.ok) return "I'm sorry, I couldn't do that. Could you try a different request?";
+    const data = await resp.json();
+    const content = (data?.choices?.[0]?.message?.content || '').trim();
+    return content || "I'm sorry, I couldn't do that. Could you try a different request?";
+  } catch { return "I'm sorry, I couldn't do that. Could you try a different request?"; }
 }
 
 function jsonOk(data, status = 200) {
@@ -1288,7 +1364,7 @@ export default {
 
         let imageBase64 = await tryPollinationsImage(prompt);
         if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
-        if (!imageBase64) imageBase64 = await tryWorkersAI(prompt, env);
+        if (!imageBase64) imageBase64 = await tryWorkersImage(prompt, env);
 
         if (imageBase64) {
           return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen' });
@@ -1312,12 +1388,16 @@ export default {
 
         // ── Content safety check ──
         if (isHarmfulEditRequest(editPrompt)) {
-          return jsonOk({ response: "I'm sorry, but I can't process that edit request. Please try something appropriate.", session_id: sessionId, type: 'chat' });
+          const apology = await generateNaturalApology('The request was flagged as inappropriate', env);
+          return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
 
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const mimeType = file.type || 'image/jpeg';
+
+        // Get original image dimensions to preserve aspect ratio in Pollinations fallbacks
+        const dims = getImageDimensions(new Uint8Array(fileBytes));
 
         const editTarget = parseEditTarget(editPrompt);
         const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
@@ -1342,21 +1422,23 @@ export default {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 4: Enhanced Pollinations ──
-        editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription);
+        // ── Strategy 4: Enhanced Pollinations (uses original dimensions to avoid wrong-size output) ──
+        editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription, dims?.width, dims?.height);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 5: Standard Pollinations ──
-        editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
+        // ── Strategy 5: Standard Pollinations (uses original dimensions) ──
+        editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, dims?.width, dims?.height);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        return jsonOk({ response: "I couldn't edit that image as requested. Try describing the edit differently (e.g., 'change the dress to red' or 'make the background a beach').", session_id: sessionId, type: 'chat' });
+        const apology = await generateNaturalApology('The image could not be edited as requested', env);
+        return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: 'Something went wrong while editing.', session_id: sessionId || 'default', type: 'chat' });
+        const apology = await generateNaturalApology('an error occurred during image editing', env);
+        return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -1374,21 +1456,24 @@ export default {
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const editTarget = parseEditTarget(editPrompt);
+        const dims = getImageDimensions(new Uint8Array(fileBytes));
 
         if (isHarmfulEditRequest(editPrompt)) {
-          return jsonOk({ response: "I'm sorry, but I can't process that edit request.", session_id: sessionId, type: 'chat' });
+          const apology = await generateNaturalApology('The request was flagged as inappropriate', env);
+          return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
 
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
-        if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null);
-        if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
+        if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null, dims?.width, dims?.height);
+        if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, dims?.width, dims?.height);
 
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
-        return jsonOk({ response: 'Could not edit the image. Try a different description.', session_id: sessionId, type: 'chat' });
+        const apology = await generateNaturalApology('the image could not be edited with the given description', env);
+        return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
         return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
@@ -1406,25 +1491,139 @@ export default {
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const editTarget = parseEditTarget(prompt);
+        const dims = getImageDimensions(new Uint8Array(fileBytes));
         const description = await analyzeImageWithVision(imageBase64, file.type || 'image/jpeg', prompt, env);
         const editPromptText = buildEditPrompt(editTarget, prompt, description);
 
         if (isHarmfulEditRequest(prompt)) {
-          return jsonOk({ content: "I'm sorry, I can't process that request.", type: 'chat' });
+          const apology = await generateNaturalApology('The request was flagged as inappropriate', env);
+          return jsonOk({ content: apology, type: 'chat' });
         }
 
         let result = await tryEditorService(fileBytes, prompt, env);
         if (!result) result = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
         if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
-        if (!result) result = await tryBetterPollinationsEdit(imageBase64, editPromptText, description);
-        if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt);
+        if (!result) result = await tryBetterPollinationsEdit(imageBase64, editPromptText, description, dims?.width, dims?.height);
+        if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt, dims?.width, dims?.height);
 
         if (result) {
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
-        return jsonOk({ content: '', type: 'chat' });
+        const apology = await generateNaturalApology('the image could not be redesigned as requested', env);
+        return jsonOk({ content: apology, type: 'chat' });
       } catch (error) {
         return jsonOk({ content: '', type: 'chat' });
+      }
+    }
+
+    // ── Intelligent image endpoint: uses LLM to classify intent (edit/generate/analyze/chat) ──
+    // This is the primary endpoint for all image-related requests with uploaded images.
+    // It intelligently routes to the right handler based on user intent.
+    if (path === '/v1/image/smart-edit' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const message = formData.get('message') || '';
+        const sessionId = formData.get('session_id') || 'default';
+
+        if (!file) {
+          const apology = await generateNaturalApology('no image was provided', env);
+          return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
+        }
+        if (!message.trim()) {
+          // No text - just analyze the image
+          const fileBytes = await file.arrayBuffer();
+          const base64 = arrayBufferToBase64(fileBytes);
+          const mimeType = file.type || 'image/jpeg';
+          const analysisResult = await analyzeImageWithVision(base64, mimeType, 'Analyze this image in detail.', env);
+          return jsonOk({ response: analysisResult || '', session_id: sessionId, type: 'chat' });
+        }
+
+        // Use LLM to classify intent
+        const intent = await classifyImageIntent(message, env);
+
+        // Route based on classified intent
+        if (intent === 'edit') {
+          // Forward to edit handler
+          const newFormData = new FormData();
+          newFormData.append('file', file);
+          newFormData.append('message', message);
+          newFormData.append('session_id', sessionId);
+          const editReq = new Request(request.url, { method: 'POST', body: newFormData });
+          // Re-dispatch to edit endpoint
+          const fileBytes = await file.arrayBuffer();
+          const imageBase64 = arrayBufferToBase64(fileBytes);
+          const mimeType = file.type || 'image/jpeg';
+          const dims = getImageDimensions(new Uint8Array(fileBytes));
+          const editTarget = parseEditTarget(message);
+          const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, message, env);
+          const editPromptText = buildEditPrompt(editTarget, message, imageDescription);
+
+          let editedBase64 = await tryEditorService(fileBytes, message, env);
+          if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
+          if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, message, env);
+          if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription, dims?.width, dims?.height);
+          if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, message, dims?.width, dims?.height);
+
+          if (editedBase64) {
+            return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+          }
+          const apology = await generateNaturalApology('I was unable to edit the image as you described', env);
+          return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
+        }
+
+        if (intent === 'generate') {
+          // Generate a new image based on the prompt (ignore uploaded image)
+          const prompt = message;
+          let imageBase64 = await tryPollinationsImage(prompt);
+          if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
+          if (imageBase64) {
+            return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen', session_id: sessionId });
+          }
+          const apology = await generateNaturalApology('I was unable to generate the image you described', env);
+          return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
+        }
+
+        // analyze or chat — use vision chat
+        const fileBytes = await file.arrayBuffer();
+        const base64 = arrayBufferToBase64(fileBytes);
+        const mimeType = file.type || 'image/jpeg';
+
+        let history = [];
+        const historyRaw = formData.get('messages') || '';
+        if (historyRaw) { try { history = JSON.parse(historyRaw); } catch {} }
+
+        const webContext = await webSearch(message, env);
+        const systemPrompt = buildSystemPrompt(
+          formData.get('timezone') || null,
+          formData.get('location') || null,
+          webContext
+        );
+
+        const userContent = [
+          { type: 'text', text: message },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64}` } },
+        ];
+        const visionMessages = [
+          { role: 'system', content: systemPrompt },
+          ...history,
+          { role: 'user', content: userContent },
+        ];
+
+        let content = await callOpenRouterVision(visionMessages, env);
+        if (!content) {
+          const fallbackMessages = [
+            { role: 'system', content: systemPrompt },
+            ...history,
+            { role: 'user', content: `${message}\n\n[The user attached an image]` },
+          ];
+          content = await callOpenRouter(fallbackMessages, env);
+        }
+        if (content) content = cleanResponse(content);
+
+        return jsonOk({ response: content || '', session_id: sessionId, type: 'chat' });
+      } catch (error) {
+        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 

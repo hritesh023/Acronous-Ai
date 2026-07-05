@@ -464,6 +464,28 @@ class ApiClient {
     return _multipartPost('/v1/image/edit', fields, imageBytes, fileName, timeout: timeout);
   }
 
+  /// Uses LLM-based intent classification to intelligently route:
+  /// edit → editing tools, generate → image gen, analyze/chat → vision
+  Future<Map<String, dynamic>> smartEditImage({
+    required Uint8List imageBytes,
+    required String fileName,
+    required String message,
+    String? sessionId,
+    String? timezone,
+    String? location,
+    List<Map<String, String>>? messages,
+    Duration? timeout,
+  }) async {
+    final fields = <String, String>{'message': message};
+    if (sessionId != null) fields['session_id'] = sessionId;
+    if (timezone != null && timezone.isNotEmpty) fields['timezone'] = timezone;
+    if (location != null && location.isNotEmpty) fields['location'] = location;
+    if (messages != null && messages.isNotEmpty) {
+      fields['messages'] = jsonEncode(messages);
+    }
+    return _multipartPost('/v1/image/smart-edit', fields, imageBytes, fileName, timeout: timeout);
+  }
+
   Future<Map<String, dynamic>> ultraEditImage({
     required Uint8List imageBytes,
     required String fileName,

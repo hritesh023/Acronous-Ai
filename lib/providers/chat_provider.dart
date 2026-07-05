@@ -1045,163 +1045,99 @@ class ChatProvider extends ChangeNotifier {
       final t = text.toLowerCase();
       final wordCount = text.trim().split(RegExp(r'\s+')).length;
 
+      // ── Use LLM-powered smart-edit endpoint first ──
+      // This intelligently classifies intent (edit/generate/analyze/chat)
+      // and routes to the right handler, preserving original image dimensions
+      try {
+        final history = _buildMessageHistory();
+        final smartResp = await _api.smartEditImage(
+          imageBytes: bytes,
+          fileName: imgAttach.name,
+          message: text,
+          sessionId: sessionId,
+          timezone: timezone.isNotEmpty ? timezone : null,
+          location: location,
+          messages: history,
+        );
+        final response = smartResp['response'] as String? ?? '';
+        final imageData = smartResp['image_data'] as String? ?? '';
+        final respType = smartResp['type'] as String? ?? 'chat';
+        if (imageData.isNotEmpty || response.isNotEmpty) {
+          return {
+            'response': response,
+            'image_data': imageData,
+            'type': respType == 'image_gen' ? respType : 'chat',
+          };
+        }
+      } catch (_) {
+        // Smart-edit failed, fall through to legacy flow
+      }
+
+      // Legacy fallback: keyword-based detection (already handled by smart-edit,
+      // but kept as fallback for backward compatibility)
       // Check if the message contains image-related context words
       final visualContext = [
-        'image',
-        'photo',
-        'picture',
-        'art',
-        'design',
-        'graphic',
-        'background',
-        'color',
-        'style',
-        'filter',
-        'texture',
-        'subject',
-        'object',
-        'scene',
-        'view',
-        'look',
-        'cartoon',
-        'painting',
-        'sketch',
-        'drawing',
-        'anime',
-        'render',
-        'logo',
-        'icon',
-        'banner',
-        'wallpaper',
-        'dress',
-        'clothes',
-        'suit',
-        'shirt',
-        'outfit',
-        'wear',
-        'face',
-        'hair',
-        'eyes',
-        'skin',
-        'background',
-        'add',
-        'remove',
-        'replace',
-        'change',
-        'cut',
-        'crop',
-        'trim',
-        'part',
-        'section',
-        'area',
-        'expression',
-        'pose',
+        'image', 'photo', 'picture', 'art', 'design', 'graphic',
+        'background', 'color', 'style', 'filter', 'texture',
+        'subject', 'object', 'scene', 'view', 'look',
+        'cartoon', 'painting', 'sketch', 'drawing', 'anime', 'render',
+        'logo', 'icon', 'banner', 'wallpaper',
+        'dress', 'clothes', 'suit', 'shirt', 'outfit', 'wear',
+        'face', 'hair', 'eyes', 'skin',
+        'add', 'remove', 'replace', 'change',
+        'cut', 'crop', 'trim',
+        'part', 'section', 'area',
+        'expression', 'pose', 'make', 'turn',
       ];
       final hasVisualContext = visualContext.any((w) => t.contains(w));
 
-      // Strong edit keywords
+      // Strong edit keywords (expanded)
       final strongEditKeywords = [
-        'edit this',
-        'edit the',
-        'edit my',
-        'edit image',
-        'edit photo',
-        'edit picture',
-        'modify this',
-        'modify the',
-        'modify my',
-        'redesign this',
-        'redesign the',
-        'turn this into',
-        'turn it into',
-        'enhance this',
-        'enhance the',
-        'enhance my',
-        'enhance image',
-        'improve this',
-        'improve the',
-        'improve my',
-        'improve image',
-        'make it better',
-        'make this better',
-        'turn into cartoon',
-        'turn into painting',
-        'turn into sketch',
-        'as a cartoon',
-        'as a painting',
-        'as a sketch',
-        'as an anime',
-        'like a cartoon',
-        'like a painting',
-        'convert to cartoon',
-        'convert to painting',
-        'change the dress',
-        'change the clothes',
-        'change the outfit',
-        'change the color',
-        'change the style',
-        'change the background',
-        'change the shirt',
-        'change the hair',
-        'change the eyes',
-        'change just',
-        'only change',
-        'keep the same',
-        'keep everything',
-        'same face',
-        'same person',
-        'cut the',
-        'cut out',
-        'crop the',
-        'crop this',
-        'trim the',
+        'edit this', 'edit the', 'edit my', 'edit image', 'edit photo', 'edit picture',
+        'modify this', 'modify the', 'modify my',
+        'redesign this', 'redesign the',
+        'turn this into', 'turn it into',
+        'enhance this', 'enhance the', 'enhance my', 'enhance image',
+        'improve this', 'improve the', 'improve my', 'improve image',
+        'make it better', 'make this better',
+        'turn into cartoon', 'turn into painting', 'turn into sketch',
+        'as a cartoon', 'as a painting', 'as a sketch', 'as an anime',
+        'like a cartoon', 'like a painting',
+        'convert to cartoon', 'convert to painting',
+        'change the dress', 'change the clothes', 'change the outfit',
+        'change the color', 'change the style', 'change the background',
+        'change the shirt', 'change the hair', 'change the eyes',
+        'change just', 'only change',
+        'keep the same', 'keep everything',
+        'same face', 'same person',
+        'cut the', 'cut out', 'crop the', 'crop this', 'trim the',
+        'make it ', 'make this ', 'make the ',
+        'turn it ', 'turn this ', 'turn the ',
+        'add a ', 'add some ', 'add more ',
+        'remove the ', 'remove this ',
+        'replace the ', 'replace this ',
+        'put a ', 'put on ',
+        'recolor', 'recolour',
+        'change to', 'change color', 'change style',
+        'convert to ', 'convert into', 'convert this ',
+        'transform this ', 'transform it ',
       ];
+      final isStrongMatch = strongEditKeywords.any((kw) => t.contains(kw));
+
       final mediumEditKeywords = [
-        'make it ',
-        'make this ',
-        'make the ',
-        'turn it ',
-        'turn this ',
-        'turn the ',
-        'turn into ',
-        'change the',
-        'change this',
-        'change my',
-        'change to',
-        'change color',
-        'change style',
-        'convert this ',
-        'convert it ',
-        'transform this ',
-        'add a ',
-        'add some ',
-        'add more ',
-        'remove the ',
-        'remove this ',
-        'replace the ',
-        'replace this ',
-        'convert to ',
-        'convert into',
-        'put a ',
-        'put on ',
-      ];
-      final weakEditKeywords = [
-        'add ',
-        'remove ',
-        'replace ',
-        'crop',
-        'rotate',
-        'resize',
-        'filter',
-        'style as',
-        'style it',
+        'make it', 'make this', 'make the',
+        'turn it', 'turn this', 'turn the',
+        'change', 'add', 'remove', 'replace',
+        'convert', 'transform',
+        'put', 'remove',
       ];
 
-      final isStrongMatch = strongEditKeywords.any((kw) => t.contains(kw));
+      // Lower thresholds for edit detection
       final isMediumMatch =
           hasVisualContext &&
-          wordCount >= 3 &&
+          wordCount >= 2 &&
           mediumEditKeywords.any((kw) => t.contains(kw));
+
       bool isWeakKeywordMatch(String kw) {
         if (kw.endsWith(' ')) {
           return t.contains(kw) && t.indexOf(kw) + kw.length < t.length;
@@ -1209,47 +1145,42 @@ class ChatProvider extends ChangeNotifier {
         return t.contains(kw);
       }
 
+      final weakEditKeywords = [
+        'add', 'remove', 'replace', 'crop', 'rotate', 'resize',
+        'filter', 'style', 'color', 'shade',
+      ];
+
+      // Lowered word count threshold from 5 to 3
       final isWeakMatch =
           hasVisualContext &&
-          wordCount >= 5 &&
+          wordCount >= 3 &&
           weakEditKeywords.any(isWeakKeywordMatch);
 
       final startsWithEdit = RegExp(
-        r'^(edit|modify|redesign|enhance|improve|change|make|turn|convert|cut|crop|trim)\s+(this|the|my|image|photo|picture|it|into|out)\b',
+        r'^(edit|modify|redesign|enhance|improve|change|make|turn|convert|cut|crop|trim|recolor|recolour|transform|add|remove|replace)\s+',
       ).hasMatch(t);
+
       // Broader catch-all: any edit-like verb + visual context = edit request
       final editVerbs = [
-        'edit',
-        'modify',
-        'redesign',
-        'enhance',
-        'improve',
-        'change',
-        'turn',
-        'convert',
-        'transform',
-        'recolor',
-        'recolour',
-        'replace',
-        'add',
-        'remove',
-        'crop',
-        'cut',
-        'trim',
-        'rotate',
-        'resize',
+        'edit', 'modify', 'redesign', 'enhance', 'improve',
+        'change', 'turn', 'convert', 'transform',
+        'recolor', 'recolour', 'replace',
+        'add', 'remove', 'crop', 'cut', 'trim',
+        'rotate', 'resize', 'make', 'put',
       ];
       final hasEditVerb = editVerbs.any(
         (v) => RegExp(r'\b' + v + r'\b').hasMatch(t),
       );
+
+      // More permissive: wordCount >= 1 (just needs text + image + edit verb)
       final isEditRequest =
-          (isStrongMatch ||
-              isMediumMatch ||
-              isWeakMatch ||
-              startsWithEdit ||
-              (hasEditVerb && hasVisualContext && wordCount >= 2)) &&
-          wordCount >= 2;
-          if (isEditRequest) {
+          isStrongMatch ||
+          isMediumMatch ||
+          isWeakMatch ||
+          startsWithEdit ||
+          (hasEditVerb && hasVisualContext && wordCount >= 1);
+
+      if (isEditRequest) {
         // Primary: /v1/image/edit (no artificial timeout — let complex edits take time)
         try {
           final editResp = await _api.editImage(
@@ -1316,7 +1247,7 @@ class ChatProvider extends ChangeNotifier {
             return {'response': response, 'image_data': '', 'type': 'chat'};
           }
         } catch (_) {}
-        // All edit attempts failed — return error instead of silently falling through
+        // All edit attempts failed — return error
         return {
           'response': '',
           'image_data': '',
