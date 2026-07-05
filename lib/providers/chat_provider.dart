@@ -1181,7 +1181,8 @@ class ChatProvider extends ChangeNotifier {
           (hasEditVerb && hasVisualContext && wordCount >= 1);
 
       if (isEditRequest) {
-        // Primary: /v1/image/edit (no artificial timeout — let complex edits take time)
+        // Only use /v1/image/edit — it uses real editing tools (inpainting, InstructPix2Pix, editor service)
+        // No Pollinations (generates new images) and no /api/image/redesign (modifies to something else)
         try {
           final editResp = await _api.editImage(
             imageBytes: bytes,
@@ -1203,51 +1204,8 @@ class ChatProvider extends ChangeNotifier {
             return {'response': response, 'image_data': '', 'type': 'chat'};
           }
         } catch (_) {}
-        // Fallback 1: /api/image/redesign
-        try {
-          final editResp = await _api.redesignImageBytes(
-            imageBytes: bytes,
-            fileName: imgAttach.name,
-            prompt: text,
-          );
-          final imageData =
-              editResp['content'] as String? ??
-              editResp['image_data'] as String? ??
-              '';
-          final response = editResp['response'] as String? ?? '';
-          if (imageData.isNotEmpty) {
-            return {
-              'response': response,
-              'image_data': imageData,
-              'type': 'chat',
-            };
-          }
-          if (response.isNotEmpty) {
-            return {'response': response, 'image_data': '', 'type': 'chat'};
-          }
-        } catch (_) {}
-        // Fallback 2: /v1/image/ultra-edit
-        try {
-          final editResp = await _api.ultraEditImage(
-            imageBytes: bytes,
-            fileName: imgAttach.name,
-            editPrompt: text,
-            sessionId: sessionId,
-          );
-          final imageData = editResp['image_data'] as String? ?? '';
-          final response = editResp['response'] as String? ?? '';
-          if (imageData.isNotEmpty) {
-            return {
-              'response': response,
-              'image_data': imageData,
-              'type': 'chat',
-            };
-          }
-          if (response.isNotEmpty) {
-            return {'response': response, 'image_data': '', 'type': 'chat'};
-          }
-        } catch (_) {}
-        // All edit attempts failed — return error
+        // No Pollinations fallback — if editing fails, return empty so the
+        // caller can show the apology returned by the edit endpoint
         return {
           'response': '',
           'image_data': '',

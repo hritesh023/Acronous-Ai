@@ -1396,9 +1396,6 @@ export default {
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const mimeType = file.type || 'image/jpeg';
 
-        // Get original image dimensions to preserve aspect ratio in Pollinations fallbacks
-        const dims = getImageDimensions(new Uint8Array(fileBytes));
-
         const editTarget = parseEditTarget(editPrompt);
         const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
         const editPromptText = buildEditPrompt(editTarget, editPrompt, imageDescription);
@@ -1422,18 +1419,8 @@ export default {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 4: Enhanced Pollinations (uses original dimensions to avoid wrong-size output) ──
-        editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription, dims?.width, dims?.height);
-        if (editedBase64) {
-          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
-        }
-
-        // ── Strategy 5: Standard Pollinations (uses original dimensions) ──
-        editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, dims?.width, dims?.height);
-        if (editedBase64) {
-          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
-        }
-
+        // ── NO Pollinations fallback ── Pollinations generates completely new images
+        // instead of editing. If real editing tools fail, return an apology.
         const apology = await generateNaturalApology('The image could not be edited as requested', env);
         return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
@@ -1466,8 +1453,6 @@ export default {
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
-        if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null, dims?.width, dims?.height);
-        if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, dims?.width, dims?.height);
 
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
@@ -1479,7 +1464,7 @@ export default {
       }
     }
 
-    // Redesign endpoint (fallback from frontend)
+    // Redesign endpoint (fallback from frontend) — only uses real editing tools
     if (path === '/api/image/redesign' && request.method === 'POST') {
       try {
         const formData = await request.formData();
@@ -1491,7 +1476,6 @@ export default {
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const editTarget = parseEditTarget(prompt);
-        const dims = getImageDimensions(new Uint8Array(fileBytes));
         const description = await analyzeImageWithVision(imageBase64, file.type || 'image/jpeg', prompt, env);
         const editPromptText = buildEditPrompt(editTarget, prompt, description);
 
@@ -1503,8 +1487,6 @@ export default {
         let result = await tryEditorService(fileBytes, prompt, env);
         if (!result) result = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
         if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
-        if (!result) result = await tryBetterPollinationsEdit(imageBase64, editPromptText, description, dims?.width, dims?.height);
-        if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt, dims?.width, dims?.height);
 
         if (result) {
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
@@ -1544,17 +1526,10 @@ export default {
 
         // Route based on classified intent
         if (intent === 'edit') {
-          // Forward to edit handler
-          const newFormData = new FormData();
-          newFormData.append('file', file);
-          newFormData.append('message', message);
-          newFormData.append('session_id', sessionId);
-          const editReq = new Request(request.url, { method: 'POST', body: newFormData });
-          // Re-dispatch to edit endpoint
+          // Use only real editing tools — no Pollinations (generates new images)
           const fileBytes = await file.arrayBuffer();
           const imageBase64 = arrayBufferToBase64(fileBytes);
           const mimeType = file.type || 'image/jpeg';
-          const dims = getImageDimensions(new Uint8Array(fileBytes));
           const editTarget = parseEditTarget(message);
           const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, message, env);
           const editPromptText = buildEditPrompt(editTarget, message, imageDescription);
@@ -1562,8 +1537,6 @@ export default {
           let editedBase64 = await tryEditorService(fileBytes, message, env);
           if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
           if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, message, env);
-          if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription, dims?.width, dims?.height);
-          if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, message, dims?.width, dims?.height);
 
           if (editedBase64) {
             return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
