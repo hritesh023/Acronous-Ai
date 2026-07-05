@@ -17,7 +17,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
-PAGES_ORIGIN = "https://acronous-ai.pages.dev"
+  PAGES_ORIGIN = "https://acronous-ai.pages.dev"
 
 [[kv_namespaces]]
 binding = "AUTH_USERS"

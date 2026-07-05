@@ -4,44 +4,22 @@ const LANDING_WORKER = 'https://acronous-landing.workers.dev';
 const LANDING_AUTH_PATHS = ['/api/auth/', '/login', '/login.html', '/signup', '/signup.html', '/dashboard', '/dashboard.html', '/logout'];
 
 const SEARXNG_URLS = [
-  'https://searx.be/search',
-  'https://search.sapti.me/search',
-  'https://searx.thegreenwebfoundation.org/search',
-  'https://searx.tuxcloud.net/search',
-  'https://searx.work/search',
-  'https://searx.info/search',
-  'https://search.mdosch.de/search',
-  'https://northboot.xyz/search',
-  'https://searx.feneas.org/search',
-  'https://searx.raspipc.nl/search',
-  'https://searx.obermui.de/search',
-  'https://searx.roflcopter.fr/search',
-  'https://searx.xyz/search',
-  'https://s.mble.dk/search',
-  'https://searx.tyil.nl/search',
-  'https://search.us.projectsegfau.lt/search',
-  'https://searx.tiekoetter.com/search',
-  'https://searx.priv.au/search',
-  'https://searx.daetalytica.io/search',
-  'https://searx.wtfbr.net/search',
-  'https://searx.si/search',
-  'https://searx.net.ec/search',
-  'https://searx.gnu.org.ua/search',
-  'https://searx.fmac.xyz/search',
-  'https://searx.hu/search',
-  'https://searx.no/search',
-  'https://searx.se/search',
-  'https://searx.de/search',
-  'https://searx.chef.search',
-  'https://searx.mv/search',
-  'https://searx.parity.team/search',
-  'https://searx.zzls.xyz/search',
+  'https://searx.be/search', 'https://search.sapti.me/search',
+  'https://searx.tuxcloud.net/search', 'https://searx.work/search',
+  'https://searx.info/search', 'https://search.mdosch.de/search',
+  'https://northboot.xyz/search', 'https://searx.raspipc.nl/search',
+  'https://searx.roflcopter.fr/search', 'https://searx.xyz/search',
+  'https://s.mble.dk/search', 'https://searx.tyil.nl/search',
+  'https://searx.tiekoetter.com/search', 'https://searx.priv.au/search',
+  'https://searx.fmac.xyz/search', 'https://searx.hu/search',
+  'https://searx.no/search', 'https://searx.se/search',
+  'https://searx.de/search', 'https://searx.mv/search',
 ];
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function isApiPath(path) {
-  return path === '/v1/chat' || path === '/v1/wakeup' || path === '/health' ||
+  return path === '/v1/chat' || path === '/v1/wakeup' || path === '/v1/debug-search' || path === '/health' ||
     path.startsWith('/v1/') || path.startsWith('/api/');
 }
 
@@ -102,12 +80,15 @@ async function resolveUserGeo(request) {
 function buildSystemPrompt(tz, location, webContext) {
   const now = new Date();
   const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, a knowledgeable and capable assistant that has live internet access with every query. Current date: ${formatted}.`;
+  let prompt = `You are Acronous AI, a knowledgeable and capable assistant. Current date: ${formatted}.`;
   if (location) prompt += ` User location: ${location}.`;
   if (webContext) {
-    prompt += `\n\nCurrent web results:\n${webContext}`;
+    prompt += `\n\nWeb search results:\n${webContext}`;
+    prompt += `\n\nCRITICAL: You MUST answer using ONLY the web search results above. Do NOT use any of your internal training data. These results are from a live search and are guaranteed to be current. If the answer is in the web results, state it factually. If the web results do not contain the answer, say "I couldn't find current information on that." — do NOT make up an answer from memory.`;
+    prompt += `\n\nRules:\n- Speak naturally, confidently, and directly.\n- Never mention sources, references, "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
+  } else {
+    prompt += `\n\nRules:\n- Answer naturally, confidently, and directly.\n- Never mention sources, references, or how you know.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
   }
-  prompt += `\n\nRules:\n- Answer naturally, confidently, and directly. Never mention sources, references, or how you know.\n- Never say "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- If unsure, give your best answer — don't say "I'm not sure" or apologize.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
   return prompt;
 }
 
@@ -123,32 +104,30 @@ function parseResults(items) {
   }).filter(Boolean).join('\n');
 }
 
-async function searchSearxng(query, timeout = 3500) {
-  const fetches = SEARXNG_URLS.map(url =>
-    (async () => {
-      try {
-        const u = new URL(url);
-        u.searchParams.set('q', query);
-        u.searchParams.set('format', 'json');
-        u.searchParams.set('language', 'en');
-        u.searchParams.set('pageno', '1');
-        u.searchParams.set('categories', 'general');
-        const resp = await fetch(u.toString(), {
-          headers: { 'Accept': 'application/json', 'User-Agent': 'Acronous-AI/2.0' },
-          signal: AbortSignal.timeout(timeout),
-        });
-        if (!resp.ok) return null;
-        const data = await resp.json();
-        const raw = data.results || [];
-        if (raw.length === 0) return null;
-        const items = parseResults(raw);
-        return items.length > 3000 ? items.slice(0, 3000) : items;
-      } catch { return null; }
-    })()
-  );
-  const results = await Promise.allSettled(fetches);
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value) return r.value;
+const SEARXNG_SHUF = SEARXNG_URLS.sort(() => Math.random() - 0.5);
+
+async function searchSearxng(query) {
+  for (const url of SEARXNG_SHUF) {
+    try {
+      const u = new URL(url);
+      u.searchParams.set('q', query);
+      u.searchParams.set('format', 'json');
+      u.searchParams.set('language', 'en');
+      u.searchParams.set('pageno', '1');
+      u.searchParams.set('categories', 'general');
+      const resp = await fetch(u.toString(), {
+        headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!resp.ok) continue;
+      const data = await resp.json();
+      const raw = data.results || [];
+      if (raw.length === 0) continue;
+      const items = parseResults(raw);
+      if (!items) continue;
+      return items.length > 3000 ? items.slice(0, 3000) : items;
+    } catch {}
+    await new Promise(r => setTimeout(r, 200));
   }
   return null;
 }
@@ -158,7 +137,7 @@ async function duckDuckGoSearch(query) {
     async () => {
       const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
         headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) return null;
       const html = await resp.text();
@@ -178,7 +157,7 @@ async function duckDuckGoSearch(query) {
     },
     async () => {
       const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
-        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(5000),
+        headers: { 'User-Agent': UA },       signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) return null;
       const html = await resp.text();
@@ -198,7 +177,7 @@ async function duckDuckGoSearch(query) {
     },
     async () => {
       const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
-        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000),
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(7000),
       });
       if (!resp.ok) return null;
       const data = await resp.json();
@@ -248,11 +227,11 @@ async function bingSearch(query) {
   try {
     const resp = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}`, {
       headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!resp.ok) return null;
-    const html = await resp.text();
-    if (!html.includes('b_algo')) return null;
+      signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) return null;
+      const html = await resp.text();
+      if (!html.includes('b_algo')) return null;
     const results = []; const seen = new Set();
     const blocks = html.split('<li class="b_algo"');
     for (let i = 1; i < blocks.length && results.length < 5; i++) {
@@ -273,7 +252,7 @@ async function googleSearch(query) {
   try {
     const resp = await fetch(`https://www.google.com/search?q=${encodeURIComponent(query)}&hl=en`, {
       headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(8000),
     });
     if (!resp.ok) return null;
     const html = await resp.text();
@@ -306,10 +285,34 @@ async function googleSearch(query) {
   } catch { return null; }
 }
 
+async function googleNewsSearch(query) {
+  try {
+    const resp = await fetch(`https://news.google.com/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN`, {
+      headers: { 'User-Agent': UA, 'Accept-Language': 'en-US,en;q=0.9' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    const results = []; const seen = new Set();
+    const blocks = html.split('<article');
+    for (let i = 1; i < blocks.length && results.length < 5; i++) {
+      const b = blocks[i];
+      const t = b.match(/<a[^>]*>([\s\S]*?)<\/a>/);
+      const s = b.match(/<p[^>]*class="[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+      if (t) {
+        const title = stripHtml(t[1]); const snippet = s ? stripHtml(s[1]) : '';
+        const key = title.toLowerCase().slice(0, 50);
+        if (title && title.length > 3 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
+      }
+    }
+    return results.length > 0 ? results.join('\n') : null;
+  } catch { return null; }
+}
+
 async function mojeekSearch(query) {
   try {
     const resp = await fetch(`https://www.mojeek.com/search?q=${encodeURIComponent(query)}`, {
-      headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(4000),
+      headers: { 'User-Agent': UA },       signal: AbortSignal.timeout(8000),
     });
     if (!resp.ok) return null;
     const html = await resp.text();
@@ -331,33 +334,166 @@ async function mojeekSearch(query) {
 
 async function wikipediaSearch(query) {
   try {
-    const sr = await fetch(`https://en.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(query)}&limit=3&format=json`);
+    const sr = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=5&srprop=snippet`);
     if (!sr.ok) return null;
     const sd = await sr.json();
-    const titles = sd[1];
-    if (!titles || titles.length === 0) return null;
+    const titles = sd?.query?.search?.map(s => s.title) || [];
+    if (titles.length === 0) return null;
     const results = [];
-    for (let i = 0; i < titles.length && results.length < 3; i++) {
+    for (let i = 0; i < titles.length && results.length < 4; i++) {
       const pr = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i])}`);
       if (pr.ok) {
         const page = await pr.json();
-        if (page.extract) results.push(`- ${page.title}: ${page.extract.replace(/\n+/g, ' ').slice(0, 300)}`);
+        if (page.extract) results.push(`- ${page.title}: ${page.extract.replace(/\n+/g, ' ').slice(0, 400)}`);
       }
     }
     return results.length > 0 ? results.join('\n') : null;
   } catch { return null; }
 }
 
-async function tryAllEngines(query) {
-  const engines = [searchSearxng, duckDuckGoSearch, bingSearch, googleSearch, mojeekSearch];
-  const results = await Promise.allSettled(engines.map(fn => fn(query)));
-  for (const r of results) {
-    if (r.status === 'fulfilled' && r.value) return r.value;
+async function guardianSearch(query) {
+  try {
+    const resp = await fetch(`https://content.guardianapis.com/search?q=${encodeURIComponent(query)}&api-key=test&page-size=5&show-fields=headline,trailText&order-by=relevance`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const results = data?.response?.results || [];
+    if (results.length === 0) return null;
+    return results.map(r => `- ${r.webTitle}${r.fields?.trailText ? `: ${stripHtml(r.fields.trailText).slice(0, 200)}` : ''}`).join('\n');
+  } catch { return null; }
+}
+
+async function redditSearch(query) {
+  try {
+    const resp = await fetch(`https://www.reddit.com/search.json?q=${encodeURIComponent(query)}&limit=5&sort=new&t=year`, {
+      headers: { 'User-Agent': 'Acronous-AI/2.0 (by /u/acronous)' },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const children = data?.data?.children || [];
+    if (children.length === 0) return null;
+    return children.map(c => {
+      const d = c.data || {};
+      const title = d.title || '';
+      const selftext = (d.selftext || '').slice(0, 200);
+      return `- ${title}${selftext ? `: ${selftext}` : ''}`;
+    }).filter(Boolean).join('\n');
+  } catch { return null; }
+}
+
+async function hackerNewsSearch(query) {
+  try {
+    const resp = await fetch(`https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(query)}&hitsPerPage=5&tags=story`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const hits = data?.hits || [];
+    if (hits.length === 0) return null;
+    return hits.map(h => `- ${h.title}`).join('\n');
+  } catch { return null; }
+}
+
+async function duckDuckGoApi(query) {
+  const strategies = [
+    async () => {
+      const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(5000),
+      });
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      const parts = [];
+      if (data.AbstractText) parts.push(`- ${data.AbstractText}`);
+      if (data.Answer) parts.push(`- ${data.Answer}`);
+      if (data.RelatedTopics?.length > 0) {
+        data.RelatedTopics.slice(0, 5).forEach(t => {
+          const text = t.Text || (t.Result ? stripHtml(t.Result) : '');
+          if (text) parts.push(`- ${text}`);
+          if (t.Topics) t.Topics.slice(0, 3).forEach(st => {
+            if (st.Text) parts.push(`- ${st.Text}`);
+          });
+        });
+      }
+      if (data.Infobox?.content) {
+        data.Infobox.content.slice(0, 5).forEach(c => {
+          if (c.value) parts.push(`- ${c.value}`);
+        });
+      }
+      return parts.length > 0 ? parts.join('\n') : null;
+    },
+    async () => {
+      const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
+        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(6000),
+      });
+      if (!resp.ok) return null;
+      const html = await resp.text();
+      const results = []; const seen = new Set();
+      const rows = html.split('<tr class="result">');
+      for (let i = 1; i < rows.length && results.length < 5; i++) {
+        const row = rows[i];
+        const link = row.match(/<a[^>]*class="result-link"[^>]*>([\s\S]*?)<\/a>/);
+        const snip = row.match(/<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/);
+        if (link) {
+          const title = stripHtml(link[1]); const snippet = snip ? stripHtml(snip[1]) : '';
+          const key = title.toLowerCase().slice(0, 50);
+          if (title && title.length > 2 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
+        }
+      }
+      return results.length > 0 ? results.join('\n') : null;
+    },
+  ];
+  for (const fn of strategies) {
+    const r = await fn();
+    if (r) return r;
   }
   return null;
 }
 
-async function webSearch(query) {
+async function googleSearchApi(query, env) {
+  if (!env.GOOGLE_API_KEY || !env.GOOGLE_CX) return null;
+  try {
+    const resp = await fetch(`https://www.googleapis.com/customsearch/v1?key=${env.GOOGLE_API_KEY}&cx=${env.GOOGLE_CX}&q=${encodeURIComponent(query)}&num=5`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const items = data?.items || [];
+    if (items.length === 0) return null;
+    return items.map(i => `- ${i.title}${i.snippet ? `: ${i.snippet.slice(0, 200)}` : ''}`).join('\n');
+  } catch { return null; }
+}
+
+async function googleNewsRssSearch(query) {
+  try {
+    const resp = await fetch(`https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en&gl=US&ceid=US:en`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (!resp.ok) return null;
+    const xml = await resp.text();
+    const items = xml.match(/<item>[\s\S]*?<\/item>/g);
+    if (!items) return null;
+    const results = []; const seen = new Set();
+    for (const item of items.slice(0, 5)) {
+      const t = item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/);
+      const s = item.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/);
+      if (t) {
+        const title = stripHtml(t[1]).trim();
+        const snippet = s ? stripHtml(s[1]).trim().slice(0, 200) : '';
+        const key = title.toLowerCase().slice(0, 50);
+        if (title && title.length > 3 && !seen.has(key)) { seen.add(key); results.push(`- ${title}${snippet ? `: ${snippet}` : ''}`); }
+      }
+    }
+    return results.length > 0 ? results.join('\n') : null;
+  } catch { return null; }
+}
+
+async function tryAllEngines(query, env) {
+  const engines = [googleSearchApi, wikipediaSearch, duckDuckGoApi, hackerNewsSearch, guardianSearch, googleNewsRssSearch, searchSearxng, googleSearch, bingSearch];
+  for (const fn of engines) {
+    const r = await fn(query, env);
+    if (r) return r;
+  }
+  return null;
+}
+
+async function webSearch(query, env = {}) {
   const currentYear = new Date().getFullYear();
   const q = query.trim();
 
@@ -369,18 +505,29 @@ async function webSearch(query) {
   }
   queries.push(`${q} latest`);
 
-  let result = await tryAllEngines(q);
+  let result = await tryAllEngines(q, env);
   if (result) return result;
 
   for (const alt of queries.slice(1, 6)) {
-    result = await tryAllEngines(alt);
+    result = await tryAllEngines(alt, env);
     if (result) return result;
   }
 
-  const wikiResult = await wikipediaSearch(query);
-  if (wikiResult) return wikiResult;
-
   return null;
+}
+
+function isInfoQuery(message) {
+  const m = message.trim();
+  if (!m) return false;
+  // Question words at start
+  if (/^(who|what|when|where|why|how|which|is|are|was|were|do|does|did|has|have|had|can|could|will|would|shall|should)\b/i.test(m)) return true;
+  // Ends with question mark
+  if (m.endsWith('?')) return true;
+  // Information-seeking phrases
+  if (/\b(current|latest|recent|update|tell me|i want to know|do you know|what is|who is|where is|when is|how to|how do|define|meaning|explain|describe|what are|what was)\b/i.test(m)) return true;
+  // Factual topics
+  if (/\b(chief minister|president|prime minister|governor|mayor|minister|population|capital|currency|weather|time|date|news|election|winner|score|price|rate|cost|history|origin|founder|ceo|chairman|spokesperson)\b/i.test(m)) return true;
+  return false;
 }
 
 function stripJsonLeak(text) {
@@ -388,13 +535,15 @@ function stripJsonLeak(text) {
   let c = text;
   c = c.replace(/\s*\{["\s]*(?:role|reasoning|tool_calls)["\s]*:[\s\S]*$/g, '');
   c = c.replace(/```(?:json)?[\s\S]*?```/g, '');
+  if (!c.trim()) return '';
   c = c.replace(/[\s"'\}\]\)]+$/, '');
-  return c.trim() || text;
+  return c.trim();
 }
 
 function cleanResponse(text) {
-  if (!text) return text;
+  if (!text) return '';
   let clean = stripJsonLeak(text);
+  if (!clean) return '';
   clean = clean
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
     .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
@@ -402,7 +551,8 @@ function cleanResponse(text) {
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
-  if (!clean) return text.trim();
+
+  if (clean.length < 3 && (/^\s*\{/.test(clean) || /^\s*\[/.test(clean))) return '';
 
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
     try {
@@ -431,7 +581,7 @@ async function callOpenRouter(messages, env) {
         });
         if (resp.ok) {
           const data = await resp.json();
-          const content = data?.choices?.[0]?.message?.content;
+          const content = cleanResponse(data?.choices?.[0]?.message?.content);
           if (content && content.trim()) return content;
         }
         if (resp.status === 429) {
@@ -477,7 +627,7 @@ async function tryWorkersAIChat(messages, env) {
     try {
       const result = await env.AI.run(name, { messages, max_tokens: 1024 });
       if (result && typeof result === 'object') {
-        const text = result.response || '';
+        const text = cleanResponse(result.response || '');
         if (text.trim()) return text;
       }
     } catch { continue; }
@@ -652,58 +802,106 @@ export default {
         if (history.length > 20) history = history.slice(-20);
         const { tz, location } = await resolveUserGeo(request);
 
-        const [webResult, firstAi] = await Promise.allSettled([
-          webSearch(message),
-          tryWorkersAIChat([
-            { role: 'system', content: buildSystemPrompt(tz, location, null) },
+        let content = null;
+        let webData = null;
+
+        if (isInfoQuery(message)) {
+          // Info queries: web search FIRST, then LLM ONLY to format web results
+          webData = await webSearch(message, env);
+          if (webData) {
+            const sysPrompt = buildSystemPrompt(tz, location, webData);
+            const msgs = [
+              { role: 'system', content: sysPrompt },
+              ...history,
+              { role: 'user', content: message }
+            ];
+            const providers = [
+              env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+              tryPollinations(msgs, env),
+              tryWorkersAIChat(msgs, env),
+            ];
+            const results = await Promise.allSettled(providers);
+            for (const r of results) {
+              if (r.status === 'fulfilled' && r.value && r.value.trim()) {
+                content = r.value;
+                break;
+              }
+            }
+          }
+        } else {
+          // Non-info queries: run LLM in parallel with web search
+          const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
+          const baseMsgs = [
+            { role: 'system', content: sysPromptNoWeb },
             ...history,
             { role: 'user', content: message }
-          ], env),
-        ]);
-        const webData = webResult.status === 'fulfilled' ? webResult.value : null;
-
-        const sysPrompt = webData ? buildSystemPrompt(tz, location, webData) : null;
-        const msgs = sysPrompt ? [
-          { role: 'system', content: sysPrompt },
-          ...history,
-          { role: 'user', content: message }
-        ] : null;
-
-        let content = null;
-        if (msgs) {
-          const results = await Promise.allSettled([
-            tryWorkersAIChat(msgs, env),
-            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-            tryPollinations(msgs, env),
+          ];
+          const [webResult, ...llmResults] = await Promise.allSettled([
+            webSearch(message, env),
+            env.OPENROUTER_API_KEY ? callOpenRouter(baseMsgs, env) : Promise.resolve(null),
+            tryPollinations(baseMsgs, env),
+            tryWorkersAIChat(baseMsgs, env),
           ]);
-          for (const r of results) {
+          webData = webResult.status === 'fulfilled' ? webResult.value : null;
+          for (const r of llmResults) {
             if (r.status === 'fulfilled' && r.value && r.value.trim()) {
               content = r.value;
               break;
             }
           }
-        }
-        if (!content || !content.trim()) {
-          content = firstAi.status === 'fulfilled' ? firstAi.value : null;
+          // If LLM responded but web data is available, regenerate with web context
+          if (content && webData) {
+            const sysPrompt = buildSystemPrompt(tz, location, webData);
+            const msgs = [
+              { role: 'system', content: sysPrompt },
+              ...history,
+              { role: 'user', content: message }
+            ];
+            const providers = [
+              env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+              tryPollinations(msgs, env),
+              tryWorkersAIChat(msgs, env),
+            ];
+            const results = await Promise.allSettled(providers);
+            for (const r of results) {
+              if (r.status === 'fulfilled' && r.value && r.value.trim()) {
+                content = r.value;
+                break;
+              }
+            }
+          }
         }
 
+        // Fallback: if no content yet, try LLM without web (only for non-info queries)
         if (!content || !content.trim()) {
-          if (webData) {
-            const items = webData.split('\n').filter(l => l.trim()).slice(0, 3).map(l => l.replace(/^- /, ''));
-            content = items.length > 0 ? items.join('. ') + '.' : '';
-          }
-          if (!content || !content.trim()) {
-            const now = new Date();
-            content = `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`;
+          if (!isInfoQuery(message)) {
+            const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
+            const baseMsgs = [
+              { role: 'system', content: sysPromptNoWeb },
+              ...history,
+              { role: 'user', content: message }
+            ];
+            const providers = [
+              env.OPENROUTER_API_KEY ? callOpenRouter(baseMsgs, env) : Promise.resolve(null),
+              tryPollinations(baseMsgs, env),
+              tryWorkersAIChat(baseMsgs, env),
+            ];
+            const results = await Promise.allSettled(providers);
+            for (const r of results) {
+              if (r.status === 'fulfilled' && r.value && r.value.trim()) {
+                content = r.value;
+                break;
+              }
+            }
           }
         }
 
         if (content) content = content.trim();
+        if (!content) content = '';
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const now = new Date();
-        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: 'default', type: 'chat' });
+        return jsonOk({ response: '', session_id: 'default', type: 'chat' });
       }
     }
 
@@ -726,7 +924,7 @@ export default {
           try { history = JSON.parse(historyRaw); } catch {}
         }
 
-        const webContext = await webSearch(message);
+        const webContext = await webSearch(message, env);
         const systemPrompt = buildSystemPrompt(
           formData.get('timezone') || null,
           formData.get('location') || null,
@@ -757,8 +955,7 @@ export default {
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const now = new Date();
-        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -782,7 +979,7 @@ export default {
           try { history = JSON.parse(historyRaw); } catch {}
         }
 
-        const webContext = await webSearch(message);
+        const webContext = await webSearch(message, env);
         const systemPrompt = buildSystemPrompt(null, null, webContext);
 
         const llmPrompt = `The user uploaded a file named "${fileName}" (type: ${mimeType}). Their message: "${message}". Please analyze this file and respond helpfully. If it's a code file, review the code. If it's a document, summarize it.`;
@@ -821,8 +1018,7 @@ export default {
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const now = new Date();
-        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -882,8 +1078,7 @@ export default {
           type: 'chat',
         });
       } catch (error) {
-        const now = new Date();
-        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -938,8 +1133,7 @@ export default {
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const now = new Date();
-        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -950,7 +1144,7 @@ export default {
         const maxResults = body.max_results || 5;
         if (!query.trim()) return jsonError('Please provide a search query.');
 
-        const results = await webSearch(query);
+        const results = await webSearch(query, env);
         return jsonOk({ results: results || '', query, type: 'search' });
       } catch (error) {
         return jsonOk({ results: '', query: query || '', type: 'search' });
@@ -984,8 +1178,7 @@ export default {
 
         return jsonOk({ response: content || '', type: 'chat' });
       } catch (error) {
-        const now = new Date();
-        return jsonOk({ response: `${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`, type: 'chat' });
+        return jsonOk({ response: '', type: 'chat' });
       }
     }
 

@@ -84,3 +84,8 @@ flutter build web --dart-define="API_BASE_URL=https://ai.acronous.com"
 Copy-Item -LiteralPath "web/_worker.js" -Destination "build/web/_worker.js" -Force
 npx wrangler pages deploy build/web --project-name=acronous-ai
 ```
+
+### Web Search
+- All search is handled directly in the Cloudflare Worker (no external service)
+- Engines: DuckDuckGo HTML/lite/API, Google, Bing, SearXNG, Wikipedia, Mojeek, Google News, Hacker News, Reddit, Guardian
+- Python search-service/ has been removed — everything runs in-worker
