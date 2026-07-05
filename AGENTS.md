@@ -15,25 +15,19 @@
 - **OpenRouter** flux models for fallback
 
 ### Image Editing (modify existing images)
-**6-layer priority pipeline for maximum quality:**
+**5-layer pipeline — NO text-to-image fallback (produces broken/random images):**
 
-1. **Python Microservice** (`image-service/`) — Uses rembg (CPU segmentation) + Pillow compositing + optional GPU SD inpainting. Deployed on Hugging Face Spaces or any host. Set `EDITOR_SERVICE_URL` env var.
-2. **Vision-Guided Editing** — Uses OpenRouter vision model to analyze image content, then LLM to craft precise edit instructions before sending to image engine.
-3. **Better Pollinations** — Enhanced prompt engineering with image context for higher quality img2img.
-4. **Workers AI with Image Input** — CF Workers AI img2img with tuned parameters (strength, guidance).
-5. **Standard Pollinations POST** — Original img2img fallback.
-6. **Workers AI Text-to-Image** — Last resort, regenerates from scratch.
+1. **Python Microservice** (`image-service/`) — rembg + Pillow + optional SD GPU. Set `EDITOR_SERVICE_URL`.
+2. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, no API key needed, instruction-based editing (no mask required). ~30 req/hr without token, higher with `HF_API_TOKEN` secret.
+3. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask (reads JPEG/PNG/WebP headers to get pixel dimensions).
+4. **Better Pollinations** — Enhanced prompt with vision context, tries turbo/flux/sdxl models.
+5. **Standard Pollinations POST** — Original img2img fallback. If all fail, returns text error — never regenerates from scratch.
 
-**Key Improvements:**
-- Vision model analyzes image first → understands exact region to edit
-- LLM crafts optimal edit prompt based on actual image content
-- Python service does precise segmentation (rembg CPU) for targeted edits
-- Optional GPU path with Stable Diffusion inpainting
-
-**Hard rules:**
-- NEVER respond with "I cannot edit images" — always attempt all 6 strategies first
-- If all strategies fail, return empty so the chat LLM generates a natural apology
-- No hardcoded response templates
+**Key rules:**
+- Image dimensions detected from binary header (no canvas needed) → mask created at exact pixel size
+- InstructPix2Pix is instruction-based: "change the dress to red" works without parsing edit targets
+- NEVER use SDXL text-to-image as edit fallback (generates unrelated image)
+- If all strategies fail, return a natural apology text — never a random image
 
 ### Image Editing Endpoints in Worker
 | Endpoint | Purpose |
@@ -86,6 +80,8 @@ npx wrangler pages deploy build/web --project-name=acronous-ai
 ### Set secrets
 ```sh
 npx wrangler secret put OPENROUTER_API_KEY
+# Optional: Hugging Face token for higher InstructPix2Pix rate limits (~30 req/hr without)
+npx wrangler secret put HF_API_TOKEN
 ```
 
 ### Deploy both

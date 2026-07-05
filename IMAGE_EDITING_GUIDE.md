@@ -14,22 +14,21 @@ User uploads image + edit prompt
       ├─ Strategy 1: Python Service (if EDITOR_SERVICE_URL set)
       │   └─ image-service/app.py (rembg + Pillow + optional SD GPU)
       │
-      ├─ Strategy 2: Vision-Guided Editing
+      ├─ Strategy 2: Hugging Face InstructPix2Pix (free, no key, no mask)
+      │   └─ timbrooks/instruct-pix2pix — instruction-based image editing
+      │
+      ├─ Strategy 3: Workers AI Inpainting (dimension-matched mask)
+      │   ├─ Reads image dimensions from binary header (JPEG/PNG/WebP)
+      │   ├─ Creates pixel-level mask at exact image dimensions
+      │   └─ Uses @cf/runwayml/stable-diffusion-v1-5-inpainting
+      │
+      ├─ Strategy 4: Vision-Guided Pollinations
       │   ├─ Analyze image with OpenRouter vision model
       │   ├─ Craft edit prompt with LLM
-      │   └─ Send enhanced prompt to Pollinations
+      │   └─ Send enhanced prompt + image to Pollinations
       │
-      ├─ Strategy 3: Better Pollinations
-      │   └─ POST with enhanced prompt + image context
-      │
-      ├─ Strategy 4: Workers AI img2img
-      │   └─ CF AI SDXL with image input + strength params
-      │
-      ├─ Strategy 5: Standard Pollinations
-      │   └─ Original img2img POST
-      │
-      └─ Strategy 6: Workers AI text-to-image
-          └─ Last resort fallback
+      └─ Strategy 5: Standard Pollinations img2img
+          └─ POST with image + prompt (no text-to-image fallback)
 ```
 
 ## Python Microservice (`image-service/`)
@@ -62,16 +61,23 @@ npx wrangler secret put EDITOR_SERVICE_URL
 | `/remove-bg` | POST | Remove background |
 | `/health` | GET | Health check |
 
-## Helper Functions (cloudflare-worker.js)
+## Key Functions (cloudflare-worker.js)
 
 | Function | Purpose |
 |---|---|
-| `tryEditorService()` | Calls Python microservice |
-| `analyzeImageWithVision()` | Uses vision model to describe image |
-| `craftEditPrompt()` | Uses LLM to create optimal edit prompt |
-| `tryBetterPollinationsEdit()` | Enhanced Pollinations with context |
-| `tryWorkersAIEdit()` | CF Workers AI img2img |
+| `getImageDimensions()` | Reads JPEG/PNG/WebP pixel dimensions from binary header |
+| `createEditMask()` | Creates pixel-level grayscale mask at exact image dimensions |
+| `tryEditorService()` | Calls Python microservice (rembg + Pillow + optional SD) |
+| `analyzeImageWithVision()` | Uses OpenRouter vision model to describe image |
+| `buildEditPrompt()` | Crafts precise edit instruction with vision context |
+| `parseEditTarget()` | Classifies prompt into clothing/background/face/hair/color/auto |
+| `tryWorkersAIInpaint()` | CF Workers AI inpainting with dimension-matched mask |
+| `tryBetterPollinationsEdit()` | Enhanced Pollinations with vision context (tries turbo/flux/sdxl) |
 | `tryPollinationsImageEdit()` | Standard Pollinations img2img |
+| `tryHuggingFaceEdit()` | Hugging Face InstructPix2Pix (free, instruction-based, no mask) |
+| `tryWorkersAIInpaint()` | CF Workers AI inpainting with dimension-matched mask |
+| `tryBetterPollinationsEdit()` | Enhanced Pollinates with vision context |
+| `tryPollinationsImageEdit()` | Standard Pollinates img2img |
 
 ## Working Edit Examples
 

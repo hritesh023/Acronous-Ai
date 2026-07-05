@@ -696,6 +696,55 @@ async function tryPollinationsImage(prompt) {
 }
 
 // ---------------------------------------------------------------------------
+// Image dimension reader — extracts pixel dimensions from JPEG/PNG headers
+// ---------------------------------------------------------------------------
+
+function getImageDimensions(bytes) {
+  // JPEG
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
+    let offset = 2;
+    while (offset < bytes.length) {
+      if (bytes[offset] !== 0xFF) break;
+      const marker = bytes[offset + 1];
+      if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
+        const height = (bytes[offset + 5] << 8) + bytes[offset + 6];
+        const width = (bytes[offset + 7] << 8) + bytes[offset + 8];
+        if (width > 0 && height > 0) return { width, height };
+        break;
+      }
+      const segLen = (bytes[offset + 2] << 8) + bytes[offset + 3];
+      if (segLen < 2) break;
+      offset += 2 + segLen;
+    }
+  }
+  // PNG
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+    const width = (bytes[16] << 24) + (bytes[17] << 16) + (bytes[18] << 8) + bytes[19];
+    const height = (bytes[20] << 24) + (bytes[21] << 16) + (bytes[22] << 8) + bytes[23];
+    if (width > 0 && height > 0) return { width, height };
+  }
+  // WebP (RIFF)
+  if (bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46) {
+    const sig = String.fromCharCode(...bytes.slice(8, 12));
+    if (sig === 'WEBP') {
+      const fmt = String.fromCharCode(...bytes.slice(12, 16));
+      if (fmt === 'VP8 ') {
+        const w = ((bytes[26] & 0x3F) << 8) + bytes[27] + 1;
+        const h = ((bytes[28] & 0x3F) << 8) + bytes[29] + 1;
+        if (w > 0 && h > 0) return { width: w, height: h };
+      }
+      if (fmt === 'VP8L') {
+        const bits = (bytes[24] + (bytes[25] << 8) + (bytes[26] << 16) + (bytes[27] << 24)) >>> 0;
+        const w = (bits & 0x3FFF) + 1;
+        const h = ((bits >> 14) & 0x3FFF) + 1;
+        if (w > 0 && h > 0) return { width: w, height: h };
+      }
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Mask generation — creates pixel-level masks for targeted editing
 // ---------------------------------------------------------------------------
 
@@ -709,192 +758,153 @@ function parseEditTarget(prompt) {
   return 'auto';
 }
 
+// Create a grayscale mask for the inpainting model.
+// White (255) = region to edit, Black (0) = keep as-is.
+// The mask is raw bytes in H×W row-major order.
+// Dimensions MUST match the input image pixel dimensions.
 function createEditMask(width, height, editTarget) {
-  const channels = 4;
-  const total = width * height * channels;
+  const total = width * height;
   const mask = new Uint8Array(total);
-  // Fill with black (0) = preserve, white (255) = edit
   for (let i = 0; i < total; i++) mask[i] = 0;
 
-  const setPixel = (x, y, val) => {
-    if (x < 0 || x >= width || y < 0 || y >= height) return;
-    const idx = (y * width + x) * 4;
-    mask[idx] = val; mask[idx+1] = val; mask[idx+2] = val; mask[idx+3] = 255;
-  };
-  const fillRect = (x0, y0, x1, y1, val) => {
-    for (let y = y0; y <= y1; y++)
-      for (let x = x0; x <= x1; x++)
-        setPixel(x, y, val);
-  };
-  const fillOval = (cx, cy, rx, ry, val) => {
-    for (let y = cy - ry; y <= cy + ry; y++)
-      for (let x = cx - rx; x <= cx + rx; x++) {
-        if (((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1)
-          setPixel(x, y, val);
-      }
-  };
-
-  switch (editTarget) {
-    case 'clothing': {
-      // Upper body region: from shoulders to waist
-      const yTop = Math.floor(height * 0.22);
-      const yBot = Math.floor(height * 0.72);
-      const xMargin = Math.floor(width * 0.08);
-      fillRect(xMargin, yTop, width - xMargin, yBot, 255);
-      // Add a gradient falloff at edges
-      for (let y = yTop; y <= yBot; y++) {
-        const fadeIn = Math.min(1, (y - yTop) / 20);
-        const fadeOut = Math.min(1, (yBot - y) / 20);
-        const alpha = Math.min(fadeIn, fadeOut);
-        for (let x = 0; x < xMargin; x++) {
-          const f = Math.min(1, x / xMargin);
-          setPixel(x, y, Math.floor(255 * (1 - f) * alpha));
-          setPixel(width - 1 - x, y, Math.floor(255 * (1 - f) * alpha));
-        }
-      }
-      break;
-    }
-    case 'background': {
-      // Invert: keep center, edit edges
-      const cx = Math.floor(width / 2);
-      const cy = Math.floor(height / 2);
-      const rx = Math.floor(width * 0.35);
-      const ry = Math.floor(height * 0.4);
-      fillOval(cx, cy, rx, ry, 0);
-      // Everything outside the oval = background = edit
-      for (let y = 0; y < height; y++)
-        for (let x = 0; x < width; x++) {
-          const dx = (x - cx) / rx, dy = (y - cy) / ry;
-          if (dx * dx + dy * dy > 1) setPixel(x, y, 255);
-        }
-      break;
-    }
-    case 'face': {
-      // Center oval for face
-      const cx = Math.floor(width / 2);
-      const cy = Math.floor(height * 0.30);
-      const rx = Math.floor(width * 0.15);
-      const ry = Math.floor(height * 0.2);
-      fillOval(cx, cy, rx, ry, 255);
-      break;
-    }
-    case 'hair': {
-      // Top portion
-      const yBot = Math.floor(height * 0.25);
-      fillRect(0, 0, width - 1, yBot, 255);
-      break;
-    }
-    default: {
-      // Auto: upper body (most likely edit target)
-      const yTop = Math.floor(height * 0.22);
-      const yBot = Math.floor(height * 0.72);
-      const xMargin = Math.floor(width * 0.08);
-      fillRect(xMargin, yTop, width - xMargin, yBot, 255);
-      break;
+  const y0 = Math.floor(height * 0.22), y1 = Math.floor(height * 0.72);
+  const xm = Math.floor(width * 0.08);
+  for (let y = y0; y <= y1; y++)
+    for (let x = xm; x < width - xm; x++)
+      mask[y * width + x] = 255;
+  // feathered edges
+  for (let y = y0; y <= y1; y++) {
+    for (let x = 0; x < xm; x++) {
+      const f = Math.floor(255 * x / xm);
+      mask[y * width + x] = f;
+      mask[y * width + (width - 1 - x)] = f;
     }
   }
   return mask;
 }
 
-function compositeImage(originalBytes, editedImageData, maskBytes) {
-  // Combine original and edited using mask:
-  //   mask white (255) = use edited pixel
-  //   mask black (0)   = use original pixel
-  //   gray values blend between the two
+// Build a prompt that tells the AI exactly what to change and what to keep
+function buildEditPrompt(editTarget, userPrompt, imageDescription) {
+  const context = imageDescription ? `Context: ${imageDescription.slice(0, 300)}. ` : '';
+  const keep = 'CRITICAL: Keep everything else COMPLETELY UNCHANGED — face, hair, body, pose, lighting, background, colors, style, and composition must remain pixel-identical. Only modify the specified region.';
+  switch (editTarget) {
+    case 'clothing':
+      return `${context}Edit the clothing/outfit: ${userPrompt}. ${keep}`;
+    case 'background':
+      return `${context}Edit the background: ${userPrompt}. ${keep}`;
+    case 'face':
+      return `${context}Edit the face/expression: ${userPrompt}. ${keep}`;
+    case 'hair':
+      return `${context}Edit the hair: ${userPrompt}. ${keep}`;
+    case 'color':
+      return `${context}Adjust colors: ${userPrompt}. ${keep}`;
+    default:
+      return `${context}Edit the image: ${userPrompt}. ${keep}`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Image editing strategies — only return valid edited images
+// NEVER fall back to text-to-image (that produces broken/random images)
+// ---------------------------------------------------------------------------
+
+// ── Strategy A: Hugging Face InstructPix2Pix (free, no key, instruction-based) ──
+async function tryHuggingFaceEdit(imageBytes, prompt, env) {
   try {
-    const orig = new Uint8Array(originalBytes);
-    const edit = base64ToBytes(editedImageData);
-    const m = new Uint8Array(maskBytes);
-    const len = Math.min(orig.length, edit.length, m.length);
-    const out = new Uint8Array(len);
-    for (let i = 0; i < len; i += 4) {
-      const alpha = m[i] / 255; // 0-1 blend factor
-      const keep = 1 - alpha;
-      out[i]     = orig[i]     * keep + edit[i]     * alpha;
-      out[i + 1] = orig[i + 1] * keep + edit[i + 1] * alpha;
-      out[i + 2] = orig[i + 2] * keep + edit[i + 2] * alpha;
-      out[i + 3] = 255;
+    const b64 = arrayBufferToBase64(imageBytes);
+    const headers = { 'Content-Type': 'application/json' };
+    if (env.HF_API_TOKEN) headers['Authorization'] = `Bearer ${env.HF_API_TOKEN}`;
+    // InstructPix2Pix takes image + text instruction → outputs edited image
+    const resp = await fetch('https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ inputs: b64, parameters: { prompt: prompt.slice(0, 500) } }),
+    });
+    if (!resp.ok) {
+      // If rate limited (429/503), wait and retry once
+      if (resp.status === 429 || resp.status === 503) {
+        await new Promise(r => setTimeout(r, 2000));
+        const retry = await fetch('https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ inputs: b64, parameters: { prompt: prompt.slice(0, 500) } }),
+        });
+        if (!retry.ok) return null;
+        const buf = await retry.arrayBuffer();
+        if (!buf || buf.byteLength < 200) return null;
+        return arrayBufferToBase64(buf);
+      }
+      return null;
     }
-    return arrayBufferToBase64(out.buffer);
-  } catch { return editedImageData; }
+    const ct = resp.headers.get('content-type') || '';
+    if (ct.includes('application/json')) {
+      const json = await resp.json();
+      const img = json?.image || json?.generated_image || json?.[0]?.image || null;
+      if (img && img.length > 200) return img;
+      return null;
+    }
+    const buf = await resp.arrayBuffer();
+    if (!buf || buf.byteLength < 200) return null;
+    return arrayBufferToBase64(buf);
+  } catch { return null; }
 }
 
-function base64ToBytes(b64) {
-  const bin = atob(b64);
-  const len = bin.length;
-  const arr = new Uint8Array(len);
-  for (let i = 0; i < len; i++) arr[i] = bin.charCodeAt(i);
-  return arr;
+// ── Strategy B: Workers AI Inpainting with dimension-matched mask ──
+// The image bytes are sent raw (runtime decodes internally). The mask
+// must have one element per pixel of the decoded image. We detect dimensions
+// from the binary header so both align.
+async function tryWorkersAIInpaint(imageBytes, maskBytes, prompt, env) {
+  if (!env.AI) return null;
+  try {
+    const result = await env.AI.run('@cf/runwayml/stable-diffusion-v1-5-inpainting', {
+      prompt,
+      image: [...new Uint8Array(imageBytes)],
+      mask: [...maskBytes],
+      strength: 0.85,
+      guidance: 7.5,
+      num_steps: 20,
+    });
+    if (result?.image) return result.image;
+    return null;
+  } catch { return null; }
 }
 
-// ---------------------------------------------------------------------------
-// Editing strategies
-// ---------------------------------------------------------------------------
-
+// ── Strategy C: Pollinations img2img (free fallback) ──
 async function tryPollinationsImageEdit(imageBase64, prompt) {
   try {
     const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        img: imageBase64,
-        width: 1024,
-        height: 1024,
-        nofeed: true,
-      }),
+      body: JSON.stringify({ img: imageBase64, width: 1024, height: 1024, nofeed: true }),
     });
     if (!resp.ok) return null;
-    return arrayBufferToBase64(await resp.arrayBuffer());
+    const buf = await resp.arrayBuffer();
+    if (!buf || buf.byteLength < 200) return null;
+    return arrayBufferToBase64(buf);
   } catch { return null; }
 }
 
 async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription) {
-  const contextDesc = imageDescription ? `Original image: ${imageDescription}. ` : '';
-  const enhancedPrompt = `${contextDesc}${editPrompt}. High quality, photorealistic, detailed. Keep everything else identical.`;
-  try {
-    const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhancedPrompt), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt: enhancedPrompt,
-        img: imageBase64,
-        width: 1024,
-        height: 1024,
-        nofeed: true,
-        model: 'turbo',
-      }),
-    });
-    if (!resp.ok) return null;
-    return arrayBufferToBase64(await resp.arrayBuffer());
-  } catch { return null; }
+  const ctx = imageDescription ? `Original: ${imageDescription.slice(0, 200)}. ` : '';
+  const enhanced = `${ctx}${editPrompt}. High quality, detailed. Keep everything else identical.`;
+  for (const model of ['turbo', 'flux', 'sdxl']) {
+    try {
+      const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhanced), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ img: imageBase64, width: 1024, height: 1024, nofeed: true, model }),
+      });
+      if (!resp.ok) continue;
+      const buf = await resp.arrayBuffer();
+      if (!buf || buf.byteLength < 200) continue;
+      return arrayBufferToBase64(buf);
+    } catch { continue; }
+  }
+  return null;
 }
 
-async function tryWorkersAI(prompt, env) {
-  if (!env.AI) return null;
-  try {
-    const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', { prompt });
-    if (result?.image) return result.image;
-    return null;
-  } catch { return null; }
-}
-
-async function tryWorkersAIInpaint(imageBytes, maskBytes, prompt, width, height, env) {
-  // Workers AI inpainting — changes ONLY the masked region
-  if (!env.AI) return null;
-  try {
-    const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-      prompt,
-      image: [...new Uint8Array(imageBytes)],
-      mask: [...maskBytes],
-      strength: 0.9,
-      guidance: 7.5,
-      num_steps: 25,
-    });
-    if (result?.image) return result.image;
-    return null;
-  } catch { return null; }
-}
+// ⛔ NEVER use text-to-image models for image editing — they produce random/unrelated images
+// This function intentionally omitted.
 
 async function tryEditorService(imageBytes, editPrompt, env) {
   const serviceUrl = env.EDITOR_SERVICE_URL;
@@ -935,25 +945,6 @@ async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
     const data = await resp.json();
     return data?.choices?.[0]?.message?.content || null;
   } catch { return null; }
-}
-
-async function craftEditPrompt(imageDescription, editPrompt) {
-  if (!imageDescription) return editPrompt;
-  try {
-    const messages = [
-      { role: 'system', content: 'You craft precise image editing prompts. Given an image description and an edit request, create a detailed prompt for an AI image editor. The prompt should specify exactly what to change while preserving everything else. Be specific about colors, styles, and placement. Output ONLY the prompt, nothing else.' },
-      { role: 'user', content: `Image: ${imageDescription}\nEdit request: ${editPrompt}\n\nCreate a detailed edit prompt:` }
-    ];
-    const resp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, model: 'openai', private: true })
-    });
-    if (!resp.ok) return editPrompt;
-    const text = await resp.text();
-    const trimmed = text?.trim();
-    return trimmed || editPrompt;
-  } catch { return editPrompt; }
 }
 
 function jsonOk(data, status = 200) {
@@ -1271,86 +1262,52 @@ export default {
 
         // Determine what to edit from the prompt
         const editTarget = parseEditTarget(editPrompt);
-        let editedBase64 = null;
-        let imageDescription = null;
-        let enhancedPrompt = editPrompt;
 
-        // ── Strategy 1: Python Editor Service (best quality, real segmentation) ──
-        editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
+        // Get vision context for precise prompting
+        const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
+        const editPromptText = buildEditPrompt(editTarget, editPrompt, imageDescription);
+
+        // ── Strategy 1: Python Editor Service (best quality, if deployed) ──
+        let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 2: Mask-based inpainting (Workers AI) ──
-        // Create a pixel-level mask for the target region, generate new content only there,
-        // then composite back to preserve everything outside the mask exactly.
+        // ── Strategy 2: Hugging Face InstructPix2Pix (free, instruction-based, no mask) ──
+        editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // ── Strategy 3: Workers AI Inpainting with dimension-matched mask ──
         {
-          // Determine image dimensions for mask (assume square if unknown)
-          const imgWidth = 1024, imgHeight = 1024;
-          const mask = createEditMask(imgWidth, imgHeight, editTarget);
-
-          // Get vision context for better prompting
-          imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
-          enhancedPrompt = imageDescription ? (await craftEditPrompt(imageDescription, editPrompt)) || editPrompt : editPrompt;
-
-          const inpaintPrompt = enhancedPrompt + '. Change ONLY the specified region. Keep everything else pixel-identical, including face, background, pose, lighting, and colors.';
-
-          // Try Workers AI inpainting (mask-based)
-          const inpaintResult = await tryWorkersAIInpaint(fileBytes, mask, inpaintPrompt, imgWidth, imgHeight, env);
-          if (inpaintResult) {
-            // Composite: only keep changes inside the mask region
-            editedBase64 = compositeImage(fileBytes, inpaintResult, mask);
-            if (editedBase64) {
-              return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+          const dims = getImageDimensions(new Uint8Array(fileBytes));
+          if (dims && dims.width > 0 && dims.height > 0) {
+            const mask = createEditMask(dims.width, dims.height, editTarget);
+            const inpaintPrompt = editPromptText + ' High quality, photorealistic.';
+            const inpaintResult = await tryWorkersAIInpaint(fileBytes, mask, inpaintPrompt, env);
+            if (inpaintResult) {
+              return jsonOk({ response: '', image_data: inpaintResult, type: 'image_gen', session_id: sessionId });
             }
           }
         }
 
-        // ── Strategy 3: Enhanced Pollinations with vision context ──
-        if (!imageDescription) {
-          imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
-          enhancedPrompt = imageDescription ? (await craftEditPrompt(imageDescription, editPrompt)) || editPrompt : editPrompt;
-        }
-        // For Pollinations, also create a mask and try composite
-        const pollResult = await tryBetterPollinationsEdit(imageBase64, enhancedPrompt, imageDescription);
-        if (pollResult) {
-          // Try to composite with mask to preserve unchanged regions
-          const imgWidth = 1024, imgHeight = 1024;
-          const mask = createEditMask(imgWidth, imgHeight, editTarget);
-          editedBase64 = compositeImage(fileBytes, pollResult, mask);
+        // ── Strategy 4: Enhanced Pollinations with vision context ──
+        editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription);
+        if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 4: Standard Pollinations ──
+        // ── Strategy 5: Standard Pollinations img2img ──
         editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
         if (editedBase64) {
-          const imgWidth = 1024, imgHeight = 1024;
-          const mask = createEditMask(imgWidth, imgHeight, editTarget);
-          editedBase64 = compositeImage(fileBytes, editedBase64, mask);
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 5: Workers AI text-to-image (last resort) ──
-        if (env.AI) {
-          try {
-            const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-              prompt: enhancedPrompt,
-              image: [...new Uint8Array(fileBytes)],
-            });
-            if (result?.image) {
-              const imgWidth = 1024, imgHeight = 1024;
-              const mask = createEditMask(imgWidth, imgHeight, editTarget);
-              editedBase64 = compositeImage(fileBytes, result.image, mask);
-            }
-          } catch {}
-        }
-        if (editedBase64) {
-          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
-        }
-
-        return jsonOk({ response: '', session_id: sessionId, type: 'chat' });
+        // ── All strategies exhausted — return empty (never text-to-image for edits) ──
+        return jsonOk({ response: 'I was unable to edit the image as requested. Please try a different edit description or upload the image again.', session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: 'Something went wrong while editing the image. Please try again.', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -1368,18 +1325,23 @@ export default {
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const editTarget = parseEditTarget(editPrompt);
-        const imgWidth = 1024, imgHeight = 1024;
 
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
+        if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
+        if (!editedBase64) {
+          const dims = getImageDimensions(new Uint8Array(fileBytes));
+          if (dims && dims.width > 0 && dims.height > 0) {
+            const mask = createEditMask(dims.width, dims.height, editTarget);
+            editedBase64 = await tryWorkersAIInpaint(fileBytes, mask, editPrompt, env);
+          }
+        }
         if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null);
         if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
 
         if (editedBase64) {
-          const mask = createEditMask(imgWidth, imgHeight, editTarget);
-          editedBase64 = compositeImage(fileBytes, editedBase64, mask);
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
-        return jsonOk({ response: '', session_id: sessionId, type: 'chat' });
+        return jsonOk({ response: 'Could not edit the image. Please try a different description.', session_id: sessionId, type: 'chat' });
       } catch (error) {
         return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
@@ -1397,17 +1359,22 @@ export default {
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const editTarget = parseEditTarget(prompt);
-
-        let result = null;
         const description = await analyzeImageWithVision(imageBase64, file.type || 'image/jpeg', prompt, env);
-        const enhanced = description ? (await craftEditPrompt(description, prompt)) || prompt : prompt;
-        result = await tryBetterPollinationsEdit(imageBase64, enhanced, description);
+        const editPromptText = buildEditPrompt(editTarget, prompt, description);
+
+        let result = await tryEditorService(fileBytes, prompt, env);
+        if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
+        if (!result) {
+          const dims = getImageDimensions(new Uint8Array(fileBytes));
+          if (dims && dims.width > 0 && dims.height > 0) {
+            const mask = createEditMask(dims.width, dims.height, editTarget);
+            result = await tryWorkersAIInpaint(fileBytes, mask, editPromptText, env);
+          }
+        }
+        if (!result) result = await tryBetterPollinationsEdit(imageBase64, editPromptText, description);
         if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt);
 
         if (result) {
-          const imgWidth = 1024, imgHeight = 1024;
-          const mask = createEditMask(imgWidth, imgHeight, editTarget);
-          result = compositeImage(fileBytes, result, mask);
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
         return jsonOk({ content: '', type: 'chat' });

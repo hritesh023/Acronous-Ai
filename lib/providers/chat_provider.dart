@@ -1088,6 +1088,14 @@ class ChatProvider extends ChangeNotifier {
         'remove',
         'replace',
         'change',
+        'cut',
+        'crop',
+        'trim',
+        'part',
+        'section',
+        'area',
+        'expression',
+        'pose',
       ];
       final hasVisualContext = visualContext.any((w) => t.contains(w));
 
@@ -1142,6 +1150,11 @@ class ChatProvider extends ChangeNotifier {
         'keep everything',
         'same face',
         'same person',
+        'cut the',
+        'cut out',
+        'crop the',
+        'crop this',
+        'trim the',
       ];
       final mediumEditKeywords = [
         'make it ',
@@ -1202,7 +1215,7 @@ class ChatProvider extends ChangeNotifier {
           weakEditKeywords.any(isWeakKeywordMatch);
 
       final startsWithEdit = RegExp(
-        r'^(edit|modify|redesign|enhance|improve|change|make|turn|convert)\s+(this|the|my|image|photo|picture|it|into)\b',
+        r'^(edit|modify|redesign|enhance|improve|change|make|turn|convert|cut|crop|trim)\s+(this|the|my|image|photo|picture|it|into|out)\b',
       ).hasMatch(t);
       // Broader catch-all: any edit-like verb + visual context = edit request
       final editVerbs = [
@@ -1221,6 +1234,8 @@ class ChatProvider extends ChangeNotifier {
         'add',
         'remove',
         'crop',
+        'cut',
+        'trim',
         'rotate',
         'resize',
       ];
