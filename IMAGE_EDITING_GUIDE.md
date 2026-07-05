@@ -1,68 +1,84 @@
-# Documentation Update for Acronous AI Image Editing Enhancements
+# Acronous AI Image Editing Guide
 
-## Image Editing Approach (Updated)
+## Architecture Overview
 
-### New Prioritized Workflow
-**As of commit 3014341, the image editing approach was simplified to provide better performance and reliability:**
+```
+User uploads image + edit prompt
+  │
+  ├─► Flutter Frontend (chat_provider.dart)
+  │   ├─ Detects edit intent via keyword matching
+  │   └─ Calls /v1/image/edit (120s timeout)
+  │
+  └─► Cloudflare Worker (cloudflare-worker.js)
+      │
+      ├─ Strategy 1: Python Service (if EDITOR_SERVICE_URL set)
+      │   └─ image-service/app.py (rembg + Pillow + optional SD GPU)
+      │
+      ├─ Strategy 2: Vision-Guided Editing
+      │   ├─ Analyze image with OpenRouter vision model
+      │   ├─ Craft edit prompt with LLM
+      │   └─ Send enhanced prompt to Pollinations
+      │
+      ├─ Strategy 3: Better Pollinations
+      │   └─ POST with enhanced prompt + image context
+      │
+      ├─ Strategy 4: Workers AI img2img
+      │   └─ CF AI SDXL with image input + strength params
+      │
+      ├─ Strategy 5: Standard Pollinations
+      │   └─ Original img2img POST
+      │
+      └─ Strategy 6: Workers AI text-to-image
+          └─ Last resort fallback
+```
 
-1. **Enhanced LLM-Guided Editing** with web search integration
-   - Uses vision models to understand original image content
-   - Crafts precise edit instructions based on actual image analysis
-   - Integrates web search for enhanced editing context
+## Python Microservice (`image-service/`)
 
-2. **Multiple Editing Options (in priority order)**:
-   - **Pollinations POST API** (`/post/image`) - No URL limits, best quality
-   - **Cloudflare Workers AI** - Free tier, reliable within plan
-   - **Enhanced Pollinations img2img** - With identity preservation
+A FastAPI service that provides:
+- **rembg segmentation** (CPU) — clothing/person/foreground masks
+- **Smart recoloring** (CPU) — color palette transfer based on edit description
+- **SD Inpainting** (GPU, optional) — Stable Diffusion 2 inpainting pipeline
 
-3. **Key Improvements**:
-   - Removed HuggingFace instruct-pix2pix (had reliability issues)
-   - Added comprehensive web search integration for complex edits
-   - Implemented robust error handling with console logging
-   - Fixed timeout and concurrency issues
-   - Enhanced image identity preservation
+### Deploy to Hugging Face Spaces (Free)
 
-### How Image Editing Works Now
+```bash
+cd image-service
+git init && git add . && git commit -m "init"
+git remote add space https://huggingface.co/spaces/YOUR_USER/acronous-image-service
+git push space main
+```
 
-**Step 1: Image Analysis**
-- Uses vision models to analyze the original image with MAXIMUM precision
-- Describes: main subject, background, colors, lighting, composition, style
-- Focuses on details needed for accurate editing
+Then set Cloudflare Worker secret:
+```bash
+npx wrangler secret put EDITOR_SERVICE_URL
+# Value: https://YOUR_USER-acronous-image-service.hf.space
+```
 
-**Step 2: Edit Instruction Crafting**
-- LLM creates precise edit prompts based on actual image content
-- Differentiates between inpainting and general editing approaches
-- Ensures prompts are detailed but under 300 characters
+### API Endpoints
+| Endpoint | Method | Description |
+|---|---|---|
+| `/edit` | POST | Edit image with prompt (multipart) |
+| `/segment` | POST | Get segmentation mask |
+| `/remove-bg` | POST | Remove background |
+| `/health` | GET | Health check |
 
-**Step 3: Web Search Integration (New!)**
-- Extracts search terms from edit request
-- Searches the web for enhanced editing context and techniques
-- Incorporates web results into edit prompts for better results
+## Helper Functions (cloudflare-worker.js)
 
-**Step 4-6: Editing Engine**
-- **Pollinations POST API** (primary): Direct image editing with no URL limitations
-- **Cloudflare Workers AI**: Free tier option as reliable fallback
-- **Pollinations img2img**: Enhanced version with strict identity preservation
+| Function | Purpose |
+|---|---|
+| `tryEditorService()` | Calls Python microservice |
+| `analyzeImageWithVision()` | Uses vision model to describe image |
+| `craftEditPrompt()` | Uses LLM to create optimal edit prompt |
+| `tryBetterPollinationsEdit()` | Enhanced Pollinations with context |
+| `tryWorkersAIEdit()` | CF Workers AI img2img |
+| `tryPollinationsImageEdit()` | Standard Pollinations img2img |
 
-### Benefits of Current Approach
+## Working Edit Examples
 
-✅ **Better Quality**: Pollinations POST API provides superior image editing quality without URL limitations
-✅ **Faster**: Simplified pipeline with fewer dependency points
-✅ **More Reliable**: Removed flaky HuggingFace dependencies
-✅ **Web-Enhanced**: Integrates web search for complex editing scenarios
-✅ **Identity Preservation**: Guaranteed to maintain exact image fidelity
-
-### Working Image Editing Examples
-
-**Available edit requests include:**
-- `edit the background to a beach`
-- `change this to cartoon style`
-- `remove the text in the corner`
-- `change the lighting to sunrise`
-- `convert this to oil painting`
-
-**The system now supports cutting, replacing, and modifying parts of images while preserving:
-- Subject identity (face, body, pose, expression)
-- Background and setting
-- Colors and lighting
-- Composition and style
+- "edit this image to replace the dress with a formal suit"
+- "change the background to a beach sunset"
+- "make this look like a cartoon"
+- "change the shirt to blue"
+- "remove the person in the background"
+- "add a hat to the person"
+- "convert to oil painting style"

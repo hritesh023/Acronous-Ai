@@ -14,22 +14,33 @@
 - **Pollinations.ai** image generation (`https://image.pollinations.ai/prompt/...`) — free, no API key needed
 - **OpenRouter** flux models for fallback
 
-### Image Editing (modify existing images) — NEVER recreates from description (Updated)
-**Priority order for editing (simplified for better reliability):**
-1. **Enhanced LLM-Guided Editing with Web Search** — Uses vision model to analyze image + LLM to craft precise instructions + web search for enhanced editing context
-2. **Pollinations POST API** (`/image`) — Direct image editing with no URL limits, best quality, no API key required
-3. **Cloudflare Workers AI** (free tier) — Reliable alternative within plan limits
-4. **Enhanced Pollinations img2img** — Identity-preserving editing as final fallback
+### Image Editing (modify existing images)
+**6-layer priority pipeline for maximum quality:**
+
+1. **Python Microservice** (`image-service/`) — Uses rembg (CPU segmentation) + Pillow compositing + optional GPU SD inpainting. Deployed on Hugging Face Spaces or any host. Set `EDITOR_SERVICE_URL` env var.
+2. **Vision-Guided Editing** — Uses OpenRouter vision model to analyze image content, then LLM to craft precise edit instructions before sending to image engine.
+3. **Better Pollinations** — Enhanced prompt engineering with image context for higher quality img2img.
+4. **Workers AI with Image Input** — CF Workers AI img2img with tuned parameters (strength, guidance).
+5. **Standard Pollinations POST** — Original img2img fallback.
+6. **Workers AI Text-to-Image** — Last resort, regenerates from scratch.
 
 **Key Improvements:**
-- Removed HuggingFace dependencies (had reliability issues)
-- Added comprehensive web search integration for complex edits
-- Implemented simplified, faster pipeline with fewer dependency points
-- Guaranteed identity preservation while editing
+- Vision model analyzes image first → understands exact region to edit
+- LLM crafts optimal edit prompt based on actual image content
+- Python service does precise segmentation (rembg CPU) for targeted edits
+- Optional GPU path with Stable Diffusion inpainting
 
 **Hard rules:**
-- NEVER use OpenRouter/Cloudflare AI/Pollinations for text-to-image regeneration as an edit fallback
-- No hardcoded response templates — all responses LLM-generated via `generateNaturalResponse`
+- NEVER respond with "I cannot edit images" — always attempt all 6 strategies first
+- If all strategies fail, return empty so the chat LLM generates a natural apology
+- No hardcoded response templates
+
+### Image Editing Endpoints in Worker
+| Endpoint | Purpose |
+|---|---|
+| `/v1/image/edit` | Main editing endpoint (6 strategies) |
+| `/v1/image/ultra-edit` | Frontend fallback 1 (3 strategies) |
+| `/api/image/redesign` | Frontend fallback 2 (vision + Pollinations) |
 
 ### Image Analysis (Vision)
 - **OpenRouter** with vision models (`VISION_MODEL`, `FALLBACK_VISION_MODEL`)

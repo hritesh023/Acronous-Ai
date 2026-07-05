@@ -1,0 +1,6 @@
+# Hugging Face Spaces config
+sdk: docker
+app_port: 7860
+# Uncomment for GPU:
+# hardware:
+#   accelerator: T4

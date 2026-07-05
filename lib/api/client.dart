@@ -457,10 +457,11 @@ class ApiClient {
     required String fileName,
     required String prompt,
     String? sessionId,
+    Duration? timeout,
   }) async {
     final fields = <String, String>{'message': prompt};
     if (sessionId != null) fields['session_id'] = sessionId;
-    return _multipartPost('/v1/image/edit', fields, imageBytes, fileName);
+    return _multipartPost('/v1/image/edit', fields, imageBytes, fileName, timeout: timeout);
   }
 
   Future<Map<String, dynamic>> ultraEditImage({

@@ -1235,7 +1235,7 @@ class ChatProvider extends ChangeNotifier {
               (hasEditVerb && hasVisualContext && wordCount >= 2)) &&
           wordCount >= 2;
           if (isEditRequest) {
-        // Primary: /v1/image/edit
+        // Primary: /v1/image/edit (no artificial timeout — let complex edits take time)
         try {
           final editResp = await _api.editImage(
             imageBytes: bytes,

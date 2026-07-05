@@ -713,6 +713,29 @@ async function tryPollinationsImageEdit(imageBase64, prompt) {
   } catch { return null; }
 }
 
+async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription) {
+  // Build a more detailed prompt based on what we know about the image
+  const contextDesc = imageDescription ? `Original image: ${imageDescription}. ` : '';
+  const enhancedPrompt = `${contextDesc}${editPrompt}. High quality, photorealistic, detailed. Keep everything else identical.`;
+  
+  try {
+    const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhancedPrompt), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: enhancedPrompt,
+        img: imageBase64,
+        width: 1024,
+        height: 1024,
+        nofeed: true,
+        model: 'turbo', // use better model if available
+      }),
+    });
+    if (!resp.ok) return null;
+    return arrayBufferToBase64(await resp.arrayBuffer());
+  } catch { return null; }
+}
+
 async function tryWorkersAI(prompt, env) {
   if (!env.AI) return null;
   try {
@@ -720,6 +743,90 @@ async function tryWorkersAI(prompt, env) {
     if (result?.image) return result.image;
     return null;
   } catch { return null; }
+}
+
+async function tryWorkersAIEdit(imageBytes, editPrompt, env) {
+  // Use Workers AI with image input for editing (img2img)
+  if (!env.AI) return null;
+  try {
+    // Try SDXL with image input (img2img/inpainting)
+    const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
+      prompt: editPrompt,
+      image: [...new Uint8Array(imageBytes)],
+      strength: 0.85, // how much to transform
+      guidance_scale: 7.5,
+    });
+    if (result?.image) return result.image;
+    return null;
+  } catch { return null; }
+}
+
+async function tryEditorService(imageBytes, editPrompt, env) {
+  // Call the Python image editing microservice
+  const serviceUrl = env.EDITOR_SERVICE_URL;
+  if (!serviceUrl) return null;
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', new Blob([imageBytes], { type: 'image/jpeg' }), 'image.jpg');
+    formData.append('prompt', editPrompt);
+
+    const resp = await fetch(`${serviceUrl}/edit`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!resp.ok) return null;
+
+    const data = await resp.json();
+    if (data?.edited) return data.edited;
+    return null;
+  } catch { return null; }
+}
+
+async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
+  // Use vision model to describe the image for better edit prompts
+  if (!env.OPENROUTER_API_KEY) return null;
+  try {
+    const userContent = [
+      { type: 'text', text: `Describe this image in detail. Focus on the subject, their clothing/attire, background, colors, and composition. The user wants to edit it: "${editPrompt}"` },
+      { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+    ];
+    const messages = [
+      { role: 'system', content: 'You are an image analysis assistant. Describe images in detail for editing purposes.' },
+      { role: 'user', content: userContent },
+    ];
+
+    const model = env.VISION_MODEL || 'google/gemini-2.5-flash-lite';
+    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model, messages, max_tokens: 1024, temperature: 0.3 })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data?.choices?.[0]?.message?.content || null;
+  } catch { return null; }
+}
+
+async function craftEditPrompt(imageDescription, editPrompt) {
+  // Use LLM to craft an optimal edit prompt based on image description
+  if (!imageDescription) return editPrompt;
+  try {
+    const messages = [
+      { role: 'system', content: 'You craft precise image editing prompts. Given an image description and an edit request, create a detailed prompt for an AI image editor. The prompt should specify exactly what to change while preserving everything else. Be specific about colors, styles, and placement. Output ONLY the prompt, nothing else.' },
+      { role: 'user', content: `Image: ${imageDescription}\nEdit request: ${editPrompt}\n\nCreate a detailed edit prompt:` }
+    ];
+    // Use pollinations for this since it's free
+    const resp = await fetch('https://text.pollinations.ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, model: 'openai', private: true })
+    });
+    if (!resp.ok) return editPrompt;
+    const text = await resp.text();
+    const trimmed = text?.trim();
+    return trimmed || editPrompt;
+  } catch { return editPrompt; }
 }
 
 function jsonOk(data, status = 200) {
@@ -1033,22 +1140,53 @@ export default {
 
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
+        const mimeType = file.type || 'image/jpeg';
 
-        let editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
-        if (!editedBase64 && env.AI) {
+        let editedBase64 = null;
+
+        // Strategy 1: Python Editor Service (best quality, if deployed)
+        editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // Strategy 2: Vision-guided editing - analyze image then craft better prompt
+        const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
+        const enhancedPrompt = imageDescription ? await craftEditPrompt(imageDescription, editPrompt) : editPrompt;
+
+        // Strategy 3: Better Pollinations with enhanced prompt
+        editedBase64 = await tryBetterPollinationsEdit(imageBase64, enhancedPrompt, imageDescription);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // Strategy 4: Workers AI with image input
+        editedBase64 = await tryWorkersAIEdit(fileBytes, enhancedPrompt, env);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // Strategy 5: Original Pollinations img2img (fallback)
+        editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // Strategy 6: Workers AI text-to-image as last resort
+        if (env.AI) {
           try {
             const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', {
-              prompt: editPrompt,
+              prompt: enhancedPrompt,
               image: [...new Uint8Array(fileBytes)],
             });
             if (result?.image) editedBase64 = result.image;
           } catch {}
         }
-
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
+        // All strategies failed - return empty so LLM can apologize naturally
         return jsonOk({
           response: '',
           session_id: sessionId,
@@ -1056,6 +1194,60 @@ export default {
         });
       } catch (error) {
         return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+      }
+    }
+
+    // Ultra edit endpoint (fallback from frontend)
+    if (path === '/v1/image/ultra-edit' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const editPrompt = formData.get('prompt') || '';
+        const sessionId = formData.get('session_id') || 'default';
+
+        if (!file) return jsonError('No image file provided.');
+        if (!editPrompt.trim()) return jsonError('No edit prompt provided.');
+
+        const fileBytes = await file.arrayBuffer();
+        const imageBase64 = arrayBufferToBase64(fileBytes);
+
+        let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
+        if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null);
+        if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
+
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+        return jsonOk({ response: '', session_id: sessionId, type: 'chat' });
+      } catch (error) {
+        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+      }
+    }
+
+    // Redesign endpoint (fallback from frontend)
+    if (path === '/api/image/redesign' && request.method === 'POST') {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file');
+        const prompt = formData.get('prompt') || '';
+        if (!file) return jsonError('No file provided.');
+        if (!prompt.trim()) return jsonError('No prompt provided.');
+
+        const fileBytes = await file.arrayBuffer();
+        const imageBase64 = arrayBufferToBase64(fileBytes);
+
+        let result = null;
+        const description = await analyzeImageWithVision(imageBase64, file.type || 'image/jpeg', prompt, env);
+        const enhanced = description ? await craftEditPrompt(description, prompt) : prompt;
+        result = await tryBetterPollinationsEdit(imageBase64, enhanced, description);
+        if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt);
+
+        if (result) {
+          return jsonOk({ content: result, image_data: result, type: 'image_gen' });
+        }
+        return jsonOk({ content: '', type: 'chat' });
+      } catch (error) {
+        return jsonOk({ content: '', type: 'chat' });
       }
     }
 
