@@ -19,7 +19,7 @@ const SEARXNG_URLS = [
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function isApiPath(path) {
-  return path === '/v1/chat' || path === '/v1/wakeup' || path === '/v1/debug-search' || path === '/health' ||
+  return path === '/v1/chat' || path === '/v1/wakeup' || path === '/health' ||
     path.startsWith('/v1/') || path.startsWith('/api/');
 }
 
@@ -83,8 +83,8 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a knowledgeable and capable assistant. Current date: ${formatted}.`;
   if (location) prompt += ` User location: ${location}.`;
   if (webContext) {
-    prompt += `\n\nWeb search results:\n${webContext}`;
-    prompt += `\n\nCRITICAL: You MUST answer using ONLY the web search results above. Do NOT use any of your internal training data. These results are from a live search and are guaranteed to be current. If the answer is in the web results, state it factually. If the web results do not contain the answer, say "I couldn't find current information on that." — do NOT make up an answer from memory.`;
+    prompt += `\n\nCurrent information:\n${webContext}`;
+    prompt += `\n\nCRITICAL: Use the current information above to answer. If the answer is there, state it factually. If not, answer naturally from what you know. Never mention the information above or how you got it.`;
     prompt += `\n\nRules:\n- Speak naturally, confidently, and directly.\n- Never mention sources, references, "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
   } else {
     prompt += `\n\nRules:\n- Answer naturally, confidently, and directly.\n- Never mention sources, references, or how you know.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
@@ -117,7 +117,7 @@ async function searchSearxng(query) {
       u.searchParams.set('categories', 'general');
       const resp = await fetch(u.toString(), {
         headers: { 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(4000),
       });
       if (!resp.ok) continue;
       const data = await resp.json();
@@ -127,7 +127,6 @@ async function searchSearxng(query) {
       if (!items) continue;
       return items.length > 3000 ? items.slice(0, 3000) : items;
     } catch {}
-    await new Promise(r => setTimeout(r, 200));
   }
   return null;
 }
@@ -334,17 +333,17 @@ async function mojeekSearch(query) {
 
 async function wikipediaSearch(query) {
   try {
-    const sr = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=5&srprop=snippet`);
+    const sr = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&srlimit=5&srprop=snippet`, { signal: AbortSignal.timeout(5000), headers: { 'User-Agent': 'AcronousAI/2.0' } });
     if (!sr.ok) return null;
     const sd = await sr.json();
     const titles = sd?.query?.search?.map(s => s.title) || [];
     if (titles.length === 0) return null;
     const results = [];
-    for (let i = 0; i < titles.length && results.length < 4; i++) {
-      const pr = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i])}`);
+    for (let i = 0; i < titles.length && results.length < 5; i++) {
+      const pr = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titles[i])}`, { signal: AbortSignal.timeout(4000), headers: { 'User-Agent': 'AcronousAI/2.0' } });
       if (pr.ok) {
         const page = await pr.json();
-        if (page.extract) results.push(`- ${page.title}: ${page.extract.replace(/\n+/g, ' ').slice(0, 400)}`);
+        if (page.extract) results.push(`- ${page.title}: ${page.extract.replace(/\n+/g, ' ').slice(0, 500)}`);
       }
     }
     return results.length > 0 ? results.join('\n') : null;
@@ -392,11 +391,13 @@ async function hackerNewsSearch(query) {
   } catch { return null; }
 }
 
+const DDG_UA = 'Mozilla/5.0 (compatible; AcronousAI/2.0)';
+
 async function duckDuckGoApi(query) {
   const strategies = [
     async () => {
       const resp = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
-        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(5000),
+        headers: { 'User-Agent': DDG_UA }, signal: AbortSignal.timeout(5000),
       });
       if (!resp.ok) return null;
       const data = await resp.json();
@@ -421,7 +422,7 @@ async function duckDuckGoApi(query) {
     },
     async () => {
       const resp = await fetch(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, {
-        headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(6000),
+        headers: { 'User-Agent': DDG_UA }, signal: AbortSignal.timeout(6000),
       });
       if (!resp.ok) return null;
       const html = await resp.text();
@@ -485,8 +486,17 @@ async function googleNewsRssSearch(query) {
 }
 
 async function tryAllEngines(query, env) {
-  const engines = [googleSearchApi, wikipediaSearch, duckDuckGoApi, hackerNewsSearch, guardianSearch, googleNewsRssSearch, searchSearxng, googleSearch, bingSearch];
-  for (const fn of engines) {
+  const results = await Promise.allSettled([
+    wikipediaSearch(query),
+    duckDuckGoApi(query),
+    searchSearxng(query),
+  ]);
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value) return r.value;
+  }
+
+  const slowEngines = [googleSearchApi, hackerNewsSearch, guardianSearch, googleNewsRssSearch, googleSearch, bingSearch];
+  for (const fn of slowEngines) {
     const r = await fn(query, env);
     if (r) return r;
   }
@@ -494,22 +504,15 @@ async function tryAllEngines(query, env) {
 }
 
 async function webSearch(query, env = {}) {
-  const currentYear = new Date().getFullYear();
   const q = query.trim();
+  const year = new Date().getFullYear();
 
-  const queries = [q];
+  const queries = [q, `${q} ${year}`, `${q} latest`];
   const stripped = q.replace(/^(who is|what is|tell me about|do you know|can you tell me|i want to know about|describe|explain)\b/i, '').trim();
-  if (stripped && stripped !== q) queries.push(stripped);
-  for (const y of [currentYear, currentYear - 1, currentYear - 2]) {
-    queries.push(`${q} ${y}`);
-  }
-  queries.push(`${q} latest`);
+  if (stripped && stripped !== q && !queries.includes(stripped)) queries.push(stripped);
 
-  let result = await tryAllEngines(q, env);
-  if (result) return result;
-
-  for (const alt of queries.slice(1, 6)) {
-    result = await tryAllEngines(alt, env);
+  for (const qi of queries.slice(0, 3)) {
+    const result = await tryAllEngines(qi, env);
     if (result) return result;
   }
 
@@ -805,93 +808,67 @@ export default {
         let content = null;
         let webData = null;
 
-        if (isInfoQuery(message)) {
-          // Info queries: web search FIRST, then LLM ONLY to format web results
-          webData = await webSearch(message, env);
-          if (webData) {
-            const sysPrompt = buildSystemPrompt(tz, location, webData);
-            const msgs = [
-              { role: 'system', content: sysPrompt },
-              ...history,
-              { role: 'user', content: message }
-            ];
-            const providers = [
-              env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-              tryPollinations(msgs, env),
-              tryWorkersAIChat(msgs, env),
-            ];
-            const results = await Promise.allSettled(providers);
-            for (const r of results) {
-              if (r.status === 'fulfilled' && r.value && r.value.trim()) {
-                content = r.value;
-                break;
-              }
-            }
+        const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
+        const baseMsgs = [
+          { role: 'system', content: sysPromptNoWeb },
+          ...history,
+          { role: 'user', content: message }
+        ];
+
+        // Run web search in parallel with LLM for all queries
+        const [webResult, ...llmResults] = await Promise.allSettled([
+          webSearch(message, env),
+          env.OPENROUTER_API_KEY ? callOpenRouter(baseMsgs, env) : Promise.resolve(null),
+          tryPollinations(baseMsgs, env),
+          tryWorkersAIChat(baseMsgs, env),
+        ]);
+        webData = webResult.status === 'fulfilled' ? webResult.value : null;
+        for (const r of llmResults) {
+          if (r.status === 'fulfilled' && r.value && r.value.trim()) {
+            content = r.value;
+            break;
           }
-        } else {
-          // Non-info queries: run LLM in parallel with web search
-          const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
-          const baseMsgs = [
-            { role: 'system', content: sysPromptNoWeb },
+        }
+
+        // If LLM responded but web data is available, regenerate with web context
+        if (content && webData) {
+          const sysPrompt = buildSystemPrompt(tz, location, webData);
+          const msgs = [
+            { role: 'system', content: sysPrompt },
             ...history,
             { role: 'user', content: message }
           ];
-          const [webResult, ...llmResults] = await Promise.allSettled([
-            webSearch(message, env),
-            env.OPENROUTER_API_KEY ? callOpenRouter(baseMsgs, env) : Promise.resolve(null),
-            tryPollinations(baseMsgs, env),
-            tryWorkersAIChat(baseMsgs, env),
-          ]);
-          webData = webResult.status === 'fulfilled' ? webResult.value : null;
-          for (const r of llmResults) {
+          const providers = [
+            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+            tryPollinations(msgs, env),
+            tryWorkersAIChat(msgs, env),
+          ];
+          const results = await Promise.allSettled(providers);
+          for (const r of results) {
             if (r.status === 'fulfilled' && r.value && r.value.trim()) {
               content = r.value;
               break;
             }
           }
-          // If LLM responded but web data is available, regenerate with web context
-          if (content && webData) {
-            const sysPrompt = buildSystemPrompt(tz, location, webData);
-            const msgs = [
-              { role: 'system', content: sysPrompt },
-              ...history,
-              { role: 'user', content: message }
-            ];
-            const providers = [
-              env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-              tryPollinations(msgs, env),
-              tryWorkersAIChat(msgs, env),
-            ];
-            const results = await Promise.allSettled(providers);
-            for (const r of results) {
-              if (r.status === 'fulfilled' && r.value && r.value.trim()) {
-                content = r.value;
-                break;
-              }
-            }
-          }
         }
 
-        // Fallback: if no content yet, try LLM without web (only for non-info queries)
+        // Fallback: if no content yet, try LLM without web
         if (!content || !content.trim()) {
-          if (!isInfoQuery(message)) {
-            const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
-            const baseMsgs = [
-              { role: 'system', content: sysPromptNoWeb },
-              ...history,
-              { role: 'user', content: message }
-            ];
-            const providers = [
-              env.OPENROUTER_API_KEY ? callOpenRouter(baseMsgs, env) : Promise.resolve(null),
-              tryPollinations(baseMsgs, env),
-              tryWorkersAIChat(baseMsgs, env),
-            ];
-            const results = await Promise.allSettled(providers);
-            for (const r of results) {
-              if (r.status === 'fulfilled' && r.value && r.value.trim()) {
-                content = r.value;
-                break;
-              }
+          const fallbackMsgs = [
+            { role: 'system', content: sysPromptNoWeb },
+            ...history,
+            { role: 'user', content: message }
+          ];
+          const providers = [
+            tryPollinations(fallbackMsgs, env),
+            tryWorkersAIChat(fallbackMsgs, env),
+            env.OPENROUTER_API_KEY ? callOpenRouter(fallbackMsgs, env) : Promise.resolve(null),
+          ];
+          const results = await Promise.allSettled(providers);
+          for (const r of results) {
+            if (r.status === 'fulfilled' && r.value && r.value.trim()) {
+              content = r.value;
+              break;
             }
           }
         }
