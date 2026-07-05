@@ -767,6 +767,46 @@ function createEditMask(width, height, editTarget) {
   const mask = new Uint8Array(total);
   for (let i = 0; i < total; i++) mask[i] = 0;
 
+  if (editTarget === 'background') {
+    // Edit everything outside a central oval — keeps the subject unchanged
+    const cx = width / 2, cy = height / 2;
+    const rx = width * 0.35, ry = height * 0.50;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const dx = (x - cx) / rx, dy = (y - cy) / ry;
+        if (dx * dx + dy * dy > 0.9) mask[y * width + x] = 255;
+      }
+    }
+    return mask;
+  }
+
+  if (editTarget === 'face') {
+    // Face region: upper-center of image
+    const y0 = Math.floor(height * 0.05), y1 = Math.floor(height * 0.45);
+    const x0 = Math.floor(width * 0.15), x1 = Math.floor(width * 0.85);
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++)
+        mask[y * width + x] = 255;
+    return mask;
+  }
+
+  if (editTarget === 'hair') {
+    // Hair region: very top portion
+    const y1 = Math.floor(height * 0.25);
+    const x0 = Math.floor(width * 0.10), x1 = Math.floor(width * 0.90);
+    for (let y = 0; y < y1; y++)
+      for (let x = x0; x < x1; x++)
+        mask[y * width + x] = 255;
+    return mask;
+  }
+
+  if (editTarget === 'color') {
+    // Entire image
+    for (let i = 0; i < total; i++) mask[i] = 255;
+    return mask;
+  }
+
+  // clothing/auto: upper-body area (dress, shirt, outfit, etc.)
   const y0 = Math.floor(height * 0.22), y1 = Math.floor(height * 0.72);
   const xm = Math.floor(width * 0.08);
   for (let y = y0; y <= y1; y++)
@@ -808,34 +848,89 @@ function buildEditPrompt(editTarget, userPrompt, imageDescription) {
 // NEVER fall back to text-to-image (that produces broken/random images)
 // ---------------------------------------------------------------------------
 
-// ── Strategy A: Hugging Face InstructPix2Pix (free, no key, instruction-based) ──
+// ── Content safety — reject harmful edit requests ──
+function isHarmfulEditRequest(prompt) {
+  const p = prompt.toLowerCase();
+  const harmful = [
+    'naked', 'nude', 'nudity', 'undress', 'undressed', 'without clothes',
+    'explicit', 'porn', 'pornographic', 'sexual', 'sex', 'erotic',
+    'nsfw', 'adult content', '18+', 'xxx',
+    'violent', 'gore', 'blood', 'killing', 'murder',
+    'child', 'minor', 'underage',
+    'weapon', 'gun', 'knife',
+    'terrorist', 'terrorism',
+  ];
+  return harmful.some(w => p.includes(w));
+}
+
+// ── Strategy A: Python Editor Service (actual editing tools via rembg/Pillow) ──
+async function tryEditorService(imageBytes, editPrompt, env) {
+  const serviceUrl = env.EDITOR_SERVICE_URL;
+  if (!serviceUrl) return null;
+  try {
+    const formData = new FormData();
+    formData.append('file', new Blob([imageBytes], { type: 'image/jpeg' }), 'image.jpg');
+    formData.append('prompt', editPrompt);
+    const resp = await fetch(`${serviceUrl}/edit`, { method: 'POST', body: formData });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data?.edited) return data.edited;
+    return null;
+  } catch { return null; }
+}
+
+// ── Strategy B: Workers AI Inpainting (targeted editing via mask) ──
+// The model auto-resizes the image to 512×512 internally. The mask is expected
+// to match the ORIGINAL image pixel dimensions (before resize), because the
+// runtime decodes the image first, then resizes both image + mask together.
+async function tryWorkersAIInpaint(imageBytes, maskBytes, prompt, env) {
+  if (!env.AI) return null;
+  try {
+    const result = await env.AI.run('@cf/runwayml/stable-diffusion-v1-5-inpainting', {
+      prompt,
+      image: [...new Uint8Array(imageBytes)],
+      mask: [...maskBytes],
+      strength: 0.8,
+      guidance: 7.5,
+      num_steps: 20,
+    });
+    if (result?.image) return result.image;
+    return null;
+  } catch { return null; }
+}
+
+// Try inpainting with mask at both original image dimensions and 512×512,
+// since the model's auto-resize behavior is not clearly documented.
+async function tryInpaintingWithFallback(imageBytes, editTarget, prompt, env) {
+  if (!env.AI) return null;
+  // Attempt 1: mask at 512×512 (if model resizes to 512×512 and expects mask at that size)
+  let mask = createEditMask(512, 512, editTarget);
+  let result = await tryWorkersAIInpaint(imageBytes, mask, prompt, env);
+  if (result) return result;
+  // Attempt 2: mask at original image dimensions
+  const dims = getImageDimensions(new Uint8Array(imageBytes));
+  if (dims && dims.width > 0 && dims.height > 0) {
+    mask = createEditMask(dims.width, dims.height, editTarget);
+    result = await tryWorkersAIInpaint(imageBytes, mask, prompt, env);
+    if (result) return result;
+  }
+  return null;
+}
+
+// ── Strategy C: Hugging Face InstructPix2Pix (free, instruction-based, no mask needed) ──
+// Quick timeout — if model is sleeping (cold start), skip immediately.
 async function tryHuggingFaceEdit(imageBytes, prompt, env) {
   try {
     const b64 = arrayBufferToBase64(imageBytes);
     const headers = { 'Content-Type': 'application/json' };
     if (env.HF_API_TOKEN) headers['Authorization'] = `Bearer ${env.HF_API_TOKEN}`;
-    // InstructPix2Pix takes image + text instruction → outputs edited image
     const resp = await fetch('https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix', {
       method: 'POST',
       headers,
       body: JSON.stringify({ inputs: b64, parameters: { prompt: prompt.slice(0, 500) } }),
+      signal: AbortSignal.timeout(8000),
     });
-    if (!resp.ok) {
-      // If rate limited (429/503), wait and retry once
-      if (resp.status === 429 || resp.status === 503) {
-        await new Promise(r => setTimeout(r, 2000));
-        const retry = await fetch('https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ inputs: b64, parameters: { prompt: prompt.slice(0, 500) } }),
-        });
-        if (!retry.ok) return null;
-        const buf = await retry.arrayBuffer();
-        if (!buf || buf.byteLength < 200) return null;
-        return arrayBufferToBase64(buf);
-      }
-      return null;
-    }
+    if (!resp.ok) return null; // model sleeping → skip, don't retry
     const ct = resp.headers.get('content-type') || '';
     if (ct.includes('application/json')) {
       const json = await resp.json();
@@ -849,27 +944,7 @@ async function tryHuggingFaceEdit(imageBytes, prompt, env) {
   } catch { return null; }
 }
 
-// ── Strategy B: Workers AI Inpainting with dimension-matched mask ──
-// The image bytes are sent raw (runtime decodes internally). The mask
-// must have one element per pixel of the decoded image. We detect dimensions
-// from the binary header so both align.
-async function tryWorkersAIInpaint(imageBytes, maskBytes, prompt, env) {
-  if (!env.AI) return null;
-  try {
-    const result = await env.AI.run('@cf/runwayml/stable-diffusion-v1-5-inpainting', {
-      prompt,
-      image: [...new Uint8Array(imageBytes)],
-      mask: [...maskBytes],
-      strength: 0.85,
-      guidance: 7.5,
-      num_steps: 20,
-    });
-    if (result?.image) return result.image;
-    return null;
-  } catch { return null; }
-}
-
-// ── Strategy C: Pollinations img2img (free fallback) ──
+// ── Strategy D: Pollinations img2img (free fallback) ──
 async function tryPollinationsImageEdit(imageBase64, prompt) {
   try {
     const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt), {
@@ -901,27 +976,6 @@ async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescripti
     } catch { continue; }
   }
   return null;
-}
-
-// ⛔ NEVER use text-to-image models for image editing — they produce random/unrelated images
-// This function intentionally omitted.
-
-async function tryEditorService(imageBytes, editPrompt, env) {
-  const serviceUrl = env.EDITOR_SERVICE_URL;
-  if (!serviceUrl) return null;
-  try {
-    const formData = new FormData();
-    formData.append('file', new Blob([imageBytes], { type: 'image/jpeg' }), 'image.jpg');
-    formData.append('prompt', editPrompt);
-    const resp = await fetch(`${serviceUrl}/edit`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (data?.edited) return data.edited;
-    return null;
-  } catch { return null; }
 }
 
 async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
@@ -1256,58 +1310,53 @@ export default {
         if (!file) return jsonError('No image file provided for editing.');
         if (!editPrompt.trim()) return jsonError('Please describe how you want to edit the image.');
 
+        // ── Content safety check ──
+        if (isHarmfulEditRequest(editPrompt)) {
+          return jsonOk({ response: "I'm sorry, but I can't process that edit request. Please try something appropriate.", session_id: sessionId, type: 'chat' });
+        }
+
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const mimeType = file.type || 'image/jpeg';
 
-        // Determine what to edit from the prompt
         const editTarget = parseEditTarget(editPrompt);
-
-        // Get vision context for precise prompting
         const imageDescription = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
         const editPromptText = buildEditPrompt(editTarget, editPrompt, imageDescription);
 
-        // ── Strategy 1: Python Editor Service (best quality, if deployed) ──
+        // ── Strategy 1: Python Editor Service (rembg + Pillow, actual editing tools) ──
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 2: Hugging Face InstructPix2Pix (free, instruction-based, no mask) ──
+        // ── Strategy 2: Workers AI Inpainting (try 512×512 mask first, then original dims) ──
+        const inpaintPrompt = editPromptText + ' High quality, photorealistic. Only edit the masked region. Keep everything else identical.';
+        editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, inpaintPrompt, env);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // ── Strategy 3: Hugging Face InstructPix2Pix (free, no mask needed) ──
         editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 3: Workers AI Inpainting with dimension-matched mask ──
-        {
-          const dims = getImageDimensions(new Uint8Array(fileBytes));
-          if (dims && dims.width > 0 && dims.height > 0) {
-            const mask = createEditMask(dims.width, dims.height, editTarget);
-            const inpaintPrompt = editPromptText + ' High quality, photorealistic.';
-            const inpaintResult = await tryWorkersAIInpaint(fileBytes, mask, inpaintPrompt, env);
-            if (inpaintResult) {
-              return jsonOk({ response: '', image_data: inpaintResult, type: 'image_gen', session_id: sessionId });
-            }
-          }
-        }
-
-        // ── Strategy 4: Enhanced Pollinations with vision context ──
+        // ── Strategy 4: Enhanced Pollinations ──
         editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPromptText, imageDescription);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 5: Standard Pollinations img2img ──
+        // ── Strategy 5: Standard Pollinations ──
         editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── All strategies exhausted — return empty (never text-to-image for edits) ──
-        return jsonOk({ response: 'I was unable to edit the image as requested. Please try a different edit description or upload the image again.', session_id: sessionId, type: 'chat' });
+        return jsonOk({ response: "I couldn't edit that image as requested. Try describing the edit differently (e.g., 'change the dress to red' or 'make the background a beach').", session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: 'Something went wrong while editing the image. Please try again.', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: 'Something went wrong while editing.', session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -1326,22 +1375,20 @@ export default {
         const imageBase64 = arrayBufferToBase64(fileBytes);
         const editTarget = parseEditTarget(editPrompt);
 
-        let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
-        if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
-        if (!editedBase64) {
-          const dims = getImageDimensions(new Uint8Array(fileBytes));
-          if (dims && dims.width > 0 && dims.height > 0) {
-            const mask = createEditMask(dims.width, dims.height, editTarget);
-            editedBase64 = await tryWorkersAIInpaint(fileBytes, mask, editPrompt, env);
-          }
+        if (isHarmfulEditRequest(editPrompt)) {
+          return jsonOk({ response: "I'm sorry, but I can't process that edit request.", session_id: sessionId, type: 'chat' });
         }
+
+        let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
+        if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPrompt, env);
+        if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null);
         if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt);
 
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
-        return jsonOk({ response: 'Could not edit the image. Please try a different description.', session_id: sessionId, type: 'chat' });
+        return jsonOk({ response: 'Could not edit the image. Try a different description.', session_id: sessionId, type: 'chat' });
       } catch (error) {
         return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
       }
@@ -1362,15 +1409,13 @@ export default {
         const description = await analyzeImageWithVision(imageBase64, file.type || 'image/jpeg', prompt, env);
         const editPromptText = buildEditPrompt(editTarget, prompt, description);
 
-        let result = await tryEditorService(fileBytes, prompt, env);
-        if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
-        if (!result) {
-          const dims = getImageDimensions(new Uint8Array(fileBytes));
-          if (dims && dims.width > 0 && dims.height > 0) {
-            const mask = createEditMask(dims.width, dims.height, editTarget);
-            result = await tryWorkersAIInpaint(fileBytes, mask, editPromptText, env);
-          }
+        if (isHarmfulEditRequest(prompt)) {
+          return jsonOk({ content: "I'm sorry, I can't process that request.", type: 'chat' });
         }
+
+        let result = await tryEditorService(fileBytes, prompt, env);
+        if (!result) result = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
+        if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
         if (!result) result = await tryBetterPollinationsEdit(imageBase64, editPromptText, description);
         if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt);
 
