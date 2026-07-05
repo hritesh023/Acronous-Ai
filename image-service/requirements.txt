@@ -6,6 +6,8 @@ numpy>=1.24.0
 rembg>=0.1.0
 opencv-python-headless>=4.8.0
 requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
 loguru>=0.7.2
 pydantic>=2.5.0
 # GPU acceleration (optional - install only on GPU machines)

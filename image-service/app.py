@@ -15,12 +15,15 @@ Strategies:
 import io
 import os
 import re
+import json
 import base64
 import logging
 from typing import Optional
+from urllib.parse import quote_plus
 
 import numpy as np
-from fastapi import FastAPI, File, Form, UploadFile, HTTPException
+import requests
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance, ImageStat
 
@@ -450,6 +453,126 @@ def edit_image(image_bytes: bytes, prompt: str) -> dict:
         "width": result.width,
         "height": result.height,
     }
+
+# ---------------------------------------------------------------------------
+# Web Search (free, unlimited via DuckDuckGo HTML scraping)
+# ---------------------------------------------------------------------------
+
+SEARCH_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "DNT": "1",
+}
+
+def search_duckduckgo(query: str, max_results: int = 5) -> str:
+    """Scrape DuckDuckGo HTML search results — free, unlimited, no API key needed."""
+    try:
+        url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+        resp = requests.get(url, headers=SEARCH_HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return ""
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+
+        for result in soup.select(".result")[:max_results]:
+            title_el = result.select_one(".result__title a")
+            snippet_el = result.select_one(".result__snippet")
+
+            title = title_el.get_text(strip=True) if title_el else ""
+            link = title_el.get("href", "") if title_el else ""
+            # DuckDuckGo wraps links in redirect
+            if "uddg=" in link:
+                from urllib.parse import parse_qs, urlparse
+                parsed = urlparse(link)
+                qs = parse_qs(parsed.query)
+                link = qs.get("uddg", [""])[0]
+            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+            if title:
+                results.append(f"- {title}: {snippet}" if snippet else f"- {title}")
+
+        return "\n".join(results) if results else ""
+    except Exception as e:
+        logging.warning(f"Python search error: {e}")
+        return ""
+
+def search_google(query: str, max_results: int = 5) -> str:
+    """Scrape Google search results as fallback."""
+    try:
+        url = f"https://www.google.com/search?q={quote_plus(query)}&hl=en"
+        resp = requests.get(url, headers=SEARCH_HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return ""
+
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(resp.text, "html.parser")
+        results = []
+
+        for g in soup.select("div.g")[:max_results]:
+            title_el = g.select_one("h3")
+            snippet_el = g.select_one("div[data-sncf], span.aCOpRe, div.VwiC3b")
+            title = title_el.get_text(strip=True) if title_el else ""
+            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+            if title:
+                results.append(f"- {title}: {snippet}" if snippet else f"- {title}")
+
+        return "\n".join(results) if results else ""
+    except Exception as e:
+        logging.warning(f"Google search error: {e}")
+        return ""
+
+def search_wikipedia(query: str, max_results: int = 3) -> str:
+    """Search Wikipedia via its API."""
+    try:
+        url = "https://en.wikipedia.org/w/api.php"
+        params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "format": "json",
+            "srlimit": max_results,
+            "srprop": "snippet",
+        }
+        resp = requests.get(url, params=params, headers=SEARCH_HEADERS, timeout=10)
+        if resp.status_code != 200:
+            return ""
+        data = resp.json()
+        results = []
+        for r in data.get("query", {}).get("search", []):
+            title = r.get("title", "")
+            snippet = re.sub(r"<[^>]+>", "", r.get("snippet", ""))
+            if title:
+                results.append(f"- {title}: {snippet}" if snippet else f"- {title}")
+        return "\n".join(results) if results else ""
+    except Exception as e:
+        logging.warning(f"Wikipedia search error: {e}")
+        return ""
+
+@app.get("/search")
+async def api_search(
+    q: str = Query(..., description="Search query"),
+    max_results: int = Query(5, description="Maximum results"),
+):
+    """Unlimited free web search via DuckDuckGo HTML scraping + fallbacks."""
+    # Try primary engines in parallel
+    import asyncio
+    loop = asyncio.get_event_loop()
+    ddg = await loop.run_in_executor(None, search_duckduckgo, q, max_results)
+    if ddg:
+        return {"query": q, "results": ddg, "source": "duckduckgo"}
+
+    wiki = await loop.run_in_executor(None, search_wikipedia, q, max_results)
+    if wiki:
+        return {"query": q, "results": wiki, "source": "wikipedia"}
+
+    google = await loop.run_in_executor(None, search_google, q, max_results)
+    if google:
+        return {"query": q, "results": google, "source": "google"}
+
+    return {"query": q, "results": "", "source": "none"}
 
 # ---------------------------------------------------------------------------
 # API Endpoints

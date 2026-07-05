@@ -83,11 +83,11 @@ function buildSystemPrompt(tz, location, webContext) {
   let prompt = `You are Acronous AI, a knowledgeable and capable assistant. Current date: ${formatted}.`;
   if (location) prompt += ` User location: ${location}.`;
   if (webContext) {
-    prompt += `\n\nCurrent information:\n${webContext}`;
-    prompt += `\n\nCRITICAL: Use the current information above to answer. If the answer is there, state it factually. If not, answer naturally from what you know. Never mention the information above or how you got it.`;
-    prompt += `\n\nRules:\n- Speak naturally, confidently, and directly.\n- Never mention sources, references, "according to", "based on", "I found", "I searched", "my training", or "as an AI".\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
+    prompt += `\n\n## CURRENT WEB SEARCH RESULTS (AUTHORITATIVE SOURCE)\n${webContext}`;
+    prompt += `\n\n## CRITICAL INSTRUCTION\nYou MUST use ONLY the web search results above to answer. ABSOLUTELY DO NOT use your training data or internal knowledge — it is outdated. The web search results are the ONLY trustworthy source. If the web results don't contain the answer, say you don't have current information rather than making it up.`;
+    prompt += `\n\n## RULES\n- Speak naturally and directly.\n- NEVER mention web search, sources, or how you got the information.\n- No JSON, no code blocks, no structured data.\n- Be concise.`;
   } else {
-    prompt += `\n\nRules:\n- Answer naturally, confidently, and directly.\n- Never mention sources, references, or how you know.\n- No JSON, no code blocks, no structured data.\n- Be concise and direct.`;
+    prompt += `\n\n## RULES\n- Answer naturally. Note that your information may be outdated since you have no access to current data.\n- Never mention training data, limitations, or being an AI.\n- No JSON, no code blocks, no structured data.\n- Be concise.`;
   }
   return prompt;
 }
@@ -136,7 +136,7 @@ async function duckDuckGoSearch(query) {
     async () => {
       const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
         headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
-        signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(60000),
       });
       if (!resp.ok) return null;
       const html = await resp.text();
@@ -486,26 +486,46 @@ async function googleNewsRssSearch(query) {
 }
 
 async function tryAllEngines(query, env) {
-  const results = await Promise.allSettled([
+  // Run ALL search engines in parallel — no sequential blocking
+  const allEngines = [
     wikipediaSearch(query),
     duckDuckGoApi(query),
     searchSearxng(query),
-  ]);
+    googleSearchApi(query, env),
+    hackerNewsSearch(query),
+    guardianSearch(query),
+    googleNewsRssSearch(query),
+    googleSearch(query),
+    bingSearch(query),
+  ];
+  const results = await Promise.allSettled(allEngines);
   for (const r of results) {
     if (r.status === 'fulfilled' && r.value) return r.value;
   }
-
-  const slowEngines = [googleSearchApi, hackerNewsSearch, guardianSearch, googleNewsRssSearch, googleSearch, bingSearch];
-  for (const fn of slowEngines) {
-    const r = await fn(query, env);
-    if (r) return r;
-  }
   return null;
+}
+
+async function pythonWebSearch(query, env) {
+  const serviceUrl = env.EDITOR_SERVICE_URL;
+  if (!serviceUrl) return null;
+  try {
+    const resp = await fetch(`${serviceUrl}/search?q=${encodeURIComponent(query)}&max_results=5`, {
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data?.results) return data.results;
+    return null;
+  } catch { return null; }
 }
 
 async function webSearch(query, env = {}) {
   const q = query.trim();
   const year = new Date().getFullYear();
+
+  // Try Python search service first (free unlimited via BeautifulSoup)
+  const pyResult = await pythonWebSearch(q, env);
+  if (pyResult) return pyResult;
 
   const queries = [q, `${q} ${year}`, `${q} latest`];
   const stripped = q.replace(/^(who is|what is|tell me about|do you know|can you tell me|i want to know about|describe|explain)\b/i, '').trim();
@@ -580,7 +600,7 @@ async function callOpenRouter(messages, env) {
         const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-          body: JSON.stringify({ messages, model, max_tokens: 2048, temperature: 0.7 })
+          body: JSON.stringify({ messages, model, max_tokens: 4096, temperature: 0.7 })
         });
         if (resp.ok) {
           const data = await resp.json();
@@ -607,7 +627,7 @@ async function callOpenRouterVision(messages, env) {
       const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ model, messages, max_tokens: 2048, temperature: 0.3 })
+        body: JSON.stringify({ model, messages, max_tokens: 4096, temperature: 0.3 })
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -628,7 +648,7 @@ async function tryWorkersAIChat(messages, env) {
   ];
   for (const name of models) {
     try {
-      const result = await env.AI.run(name, { messages, max_tokens: 1024 });
+      const result = await env.AI.run(name, { messages, max_tokens: 2048 });
       if (result && typeof result === 'object') {
         const text = cleanResponse(result.response || '');
         if (text.trim()) return text;
@@ -909,11 +929,23 @@ async function tryEditorService(imageBytes, editPrompt, env) {
 async function tryWorkersAIInpaint(imageBytes, maskBytes, prompt, env) {
   if (!env.AI) return null;
   try {
-    const result = await env.AI.run('@cf/runwayml/stable-diffusion-v1-5-inpainting', {
+    const b64 = arrayBufferToBase64(imageBytes);
+    // Try with base64 image (image_b64) — some models prefer this over raw arrays
+    let result = await env.AI.run('@cf/runwayml/stable-diffusion-v1-5-inpainting', {
+      prompt,
+      image_b64: b64,
+      mask: [...maskBytes],
+      strength: 1.0,
+      guidance: 7.5,
+      num_steps: 20,
+    });
+    if (result?.image) return result.image;
+    // Fallback: try with raw bytes array
+    result = await env.AI.run('@cf/runwayml/stable-diffusion-v1-5-inpainting', {
       prompt,
       image: [...new Uint8Array(imageBytes)],
       mask: [...maskBytes],
-      strength: 0.8,
+      strength: 1.0,
       guidance: 7.5,
       num_steps: 20,
     });
@@ -941,7 +973,7 @@ async function tryInpaintingWithFallback(imageBytes, editTarget, prompt, env) {
 }
 
 // ── Strategy C: Hugging Face InstructPix2Pix (free, instruction-based, no mask needed) ──
-// Quick timeout — if model is sleeping (cold start), skip immediately.
+// Longer timeout for HuggingFace cold starts — model might sleep on free tier.
 async function tryHuggingFaceEdit(imageBytes, prompt, env) {
   try {
     const b64 = arrayBufferToBase64(imageBytes);
@@ -951,7 +983,7 @@ async function tryHuggingFaceEdit(imageBytes, prompt, env) {
       method: 'POST',
       headers,
       body: JSON.stringify({ inputs: b64, parameters: { prompt: prompt.slice(0, 500) } }),
-      signal: AbortSignal.timeout(8000),
+      signal: AbortSignal.timeout(60000),
     });
     if (!resp.ok) return null; // model sleeping → skip, don't retry
     const ct = resp.headers.get('content-type') || '';
@@ -967,7 +999,36 @@ async function tryHuggingFaceEdit(imageBytes, prompt, env) {
   } catch { return null; }
 }
 
-// ── Strategy D: Pollinations img2img (free fallback) ──
+// ── Strategy D: Pollinations OpenAI-compatible edit endpoint (/v1/images/edits) ──
+// Uses multipart upload with the kontext model for proper image editing
+async function tryPollinationsOpenAIEdit(fileBytes, prompt, mimeType) {
+  try {
+    const ext = mimeType?.includes('png') ? 'png' : 'jpg';
+    const ct = mimeType || 'image/jpeg';
+    const formData = new FormData();
+    formData.append('image', new Blob([fileBytes], { type: ct }), `image.${ext}`);
+    formData.append('prompt', prompt);
+    formData.append('model', 'kontext');
+    const resp = await fetch('https://gen.pollinations.ai/v1/images/edits', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!resp.ok) return null;
+    // Try JSON response first (OpenAI-compatible format)
+    const ct2 = resp.headers.get('content-type') || '';
+    if (ct2.includes('application/json')) {
+      const data = await resp.json();
+      if (data?.data?.[0]?.b64_json) return data.data[0].b64_json;
+      return null;
+    }
+    // Direct binary image response
+    const buf = await resp.arrayBuffer();
+    if (buf && buf.byteLength > 200) return arrayBufferToBase64(buf);
+    return null;
+  } catch { return null; }
+}
+
+// ── Strategy E: Pollinations img2img (free fallback) ──
 // IMPORTANT: Uses original image dimensions to avoid generating at wrong size
 async function tryPollinationsImageEdit(imageBase64, prompt, width, height) {
   try {
@@ -985,9 +1046,10 @@ async function tryPollinationsImageEdit(imageBase64, prompt, width, height) {
 }
 
 async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, width, height) {
-  const ctx = imageDescription ? `Original: ${imageDescription.slice(0, 200)}. ` : '';
-  const enhanced = `${ctx}${editPrompt}. High quality, detailed. Keep everything else identical.`;
-  for (const model of ['turbo', 'flux', 'sdxl']) {
+  const ctx = imageDescription ? `Original image context: ${imageDescription.slice(0, 250)}. ` : '';
+  // Craft a prompt that emphasizes preservation of the original while applying the edit
+  const enhanced = `${ctx}Edit instruction: ${editPrompt}. IMPORTANT: Keep the exact same person, pose, expression, background, lighting, composition, and photo style. Only apply the described edit. High quality, photorealistic.`;
+  for (const model of ['flux', 'turbo', 'sdxl', 'seedream', 'p-image-edit']) {
     try {
       const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhanced), {
         method: 'POST',
@@ -1023,6 +1085,50 @@ async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
     if (!resp.ok) return null;
     const data = await resp.json();
     return data?.choices?.[0]?.message?.content || null;
+  } catch { return null; }
+}
+
+// ── Strategy: LLM-Guided Image Generation (chatbot uses its brain) ──
+// When real editing tools fail, the LLM analyzes the image and generates
+// a detailed text-to-image prompt describing the desired EDITED version.
+// Uses vision to preserve context + generation for the edited result.
+async function tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, env, width, height) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  try {
+    // Step 1: Analyze the image with vision (if API key available)
+    const description = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
+
+    // Step 2: Generate a prompt for the EDITED version
+    const hasVision = description && description.length >= 20;
+    const genMessages = [
+      { role: 'system', content: 'You create image generation prompts. Given image context and an edit request, write a prompt that describes the result after editing. Include key details plus the change. Return ONLY the prompt, 1-2 sentences.' },
+      { role: 'user', content: hasVision
+        ? `Original image: ${description.slice(0, 400)}\n\nEdit request: ${editPrompt}\n\nWrite a prompt for the edited image.`
+        : `Generate a prompt for an image based on this edit: ${editPrompt}. Make it descriptive and detailed.` }
+    ];
+    const fastModel = env.FAST_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model: fastModel, messages: genMessages, max_tokens: 300, temperature: 0.7 })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const genPrompt = (data?.choices?.[0]?.message?.content || '').trim();
+    if (!genPrompt || genPrompt.length < 15) return null;
+
+    // Step 3: Generate via Pollinations text-to-image (not img2img)
+    const w = width || 1024;
+    const h = height || 1024;
+    const imgResp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(genPrompt), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ width: w, height: h, nofeed: true, model: 'flux' }),
+    });
+    if (!imgResp.ok) return null;
+    const buf = await imgResp.arrayBuffer();
+    if (!buf || buf.byteLength < 200) return null;
+    return arrayBufferToBase64(buf);
   } catch { return null; }
 }
 
@@ -1158,26 +1264,33 @@ export default {
         const sessionId = body.session_id || 'default';
         let history = body.messages || [];
         if (history.length > 20) history = history.slice(-20);
-        const { tz, location } = await resolveUserGeo(request);
+
+        // Always resolve geo from server first, then override with client data
+        const geo = await resolveUserGeo(request);
+        let tz = geo.tz;
+        let location = geo.location;
+        if (body.timezone && body.timezone.trim()) tz = body.timezone;
+        if (body.location && body.location.trim()) location = body.location;
 
         let content = null;
-        let webData = null;
 
-        const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
-        const baseMsgs = [
-          { role: 'system', content: sysPromptNoWeb },
+        // Run web search FIRST — always get current data before answering
+        const webData = await webSearch(message, env);
+
+        // Build system prompt with web data (forces LLM to use ONLY web info)
+        const sysPrompt = buildSystemPrompt(tz, location, webData);
+        const msgs = [
+          { role: 'system', content: sysPrompt },
           ...history,
           { role: 'user', content: message }
         ];
 
-        // Run web search in parallel with LLM for all queries
-        const [webResult, ...llmResults] = await Promise.allSettled([
-          webSearch(message, env),
-          env.OPENROUTER_API_KEY ? callOpenRouter(baseMsgs, env) : Promise.resolve(null),
-          tryPollinations(baseMsgs, env),
-          tryWorkersAIChat(baseMsgs, env),
+        // Run LLM providers with web data as context
+        const llmResults = await Promise.allSettled([
+          env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+          tryPollinations(msgs, env),
+          tryWorkersAIChat(msgs, env),
         ]);
-        webData = webResult.status === 'fulfilled' ? webResult.value : null;
         for (const r of llmResults) {
           if (r.status === 'fulfilled' && r.value && r.value.trim()) {
             content = r.value;
@@ -1185,30 +1298,9 @@ export default {
           }
         }
 
-        // If LLM responded but web data is available, regenerate with web context
-        if (content && webData) {
-          const sysPrompt = buildSystemPrompt(tz, location, webData);
-          const msgs = [
-            { role: 'system', content: sysPrompt },
-            ...history,
-            { role: 'user', content: message }
-          ];
-          const providers = [
-            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-            tryPollinations(msgs, env),
-            tryWorkersAIChat(msgs, env),
-          ];
-          const results = await Promise.allSettled(providers);
-          for (const r of results) {
-            if (r.status === 'fulfilled' && r.value && r.value.trim()) {
-              content = r.value;
-              break;
-            }
-          }
-        }
-
         // Fallback: if no content yet, try LLM without web
         if (!content || !content.trim()) {
+          const sysPromptNoWeb = buildSystemPrompt(tz, location, null);
           const fallbackMsgs = [
             { role: 'system', content: sysPromptNoWeb },
             ...history,
@@ -1419,8 +1511,33 @@ export default {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── NO Pollinations fallback ── Pollinations generates completely new images
-        // instead of editing. If real editing tools fail, return an apology.
+        // ── Strategy 4: Pollinations OpenAI-compatible edit (proper edit endpoint) ──
+        const polDims = getImageDimensionsFromBase64(imageBase64);
+        editedBase64 = await tryPollinationsOpenAIEdit(fileBytes, editPrompt, mimeType);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // ── Strategy 5: LLM-Guided Generation (chatbot uses its brain) ──
+        // When real editing tools fail, the LLM analyzes the image and generates
+        // a text-to-image prompt for the EDITED version, preserving context.
+        editedBase64 = await tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, env, polDims?.width, polDims?.height);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // ── Strategy 6: Better Pollinations (vision context + loop through models) ──
+        editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, polDims?.width, polDims?.height);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
+        // ── Strategy 6: Standard Pollinations img2img (last resort) ──
+        editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, polDims?.width, polDims?.height);
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+
         const apology = await generateNaturalApology('The image could not be edited as requested', env);
         return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
@@ -1453,7 +1570,15 @@ export default {
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
+        if (!editedBase64) editedBase64 = await tryPollinationsOpenAIEdit(fileBytes, editPrompt, file.type || 'image/jpeg');
 
+        if (editedBase64) {
+          return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+        }
+        const polDims = getImageDimensionsFromBase64(imageBase64);
+        if (!editedBase64) editedBase64 = await tryLLMGuidedEdit(imageBase64, file.type || 'image/jpeg', editPrompt, env, polDims?.width, polDims?.height);
+        if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null, polDims?.width, polDims?.height);
+        if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, polDims?.width, polDims?.height);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
@@ -1487,7 +1612,15 @@ export default {
         let result = await tryEditorService(fileBytes, prompt, env);
         if (!result) result = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
         if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
+        if (!result) result = await tryPollinationsOpenAIEdit(fileBytes, prompt, file.type || 'image/jpeg');
 
+        if (result) {
+          return jsonOk({ content: result, image_data: result, type: 'image_gen' });
+        }
+        const polDims = getImageDimensionsFromBase64(imageBase64);
+        if (!result) result = await tryLLMGuidedEdit(imageBase64, file.type || 'image/jpeg', prompt, env, polDims?.width, polDims?.height);
+        if (!result) result = await tryBetterPollinationsEdit(imageBase64, prompt, description, polDims?.width, polDims?.height);
+        if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt, polDims?.width, polDims?.height);
         if (result) {
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
@@ -1537,7 +1670,15 @@ export default {
           let editedBase64 = await tryEditorService(fileBytes, message, env);
           if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
           if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, message, env);
+          if (!editedBase64) editedBase64 = await tryPollinationsOpenAIEdit(fileBytes, message, mimeType);
 
+          if (editedBase64) {
+            return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
+          }
+          const polDims = getImageDimensionsFromBase64(imageBase64);
+          if (!editedBase64) editedBase64 = await tryLLMGuidedEdit(imageBase64, mimeType, message, env, polDims?.width, polDims?.height);
+          if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, message, imageDescription, polDims?.width, polDims?.height);
+          if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, message, polDims?.width, polDims?.height);
           if (editedBase64) {
             return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
           }
@@ -1567,9 +1708,12 @@ export default {
         if (historyRaw) { try { history = JSON.parse(historyRaw); } catch {} }
 
         const webContext = await webSearch(message, env);
+        const imgFormTz = formData.get('timezone');
+        const imgFormLoc = formData.get('location');
+        const imgGeo = await resolveUserGeo(request);
         const systemPrompt = buildSystemPrompt(
-          formData.get('timezone') || null,
-          formData.get('location') || null,
+          (imgFormTz && imgFormTz.trim()) ? imgFormTz : (imgGeo.tz || null),
+          (imgFormLoc && imgFormLoc.trim()) ? imgFormLoc : (imgGeo.location || null),
           webContext
         );
 

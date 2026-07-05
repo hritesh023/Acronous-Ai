@@ -15,26 +15,29 @@
 - **OpenRouter** flux models for fallback
 
 ### Image Editing (modify existing images)
-**5-layer pipeline — NO text-to-image fallback (produces broken/random images):**
+**6-layer pipeline — all attempts produce an image (Pollinations last resort):**
 
 1. **Python Microservice** (`image-service/`) — rembg + Pillow + optional SD GPU. Set `EDITOR_SERVICE_URL`.
-2. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, no API key needed, instruction-based editing (no mask required). ~30 req/hr without token, higher with `HF_API_TOKEN` secret.
-3. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask (reads JPEG/PNG/WebP headers to get pixel dimensions).
-4. **Better Pollinations** — Enhanced prompt with vision context, tries turbo/flux/sdxl models.
-5. **Standard Pollinations POST** — Original img2img fallback. If all fail, returns text error — never regenerates from scratch.
+2. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask. Tries both `image_b64` (base64) and raw array inputs, `strength: 1.0`.
+3. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, instruction-based editing (no mask required). 60s timeout for cold starts. ~30 req/hr without token, higher with `HF_API_TOKEN`.
+4. **Pollinations OpenAI Edit** — `POST https://gen.pollinations.ai/v1/images/edits` with multipart upload and `kontext` model for proper editing.
+5. **Better Pollinations** — LLM vision analysis guides the edit prompt. Loops through `flux`, `turbo`, `sdxl`, `seedream`, `p-image-edit` models. Emphasizes preservation of original composition.
+6. **Standard Pollinations POST** — Original img2img fallback with original dimensions. If all fail, returns natural apology text.
 
 **Key rules:**
-- Image dimensions detected from binary header (no canvas needed) → mask created at exact pixel size
-- InstructPix2Pix is instruction-based: "change the dress to red" works without parsing edit targets
-- NEVER use SDXL text-to-image as edit fallback (generates unrelated image)
-- If all strategies fail, return a natural apology text — never a random image
+- Image dimensions detected from binary header → mask created at exact pixel size
+- Pollinations `/v1/images/edits` with `kontext` is the most likely to succeed (proper edit endpoint)
+- InstructPix2Pix has 60s timeout to handle HuggingFace free tier cold starts
+- Always return an image if possible — Pollinations last resort with "keep everything else identical" prompt
+- If all strategies fail, return a natural apology — never a random image
 
 ### Image Editing Endpoints in Worker
 | Endpoint | Purpose |
 |---|---|
 | `/v1/image/edit` | Main editing endpoint (6 strategies) |
-| `/v1/image/ultra-edit` | Frontend fallback 1 (3 strategies) |
-| `/api/image/redesign` | Frontend fallback 2 (vision + Pollinations) |
+| `/v1/image/ultra-edit` | Frontend fallback 1 (5 strategies) |
+| `/api/image/redesign` | Frontend fallback 2 (6 strategies with vision) |
+| `/v1/image/smart-edit` | Intelligent routing (LLM classifies edit/generate/analyze) |
 
 ### Image Analysis (Vision)
 - **OpenRouter** with vision models (`VISION_MODEL`, `FALLBACK_VISION_MODEL`)
@@ -47,11 +50,14 @@
 ### Pollinations (always free, no key, fallback for chat)
 - Chat: POST `https://text.pollinations.ai` with `{ messages: [...], model: "openai", private: true }`
 - Images: GET `https://image.pollinations.ai/prompt/{encoded}`
-- Img2img: GET with `&img=` parameter for image-to-image editing
+- Img2img: POST `https://image.pollinations.ai/prompt/{prompt}` with body `{ img: base64, width, height, model }`
+- Edit endpoint: POST `https://gen.pollinations.ai/v1/images/edits` multipart with `image` file + `prompt` + `model=kontext`
+- Edit models: `kontext` (best for edits), `flux` (img2img), `p-image-edit`, `seedream`
+- Image gen models: `flux` (default), `turbo`, `sdxl`, `seedream`, `gptimage`, `zimage`
 
 ### Hugging Face (free tier, no key needed for inference)
-- Instruct-pix2pix: POST `https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix?prompt={instruction}` with raw image bytes
-- Inpainting: POST to `stabilityai/stable-diffusion-2-inpainting` or `runwayml/stable-diffusion-inpainting`
+- Instruct-pix2pix: POST `https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix` with base64 image + prompt. 60s timeout for cold starts.
+- Inpainting: Not used directly — Workers AI handles inpainting instead
 
 ### OpenRouter (fallback only)
 - **Base URL**: `https://openrouter.ai/api/v1` (env `OPENROUTER_BASE_URL`)
