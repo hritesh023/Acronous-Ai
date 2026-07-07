@@ -9,7 +9,8 @@ const TOKEN_NAME = 'acronous_token';
 const SUBDOMAIN_ORIGINS = {
   'ai.acronous.com':        { spa: 'https://acronous-ai.pages.dev', api: 'https://acronous-ai.httpsacronous-landinghriteshkumarpatroworkersdev.workers.dev' },
   'equyvo.acronous.com':    { spa: 'https://equyvo.pages.dev', api: '' },
-  'navigwiz.acronous.com':  { spa: 'https://navigwiz.pages.dev', api: '' },
+  // navigwiz.acronous.com now has its own dedicated auth worker
+  // 'navigwiz.acronous.com':  { spa: 'https://navigwiz.pages.dev', api: '' },
 };
 
 const API_PREFIXES = ['/v1/', '/api/', '/health'];
