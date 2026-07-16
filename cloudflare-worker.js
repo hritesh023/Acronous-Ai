@@ -1772,8 +1772,19 @@ export default {
             return jsonOk({ response: timeContent?.trim() || '', session_id: sessionId, type: 'chat' });
           }
           // All other factual queries: ALWAYS web search → LLM synthesis with live results
-          const webData = await webSearch(message, env);
-          const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 2);
+          let webData = await webSearch(message, env);
+          // If first search failed, retry once with a simplified query
+          if (!webData) {
+            const simplified = message.replace(/^(who|what|where|when|why|how|which|is|are|was|were|do|does|did|can|could|will|would|the|a|an|of|for|in|at)\b/gi, '').trim();
+            if (simplified && simplified.length > 3) {
+              webData = await webSearch(simplified, env);
+            }
+          }
+          // If web search still failed, add explicit context so LLM knows
+          const enrichedWebData = webData
+            ? webData
+            : `[NO SEARCH RESULTS AVAILABLE — You MUST answer based on the user's question using your best knowledge. If you are uncertain about current facts, say so.]`;
+          const sysPrompt = buildEnhancedSystemPrompt(tz, location, enrichedWebData, 2);
           const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
           // Race providers — first valid response wins
           const factualResults = await Promise.allSettled([
@@ -1792,7 +1803,10 @@ export default {
         const webData = await webSearch(message, env);
 
         // Build enhanced system prompt with web data
-        const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, classified.tier);
+        const enrichedWebData = webData
+          ? webData
+          : `[NO SEARCH RESULTS AVAILABLE — Answer based on your best knowledge. If uncertain about current facts, say so.]`;
+        const sysPrompt = buildEnhancedSystemPrompt(tz, location, enrichedWebData, classified.tier);
         const msgs = [
           { role: 'system', content: sysPrompt },
           ...history,

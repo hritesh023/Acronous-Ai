@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:geolocator/geolocator.dart' as geo;
+import 'package:geocoding/geocoding.dart' as geocoding;
 import '../api/client.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
@@ -287,14 +289,85 @@ class ChatProvider extends ChangeNotifier {
   String _cachedLocation = '';
 
   Future<void> _fetchLocationInfo() async {
-    // Try both IP APIs in parallel, first one wins
-    final results = await Future.wait([
-      _fetchFromIpApi(),
-      _fetchFromFreeIp(),
-    ]);
+    // Try GPS first for exact location, fall back to IP-based
+    final gpsSuccess = await _fetchFromGps();
+    if (!gpsSuccess) {
+      // Fallback: try both IP APIs in parallel
+      await Future.wait([
+        _fetchFromIpApi(),
+        _fetchFromFreeIp(),
+      ]);
+    }
     // If neither worked, use device timezone offset mapped to IANA
     if (_cachedTimezoneName.isEmpty) {
       _cachedTimezoneName = _deviceTimezoneIana;
+    }
+  }
+
+  Future<bool> _fetchFromGps() async {
+    try {
+      // Check if location services are enabled
+      bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return false;
+
+      // Check permission
+      geo.LocationPermission permission = await geo.Geolocator.checkPermission();
+      if (permission == geo.LocationPermission.denied) {
+        permission = await geo.Geolocator.requestPermission();
+        if (permission == geo.LocationPermission.denied) return false;
+      }
+      if (permission == geo.LocationPermission.deniedForever) return false;
+
+      // Get precise GPS position
+      final position = await geo.Geolocator.getCurrentPosition(
+        locationSettings: const geo.LocationSettings(
+          accuracy: geo.LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+
+      // Reverse geocode to get exact address
+      try {
+        final placemarks = await geocoding.placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          final place = placemarks.first;
+          final parts = <String>[];
+          final locality = place.locality ?? '';
+          final subAdmin = place.subAdministrativeArea ?? '';
+          final admin = place.administrativeArea ?? '';
+          final country = place.country ?? '';
+          if (locality.isNotEmpty && locality != subAdmin) {
+            parts.add(locality);
+          } else if (subAdmin.isNotEmpty) {
+            parts.add(subAdmin);
+          }
+          if (admin.isNotEmpty && admin != locality) {
+            parts.add(admin);
+          }
+          if (country.isNotEmpty) {
+            parts.add(country);
+          }
+          final address = parts.join(', ');
+          if (address.isNotEmpty) {
+            _cachedLocation = address;
+          }
+        }
+      } catch (_) {
+        // Reverse geocoding failed — use lat/lng as location
+        _cachedLocation = '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
+      }
+
+      // Set timezone from device if not already set
+      if (_cachedTimezoneName.isEmpty) {
+        _cachedTimezoneName = _deviceTimezoneIana;
+      }
+
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
