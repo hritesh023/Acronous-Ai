@@ -11,7 +11,7 @@ class TtsService {
     final raw = AppConfig.instance.ttsDefaultSpeed;
     if (defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS) {
-      return raw * 0.5;
+      return raw * 0.8;
     }
     return raw;
   }
@@ -41,21 +41,66 @@ class TtsService {
       if (voices == null) return;
       final list = voices as List;
       if (list.isEmpty) return;
+
+      // Priority: natural-sounding male voices first
+      const preferredNames = ['daniel', 'james', 'matthew', 'john', 'david', 'mark', 'alex', 'guy', 'tom', 'ryan'];
+      Map<String, dynamic>? bestVoice;
+
       for (final v in list) {
         final map = v as Map<String, dynamic>;
         final name = (map['name'] as String? ?? '').toLowerCase();
         final ident = (map['identifier'] as String? ?? '').toLowerCase();
-        if (name.contains('male') || ident.contains('male')) {
-          final voiceMap = <String, String>{
-            'name': map['name'] as String? ?? '',
-            'locale': map['locale'] as String? ?? '',
-          };
-          if (map.containsKey('identifier')) {
-            voiceMap['identifier'] = map['identifier'] as String? ?? '';
+        final locale = (map['locale'] as String? ?? '').toLowerCase();
+
+        // Must be English voice
+        if (!locale.startsWith('en')) continue;
+
+        // Check if it matches a preferred natural male voice name
+        for (final preferred in preferredNames) {
+          if (name.contains(preferred) || ident.contains(preferred)) {
+            bestVoice = map;
+            break;
           }
-          await _tts.setVoice(voiceMap);
-          break;
         }
+        if (bestVoice != null) break;
+      }
+
+      // Fallback: any English male voice
+      if (bestVoice == null) {
+        for (final v in list) {
+          final map = v as Map<String, dynamic>;
+          final name = (map['name'] as String? ?? '').toLowerCase();
+          final ident = (map['identifier'] as String? ?? '').toLowerCase();
+          final locale = (map['locale'] as String? ?? '').toLowerCase();
+          if (locale.startsWith('en') && (name.contains('male') || ident.contains('male'))) {
+            bestVoice = map;
+            break;
+          }
+        }
+      }
+
+      // Final fallback: any male voice
+      if (bestVoice == null) {
+        for (final v in list) {
+          final map = v as Map<String, dynamic>;
+          final name = (map['name'] as String? ?? '').toLowerCase();
+          final ident = (map['identifier'] as String? ?? '').toLowerCase();
+          if (name.contains('male') || ident.contains('male')) {
+            bestVoice = map;
+            break;
+          }
+        }
+      }
+
+      if (bestVoice != null) {
+        final voiceMap = <String, String>{
+          'name': bestVoice['name'] as String? ?? '',
+          'locale': bestVoice['locale'] as String? ?? '',
+        };
+        if (bestVoice.containsKey('identifier')) {
+          voiceMap['identifier'] = bestVoice['identifier'] as String? ?? '';
+        }
+        await _tts.setVoice(voiceMap);
       }
     } catch (_) {}
   }

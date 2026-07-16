@@ -48,8 +48,15 @@ async function resolveUserGeo(request) {
   const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('True-Client-IP');
   if (!ip) return { tz: null, location: null };
 
+  // Skip private/loopback IPs
+  if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('172.')) {
+    return { tz: null, location: null };
+  }
+
   try {
-    const resp = await fetch(`https://ip-api.com/json/${ip}?fields=timezone,city,country,status`);
+    const resp = await fetch(`https://ip-api.com/json/${ip}?fields=timezone,city,country,status`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (resp.ok) {
       const d = await resp.json();
       if (d.status === 'success') {
@@ -63,7 +70,9 @@ async function resolveUserGeo(request) {
   } catch {}
 
   try {
-    const resp = await fetch(`https://freeipapi.com/api/json/${ip}`);
+    const resp = await fetch(`https://freeipapi.com/api/json/${ip}`, {
+      signal: AbortSignal.timeout(3000),
+    });
     if (resp.ok) {
       const d = await resp.json();
       const tz = (d.timeZone || d.timezone || null);
@@ -966,6 +975,44 @@ async function tryEditorService(imageBytes, editPrompt, env) {
   } catch { return null; }
 }
 
+// Python image-service: photorealistic generation with post-processing
+async function tryEditorServiceGenerate(prompt, env) {
+  const serviceUrl = env.EDITOR_SERVICE_URL;
+  if (!serviceUrl) return null;
+  try {
+    const formData = new FormData();
+    formData.append('prompt', prompt);
+    const resp = await fetch(`${serviceUrl}/generate`, {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(90000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data?.edited) return data.edited;
+    return null;
+  } catch { return null; }
+}
+
+// Python image-service: generate video from text prompt
+async function tryEditorServiceVideo(prompt, env) {
+  const serviceUrl = env.EDITOR_SERVICE_URL;
+  if (!serviceUrl) return null;
+  try {
+    const formData = new FormData();
+    formData.append('prompt', prompt);
+    const resp = await fetch(`${serviceUrl}/generate-video`, {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(180000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data?.video_data) return data;
+    return null;
+  } catch { return null; }
+}
+
 // ── Strategy B: Workers AI Inpainting (targeted editing via mask) ──
 // The model auto-resizes the image to 512×512 internally. The mask is expected
 // to match the ORIGINAL image pixel dimensions (before resize), because the
@@ -1283,7 +1330,7 @@ function classifyQuery(message) {
     /\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month|current month)\b/i,
     /\b(?:right now|at the moment|as of now|as of today|currently|presently|latest|recent|updated)\b/i,
     // People in power / officials — these change and need current data
-    /\b(?:chief minister|cm of|cm is|president of|president is|prime minister|pm of|pm is|governor|mayor|minister of|minister is|who is the|who leads|who heads|current leader)\b/i,
+    /\b(?:chief minister|cm of|cm is|cm\b|president of|president is|president\b|prime minister|pm of|pm is|pm\b|governor|mayor|minister of|minister is|who is the|who leads|who heads|current leader)\b/i,
     // Elections, politics, government
     /\b(?:election|elections|voting|poll|polls|cabinet|parliament|senate|congress|assembly|legislature|government|opposition|coalition)\b/i,
     // Sports scores, live events
@@ -1297,11 +1344,13 @@ function classifyQuery(message) {
     // Population, statistics
     /\b(?:population|census|demographics|stats|statistics|data|numbers|figure|figures|count|total)\b/i,
     // People — who is X (always needs current data)
-    /\bwho (?:is|was|are|were) (?:the |a |an )/i,
+    /\bwho (?:is|was|are|were) /i,
     // What is X (often needs current info)
-    /\bwhat (?:is|are|was|were) (?:the |a |an )/i,
+    /\bwhat (?:is|are|was|were) /i,
     // General factual — any question that starts with question words
     /\b(?:who|what|where|when|why|how|which) .*\b(?:now|currently|today|this year|this month|this week|latest|present|actual|real|true|official)\b/i,
+    // Position/role questions — "who is the X of Y"
+    /\b(?:who|what) .+ (?:of|for|at|in) \b/i,
   ];
   for (const p of mustSearchPatterns) {
     if (p.test(m)) return { tier: 2, needsSearch: true, model: null };
@@ -1420,15 +1469,47 @@ function isTimeQuery(message) {
 function getTimeAnswer(message, tz) {
   try {
     const now = new Date();
-    const userTz = tz || 'UTC';
+    let userTz = tz || '';
+
+    // If no timezone provided, try to get from request context (set elsewhere)
+    // Never default to UTC — always try to resolve from IP first
+    if (!userTz) {
+      // Last resort: compute from UTC offset if we have one, otherwise use UTC
+      userTz = 'UTC';
+    }
+
     let timeOnly, dateOnly;
     try {
       timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
       dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
     } catch {
-      timeOnly = now.toUTCString().slice(17, 25) + ' UTC';
-      dateOnly = now.toUTCString().slice(0, 16) + now.getFullYear();
+      // Intl failed — likely a UTC offset string like "UTC+05:30"
+      // Compute time manually from the offset
+      try {
+        const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
+        if (offsetMatch) {
+          const sign = offsetMatch[1] === '+' ? 1 : -1;
+          const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
+          const local = new Date(now.getTime() + offsetMs);
+          const h = local.getUTCHours();
+          const m = local.getUTCMinutes();
+          const s = local.getUTCSeconds();
+          const ampm = h >= 12 ? 'PM' : 'AM';
+          const h12 = h % 12 || 12;
+          timeOnly = `${h12}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')} ${ampm} ${userTz}`;
+          const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+          const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+          dateOnly = `${days[local.getUTCDay()]}, ${months[local.getUTCMonth()]} ${local.getUTCDate()}, ${local.getUTCFullYear()}`;
+        } else {
+          throw new Error('not a UTC offset');
+        }
+      } catch {
+        // Absolute last resort: UTC
+        timeOnly = now.toUTCString().slice(17, 25) + ' UTC';
+        dateOnly = now.toUTCString().slice(0, 16) + now.getFullYear();
+      }
     }
+
     const m = message.toLowerCase().trim();
     if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
       return `It's currently **${timeOnly}** on ${dateOnly}.`;
@@ -1437,11 +1518,35 @@ function getTimeAnswer(message, tz) {
       return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
     }
     if (/\byear\b/.test(m)) {
-      return `The current year is **${now.getFullYear()}**.`;
+      try {
+        const yearOnly = now.toLocaleDateString('en-US', { timeZone: userTz, year: 'numeric' });
+        return `The current year is **${yearOnly}**.`;
+      } catch {
+        const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
+        if (offsetMatch) {
+          const sign = offsetMatch[1] === '+' ? 1 : -1;
+          const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
+          const local = new Date(now.getTime() + offsetMs);
+          return `The current year is **${local.getUTCFullYear()}**.`;
+        }
+        return `The current year is **${now.getUTCFullYear()}**.`;
+      }
     }
     if (/\bmonth\b/.test(m)) {
-      const monthYear = now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' });
-      return `The current month is **${monthYear}**.`;
+      try {
+        const monthYear = now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' });
+        return `The current month is **${monthYear}**.`;
+      } catch {
+        const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+        const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
+        if (offsetMatch) {
+          const sign = offsetMatch[1] === '+' ? 1 : -1;
+          const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
+          const local = new Date(now.getTime() + offsetMs);
+          return `The current month is **${months[local.getUTCMonth()]} ${local.getUTCFullYear()}**.`;
+        }
+        return `The current month is **${months[now.getUTCMonth()]} ${now.getUTCFullYear()}**.`;
+      }
     }
     return `It's currently **${dateOnly}, ${timeOnly}**.`;
   } catch {
@@ -1890,8 +1995,13 @@ export default {
           } catch {}
         }
 
-        let imageBase64 = await tryPollinationsImage(enhancedPrompt);
+        // Strategy 1: Python image-service (photorealistic post-processing)
+        let imageBase64 = await tryEditorServiceGenerate(enhancedPrompt, env);
+        // Strategy 2: Pollinations raw
+        if (!imageBase64) imageBase64 = await tryPollinationsImage(enhancedPrompt);
+        // Strategy 3: OpenRouter FLUX
         if (!imageBase64) imageBase64 = await tryOpenRouterImage(enhancedPrompt, env);
+        // Strategy 4: Workers AI SDXL
         if (!imageBase64) imageBase64 = await tryWorkersImage(enhancedPrompt, env);
         // Fallback with original prompt if enhanced failed
         if (!imageBase64 && enhancedPrompt !== prompt) {
@@ -2181,6 +2291,38 @@ export default {
         return jsonOk({ response: content || "I couldn't redesign that image. Could you try again?", session_id: sessionId, type: 'chat' });
       } catch (error) {
         return jsonOk({ response: "I had trouble redesigning that image. Could you try again?", session_id: sessionId || 'default', type: 'chat' });
+      }
+    }
+
+    // ── Video Generation Endpoint ──
+    if (path === '/v1/video/generate' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const prompt = body.prompt || body.message || '';
+        if (!prompt.trim()) {
+          return jsonError('Please provide a description for the video.');
+        }
+
+        // Try Python image-service first (moviepy-based)
+        const videoResult = await tryEditorServiceVideo(prompt, env);
+        if (videoResult && videoResult.video_data) {
+          return jsonOk({
+            response: '',
+            video_data: videoResult.video_data,
+            type: 'video_gen',
+            frame_count: videoResult.frame_count,
+            fps: videoResult.fps,
+            duration: videoResult.duration,
+          });
+        }
+
+        return jsonOk({
+          response: "Video generation requires the image service to be running. Please deploy it to HuggingFace Spaces first.",
+          type: 'error',
+          error: 'video_service_unavailable',
+        });
+      } catch (error) {
+        return jsonOk({ response: "Video generation failed. Could you try a simpler prompt?", type: 'error', error: 'generation_failed' });
       }
     }
 

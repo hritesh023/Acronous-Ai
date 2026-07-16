@@ -708,6 +708,103 @@ async def api_edit(
         raise HTTPException(400, "No prompt")
     return edit_image(data, prompt)
 
+# ---------------------------------------------------------------------------
+# Photorealistic Image Generation — Pollinations + post-processing
+# ---------------------------------------------------------------------------
+
+def enhance_photorealistic(image: Image.Image) -> Image.Image:
+    """
+    Apply photorealistic post-processing to a generated image.
+    Makes AI-generated images look more like real photos.
+    """
+    img = image.copy()
+
+    # 1. Subtle noise reduction (remove AI artifacts)
+    img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
+
+    # 2. Unsharp mask — sharpen edges while keeping natural look
+    img = ImageEnhance.Sharpness(img).enhance(1.3)
+
+    # 3. Slight contrast boost for depth
+    img = ImageEnhance.Contrast(img).enhance(1.08)
+
+    # 4. Color vibrancy — make colors pop without oversaturation
+    img = ImageEnhance.Color(img).enhance(1.05)
+
+    # 5. Subtle brightness adjustment for natural lighting
+    img = ImageEnhance.Brightness(img).enhance(1.02)
+
+    # 6. Apply slight film grain for photo-realism
+    img_arr = np.array(img, dtype=np.float32)
+    noise = np.random.normal(0, 2.5, img_arr.shape).astype(np.float32)
+    img_arr = np.clip(img_arr + noise, 0, 255).astype(np.uint8)
+    img = Image.fromarray(img_arr)
+
+    return img
+
+def generate_from_pollinations(prompt: str) -> Optional[Image.Image]:
+    """Generate image from Pollinations API and return as PIL Image."""
+    try:
+        enhanced = f"{prompt}, photorealistic, high quality, detailed, sharp, well-lit, professional photography"
+        url = f"https://image.pollinations.ai/prompt/{quote_plus(enhanced)}?width=1024&height=1024&nofeed=true"
+        resp = requests.get(url, timeout=60)
+        if resp.status_code != 200:
+            # Retry without enhancement
+            url = f"https://image.pollinations.ai/prompt/{quote_plus(prompt)}?width=1024&height=1024&nofeed=true"
+            resp = requests.get(url, timeout=60)
+        if resp.status_code != 200:
+            return None
+        return Image.open(io.BytesIO(resp.content)).convert("RGB")
+    except Exception as e:
+        logging.warning(f"Pollinations generation error: {e}")
+        return None
+
+@app.post("/generate")
+async def api_generate(
+    prompt: str = Form(...),
+    width: int = Form(1024),
+    height: int = Form(1024),
+    enhance: bool = Form(True),
+):
+    """
+    Generate a photorealistic image from a text prompt.
+    Uses Pollinations for base generation + Pillow post-processing for realism.
+    """
+    if not prompt.strip():
+        raise HTTPException(400, "No prompt provided")
+
+    # Clamp dimensions
+    width = max(256, min(width, 2048))
+    height = max(256, min(height, 2048))
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    image = await loop.run_in_executor(None, generate_from_pollinations, prompt)
+
+    if image is None:
+        raise HTTPException(500, "Image generation failed — Pollinations API error")
+
+    # Resize to requested dimensions
+    if image.size != (width, height):
+        image = image.resize((width, height), Image.LANCZOS)
+
+    # Post-process for photorealism
+    if enhance:
+        image = await loop.run_in_executor(None, enhance_photorealistic, image)
+
+    # Try Real-ESRGAN upscaling if available and image is small
+    if HAS_UPSCALER and max(width, height) < 1024:
+        upscaled = await loop.run_in_executor(None, upscale_image, image, 2)
+        if upscaled is not None:
+            image = upscaled
+
+    return {
+        "edited": img_to_b64(image, "PNG"),
+        "width": image.width,
+        "height": image.height,
+        "strategy": "pollinations + photorealistic enhance",
+    }
+
 @app.post("/segment")
 async def api_segment(
     file: UploadFile = File(...),
@@ -775,7 +872,108 @@ async def capabilities():
         "gpu": HAS_TORCH_CUDA,
         "clip": HAS_CLIP,
         "upscaler": HAS_UPSCALER,
+        "video": True,
     }
+
+# ---------------------------------------------------------------------------
+# Video Generation — moviepy + Pollinations frames
+# ---------------------------------------------------------------------------
+
+HAS_MOVIEPY = False
+try:
+    from moviepy.editor import ImageClip, concatenate_videoclips
+    HAS_MOVIEPY = True
+except ImportError:
+    try:
+        from moviepy import ImageClip, concatenate_videoclips
+        HAS_MOVIEPY = True
+    except ImportError:
+        pass
+
+def generate_video_frames(prompt: str, num_frames: int = 4) -> list:
+    """Generate multiple image frames from a prompt with slight variations."""
+    frames = []
+    variations = [
+        f"{prompt}",
+        f"{prompt}, slightly different angle, cinematic",
+        f"{prompt}, different lighting, golden hour",
+        f"{prompt}, close-up detail shot, professional",
+    ]
+    for i, var in enumerate(variations[:num_frames]):
+        try:
+            enhanced = f"{var}, photorealistic, high quality, detailed"
+            url = f"https://image.pollinations.ai/prompt/{quote_plus(enhanced)}?width=768&height=768&nofeed=true&seed={i * 42}"
+            resp = requests.get(url, timeout=60)
+            if resp.status_code == 200:
+                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+                img = enhance_photorealistic(img)
+                frames.append(img)
+        except Exception as e:
+            logging.warning(f"Frame {i} generation error: {e}")
+    return frames
+
+def frames_to_video(frames: list, fps: int = 2, duration: float = 2.0) -> bytes:
+    """Convert PIL images to MP4 video using moviepy."""
+    if not HAS_MOVIEPY:
+        raise RuntimeError("moviepy not available")
+    clips = []
+    for frame in frames:
+        arr = np.array(frame)
+        clip = ImageClip(arr).set_duration(duration)
+        clips.append(clip)
+    if len(clips) < 2:
+        # Duplicate single frame for minimum viable video
+        clips.append(clips[0].set_duration(duration))
+    video = concatenate_videoclips(clips, method="compose")
+    buf = io.BytesIO()
+    video.write_videofile(buf, fps=fps, codec="libx264", audio=False, logger=None)
+    video.close()
+    for clip in clips:
+        clip.close()
+    buf.seek(0)
+    return buf.getvalue()
+
+@app.post("/generate-video")
+async def api_generate_video(
+    prompt: str = Form(...),
+    num_frames: int = Form(4),
+    frame_duration: float = Form(2.0),
+    fps: int = Form(2),
+):
+    """
+    Generate a video from a text prompt.
+    Creates multiple AI-generated frames and stitches them into an MP4.
+    """
+    if not HAS_MOVIEPY:
+        raise HTTPException(500, "moviepy not installed — video generation unavailable")
+    if not prompt.strip():
+        raise HTTPException(400, "No prompt provided")
+
+    num_frames = max(2, min(num_frames, 8))
+    fps = max(1, min(fps, 4))
+    frame_duration = max(1.0, min(frame_duration, 5.0))
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    frames = await loop.run_in_executor(None, generate_video_frames, prompt, num_frames)
+
+    if len(frames) < 2:
+        raise HTTPException(500, "Could not generate enough frames for video")
+
+    try:
+        video_bytes = await loop.run_in_executor(
+            None, frames_to_video, frames, fps, frame_duration
+        )
+        video_b64 = base64.b64encode(video_bytes).decode()
+        return {
+            "video_data": video_b64,
+            "frame_count": len(frames),
+            "fps": fps,
+            "duration": len(frames) * frame_duration,
+        }
+    except Exception as e:
+        logging.error(f"Video creation error: {e}")
+        raise HTTPException(500, f"Video creation failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

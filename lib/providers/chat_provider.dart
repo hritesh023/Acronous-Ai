@@ -287,15 +287,14 @@ class ChatProvider extends ChangeNotifier {
   String _cachedLocation = '';
 
   Future<void> _fetchLocationInfo() async {
-    final geoServices = [_fetchFromIpApi, _fetchFromFreeIp];
-    for (final service in geoServices) {
-      try {
-        final success = await service();
-        if (success) break;
-      } catch (_) {}
-    }
+    // Try both IP APIs in parallel, first one wins
+    final results = await Future.wait([
+      _fetchFromIpApi(),
+      _fetchFromFreeIp(),
+    ]);
+    // If neither worked, use device timezone offset mapped to IANA
     if (_cachedTimezoneName.isEmpty) {
-      _cachedTimezoneName = _deviceTimezone;
+      _cachedTimezoneName = _deviceTimezoneIana;
     }
   }
 
@@ -303,7 +302,7 @@ class ChatProvider extends ChangeNotifier {
     try {
       final resp = await http
           .get(Uri.parse('https://ip-api.com/json/'))
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 5));
       if (resp.statusCode != 200) return false;
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       if (data['status'] != 'success') return false;
@@ -322,7 +321,7 @@ class ChatProvider extends ChangeNotifier {
     try {
       final resp = await http
           .get(Uri.parse('https://freeipapi.com/api/json'))
-          .timeout(const Duration(seconds: 8));
+          .timeout(const Duration(seconds: 5));
       if (resp.statusCode != 200) return false;
       final data = jsonDecode(resp.body) as Map<String, dynamic>;
       if (data['status'] != 'success') return false;
@@ -358,10 +357,49 @@ class ChatProvider extends ChangeNotifier {
 
   String _cachedTimezoneName = '';
 
-  String get _deviceTimezone {
+  String get _deviceTimezoneIana {
     try {
-      final offset = DateTime.now().timeZoneOffset;
+      final now = DateTime.now();
+      final offset = now.timeZoneOffset;
       final totalMinutes = offset.inMinutes;
+      // Map common UTC offsets to IANA timezone names
+      const offsetMap = <int, String>{
+        -720: 'Pacific/Midway',
+        -660: 'Pacific/Honolulu',
+        -600: 'America/Anchorage',
+        -540: 'America/Los_Angeles',
+        -480: 'America/Denver',
+        -420: 'America/Chicago',
+        -360: 'America/New_York',
+        -300: 'America/Caracas',
+        -240: 'America/Halifax',
+        -180: 'America/Sao_Paulo',
+        -120: 'Atlantic/South_Georgia',
+        -60: 'Atlantic/Azores',
+        0: 'Europe/London',
+        60: 'Europe/Paris',
+        120: 'Europe/Helsinki',
+        180: 'Europe/Moscow',
+        240: 'Asia/Tbilisi',
+        270: 'Asia/Tehran',
+        300: 'Asia/Dubai',
+        330: 'Asia/Kolkata',
+        345: 'Asia/Kathmandu',
+        360: 'Asia/Dhaka',
+        390: 'Asia/Yangon',
+        420: 'Asia/Bangkok',
+        480: 'Asia/Shanghai',
+        540: 'Asia/Tokyo',
+        570: 'Australia/Adelaide',
+        600: 'Australia/Sydney',
+        660: 'Pacific/Noumea',
+        720: 'Pacific/Auckland',
+        765: 'Pacific/Chatham',
+        780: 'Pacific/Tongatapu',
+      };
+      final mapped = offsetMap[totalMinutes];
+      if (mapped != null) return mapped;
+      // Generic fallback: construct UTC offset string
       final sign = totalMinutes >= 0 ? '+' : '-';
       final absMinutes = totalMinutes.abs();
       final hours = absMinutes ~/ 60;
@@ -1034,7 +1072,7 @@ class ChatProvider extends ChangeNotifier {
 
     final timezone = _cachedTimezoneName.isNotEmpty
         ? _cachedTimezoneName
-        : _deviceTimezone;
+        : _deviceTimezoneIana;
     final location = _cachedLocation.isNotEmpty ? _cachedLocation : null;
 
     if (hasImage) {

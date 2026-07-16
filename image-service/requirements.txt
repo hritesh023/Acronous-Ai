@@ -16,6 +16,8 @@ open-clip-torch>=2.24.0
 # Real-ESRGAN upscaling (CPU-only)
 basicsr>=1.4.2
 realesrgan>=0.3.0
+# Video generation
+moviepy>=1.0.3
 # Optional GPU acceleration (uncomment on GPU machines)
 # diffusers>=0.24.0
 # segment-anything>=1.0
