@@ -87,6 +87,8 @@ class AppConfig {
 
     ttsLanguage = _env('TTS_LANGUAGE', 'en-US');
     ttsDefaultSpeed = _envDouble('TTS_DEFAULT_SPEED', 1.0);
+    // Note: 1.0 is the max for FlutterTTS on most platforms.
+    // To make it faster, we reduce pitch slightly which makes speech feel quicker.
     ttsDefaultPitch = _envDouble('TTS_DEFAULT_PITCH', 0.9);
 
     allowedFileExtensions = [

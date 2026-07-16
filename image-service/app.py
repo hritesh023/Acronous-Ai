@@ -169,6 +169,7 @@ def upscale_image(image: Image.Image, scale: int = 4) -> Optional[Image.Image]:
         return None
 
 SD_PIPE = None
+LOCAL_GEN_PIPE = None
 
 def _load_sd_pipe():
     global SD_PIPE
@@ -187,6 +188,58 @@ def _load_sd_pipe():
         return SD_PIPE
     except Exception as e:
         logging.warning(f"SD init failed: {e}")
+        return None
+
+def _load_local_gen_pipe():
+    """Load a tiny SD model for CPU text-to-image generation."""
+    global LOCAL_GEN_PIPE
+    if LOCAL_GEN_PIPE is not None:
+        return LOCAL_GEN_PIPE
+    try:
+        from diffusers import AutoPipelineForText2Image
+        # segmind/small-1.0 is ~500MB, works on CPU with 24GB RAM
+        # Uses ~4GB RAM during inference, ~30-60s per image on CPU
+        LOCAL_GEN_PIPE = AutoPipelineForText2Image.from_pretrained(
+            "segmind/small-1.0",
+            torch_dtype=torch.float32,
+        )
+        LOCAL_GEN_PIPE.enable_attention_slicing()
+        LOCAL_GEN_PIPE.enable_model_cpu_offload()
+        logging.info("Local image generation pipeline loaded (segmind/small-1.0)")
+        return LOCAL_GEN_PIPE
+    except Exception as e:
+        logging.warning(f"Local gen pipeline load failed: {e}")
+        # Fallback to even smaller model
+        try:
+            from diffusers import AutoPipelineForText2Image
+            LOCAL_GEN_PIPE = AutoPipelineForText2Image.from_pretrained(
+                "segmind/tiny",
+                torch_dtype=torch.float32,
+            )
+            LOCAL_GEN_PIPE.enable_attention_slicing()
+            logging.info("Local image generation pipeline loaded (segmind/tiny fallback)")
+            return LOCAL_GEN_PIPE
+        except Exception as e2:
+            logging.warning(f"Local gen pipeline fallback failed: {e2}")
+            return None
+
+def generate_local(prompt: str, width: int = 1024, height: int = 1024) -> Optional[Image.Image]:
+    """Generate image locally using tiny SD model on CPU."""
+    pipe = _load_local_gen_pipe()
+    if pipe is None:
+        return None
+    try:
+        enhanced = f"{prompt}, photorealistic, high quality, detailed, sharp, well-lit"
+        result = pipe(
+            enhanced,
+            width=width,
+            height=height,
+            num_inference_steps=20,
+            guidance_scale=7.5,
+        )
+        return result.images[0].convert("RGB")
+    except Exception as e:
+        logging.warning(f"Local generation error: {e}")
         return None
 
 # ---------------------------------------------------------------------------
@@ -779,7 +832,13 @@ async def api_generate(
 
     import asyncio
     loop = asyncio.get_event_loop()
-    image = await loop.run_in_executor(None, generate_from_pollinations, prompt)
+
+    # Strategy 1: Local generation using tiny SD model (no API dependency)
+    image = await loop.run_in_executor(None, generate_local, prompt, width, height)
+
+    # Strategy 2: Fallback to Pollinations API
+    if image is None:
+        image = await loop.run_in_executor(None, generate_from_pollinations, prompt)
 
     if image is None:
         raise HTTPException(500, "Image generation failed — Pollinations API error")
@@ -802,7 +861,7 @@ async def api_generate(
         "edited": img_to_b64(image, "PNG"),
         "width": image.width,
         "height": image.height,
-        "strategy": "pollinations + photorealistic enhance",
+        "strategy": "local sd + photorealistic enhance" if LOCAL_GEN_PIPE else "pollinations + photorealistic enhance",
     }
 
 @app.post("/segment")

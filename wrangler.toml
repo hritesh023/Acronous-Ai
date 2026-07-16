@@ -18,8 +18,8 @@ ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
-# Python image editing service URL - set this when deployed
-# Examples: https://acronous-image-service.hf.space, https://image-service.onrender.com
+# Python image editing service URL — set to your Oracle Cloud image-service
+# Example: http://your-oracle-ip:7860 (runs locally with tiny SD model on CPU)
 EDITOR_SERVICE_URL = ""
 
 [[kv_namespaces]]

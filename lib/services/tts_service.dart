@@ -9,6 +9,11 @@ class TtsService {
 
   double _platformAdjustedSpeed() {
     final raw = AppConfig.instance.ttsDefaultSpeed;
+    // On iOS/macOS, FlutterTTS max rate is 1.0 but speech sounds slow at that value.
+    // Boost slightly to compensate.
+    if (defaultTargetPlatform == TargetPlatform.iOS || defaultTargetPlatform == TargetPlatform.macOS) {
+      return (raw * 1.2).clamp(0.0, 1.0);
+    }
     return raw;
   }
 

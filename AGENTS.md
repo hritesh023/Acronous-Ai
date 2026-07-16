@@ -11,8 +11,9 @@
 - **Chat Memory**: Full conversation history (`messages` array) is sent with every API call to both OpenRouter and Pollinations, ensuring context awareness across the entire conversation
 
 ### Image Generation (Text-to-Image)
-- **Pollinations.ai** image generation (`https://image.pollinations.ai/prompt/...`) — free, no API key needed
-- **OpenRouter** flux models for fallback
+- **Local Python** (primary) — tiny SD model (`segmind/small-1.0`) running on Oracle Cloud CPU via `image-service/`. Set `EDITOR_SERVICE_URL` to your Oracle Cloud image-service URL.
+- **Pollinations.ai** fallback (`https://image.pollinations.ai/prompt/...`) — used only when local generation fails
+- **OpenRouter** flux models for secondary fallback
 
 ### Image Editing (modify existing images)
 **6-layer pipeline — all attempts produce an image (Pollinations last resort):**
