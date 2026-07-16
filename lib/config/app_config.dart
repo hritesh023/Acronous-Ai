@@ -86,7 +86,7 @@ class AppConfig {
     speechPartialResults = true;
 
     ttsLanguage = _env('TTS_LANGUAGE', 'en-US');
-    ttsDefaultSpeed = _envDouble('TTS_DEFAULT_SPEED', 0.5);
+    ttsDefaultSpeed = _envDouble('TTS_DEFAULT_SPEED', 0.55);
     ttsDefaultPitch = _envDouble('TTS_DEFAULT_PITCH', 0.9);
 
     allowedFileExtensions = [

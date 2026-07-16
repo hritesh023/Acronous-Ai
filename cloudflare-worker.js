@@ -573,19 +573,25 @@ async function webSearch(query, env = {}) {
   // Run ALL search engines in parallel for maximum speed
   for (const qi of queries.slice(0, 3)) {
     const allEngines = [
-      wikipediaSearch(qi),
-      duckDuckGoApi(qi),
+      duckDuckGoSearch(qi),
       searchSearxng(qi),
-      googleSearchApi(qi, env),
-      hackerNewsSearch(qi),
-      guardianSearch(qi),
-      googleNewsRssSearch(qi),
+      wikipediaSearch(qi),
       googleSearch(qi),
       bingSearch(qi),
+      duckDuckGoApi(qi),
+      googleNewsRssSearch(qi),
+      hackerNewsSearch(qi),
+      guardianSearch(qi),
+      googleSearchApi(qi, env),
     ];
     const results = await Promise.allSettled(allEngines);
-    for (const r of results) {
-      if (r.status === 'fulfilled' && r.value) return r.value;
+    // Collect ALL successful results for better coverage
+    const successful = results
+      .filter(r => r.status === 'fulfilled' && r.value)
+      .map(r => r.value);
+    if (successful.length > 0) {
+      // Combine top results from multiple engines for best coverage
+      return successful.slice(0, 3).join('\n\n');
     }
   }
 
@@ -1409,7 +1415,8 @@ async function generateGreeting(message, env) {
 // Extract factual answer directly from web search results
 function extractFactualAnswer(query, webData) {
   if (!webData) return null;
-  const lines = webData.split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('['));
+  // Accept lines starting with -, [, or any non-empty line
+  const lines = webData.split('\n').filter(l => l.trim().length > 0);
   if (lines.length === 0) return null;
   const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'who', 'what', 'when', 'where', 'why', 'how', 'which', 'of', 'in', 'on', 'at', 'to', 'for', 'as', 'do', 'does', 'did', 'has', 'have', 'had', 'can', 'could', 'will', 'would', 'should', 'may', 'might', 'shall']);
   const queryWords = query.toLowerCase().replace(/[?.!,]/g, '').split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
@@ -1431,9 +1438,9 @@ function extractFactualAnswer(query, webData) {
       bestLine = lines[i];
     }
   }
-  if (!bestLine || bestScore < 3) return null;
-  let answer = bestLine.replace(/^-\s*/, '').replace(/^\[.*?\]\(.*?\):\s*/, '').trim();
-  if (answer.length > 200) {
+  if (!bestLine || bestScore < 2) return null;
+  let answer = bestLine.replace(/^[-\[]*\s*/, '').replace(/\]\(.*?\):\s*/, '').trim();
+  if (answer.length > 300) {
     const sentences = answer.split(/[.!?]+/).filter(s => s.trim().length > 10);
     let bestSentence = '';
     let bestSentenceScore = 0;
@@ -1465,93 +1472,43 @@ function isTimeQuery(message) {
     || /^(time|date|day|year|month)\s*\??$/i.test(m);
 }
 
-// Generate direct answer for time/date queries from system clock
-function getTimeAnswer(message, tz) {
+// Compute local time data from timezone — pure data, no template response
+function computeLocalTime(tz) {
+  const now = new Date();
+  let userTz = tz || 'UTC';
   try {
-    const now = new Date();
-    let userTz = tz || '';
-
-    // If no timezone provided, try to get from request context (set elsewhere)
-    // Never default to UTC — always try to resolve from IP first
-    if (!userTz) {
-      // Last resort: compute from UTC offset if we have one, otherwise use UTC
-      userTz = 'UTC';
-    }
-
-    let timeOnly, dateOnly;
-    try {
-      timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
-      dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    } catch {
-      // Intl failed — likely a UTC offset string like "UTC+05:30"
-      // Compute time manually from the offset
-      try {
-        const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
-        if (offsetMatch) {
-          const sign = offsetMatch[1] === '+' ? 1 : -1;
-          const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
-          const local = new Date(now.getTime() + offsetMs);
-          const h = local.getUTCHours();
-          const m = local.getUTCMinutes();
-          const s = local.getUTCSeconds();
-          const ampm = h >= 12 ? 'PM' : 'AM';
-          const h12 = h % 12 || 12;
-          timeOnly = `${h12}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')} ${ampm} ${userTz}`;
-          const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-          const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-          dateOnly = `${days[local.getUTCDay()]}, ${months[local.getUTCMonth()]} ${local.getUTCDate()}, ${local.getUTCFullYear()}`;
-        } else {
-          throw new Error('not a UTC offset');
-        }
-      } catch {
-        // Absolute last resort: UTC
-        timeOnly = now.toUTCString().slice(17, 25) + ' UTC';
-        dateOnly = now.toUTCString().slice(0, 16) + now.getFullYear();
-      }
-    }
-
-    const m = message.toLowerCase().trim();
-    if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
-      return `It's currently **${timeOnly}** on ${dateOnly}.`;
-    }
-    if (/\bdate\b|\bday\b|\btoday\b/.test(m) && !/\btime\b/.test(m)) {
-      return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
-    }
-    if (/\byear\b/.test(m)) {
-      try {
-        const yearOnly = now.toLocaleDateString('en-US', { timeZone: userTz, year: 'numeric' });
-        return `The current year is **${yearOnly}**.`;
-      } catch {
-        const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
-        if (offsetMatch) {
-          const sign = offsetMatch[1] === '+' ? 1 : -1;
-          const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
-          const local = new Date(now.getTime() + offsetMs);
-          return `The current year is **${local.getUTCFullYear()}**.`;
-        }
-        return `The current year is **${now.getUTCFullYear()}**.`;
-      }
-    }
-    if (/\bmonth\b/.test(m)) {
-      try {
-        const monthYear = now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' });
-        return `The current month is **${monthYear}**.`;
-      } catch {
-        const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-        const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
-        if (offsetMatch) {
-          const sign = offsetMatch[1] === '+' ? 1 : -1;
-          const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
-          const local = new Date(now.getTime() + offsetMs);
-          return `The current month is **${months[local.getUTCMonth()]} ${local.getUTCFullYear()}**.`;
-        }
-        return `The current month is **${months[now.getUTCMonth()]} ${now.getUTCFullYear()}**.`;
-      }
-    }
-    return `It's currently **${dateOnly}, ${timeOnly}**.`;
+    const timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
+    const dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    return { time: timeOnly, date: dateOnly, tz: userTz };
   } catch {
-    return `It's currently **${new Date().toUTCString()}**.`;
+    // Intl failed — likely a UTC offset string like "UTC+05:30"
+    const offsetMatch = userTz.match(/UTC([+-])(\d{1,2}):?(\d{2})/);
+    if (offsetMatch) {
+      const sign = offsetMatch[1] === '+' ? 1 : -1;
+      const offsetMs = sign * (parseInt(offsetMatch[2]) * 3600000 + parseInt(offsetMatch[3]) * 60000);
+      const local = new Date(now.getTime() + offsetMs);
+      const h = local.getUTCHours();
+      const m = local.getUTCMinutes();
+      const s = local.getUTCSeconds();
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      const h12 = h % 12 || 12;
+      const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+      const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+      return {
+        time: `${h12}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')} ${ampm}`,
+        date: `${days[local.getUTCDay()]}, ${months[local.getUTCMonth()]} ${local.getUTCDate()}, ${local.getUTCFullYear()}`,
+        tz: userTz,
+      };
+    }
+    return { time: now.toUTCString().slice(17, 25) + ' UTC', date: now.toUTCString().slice(0, 16) + now.getFullYear(), tz: 'UTC' };
   }
+}
+
+// Check if a query is asking about the user's location
+function isLocationQuery(message) {
+  const m = message.toLowerCase().trim();
+  return /\b(?:where am i|where am I|my location|my city|my country|what city|what country|what place|which city|which country|where is my location|locate me|find my location|gps location|ip location)\b/i.test(m)
+    || /^(where|location)\s*\??$/i.test(m);
 }
 
 // Check if a query is a simple factual lookup (time, date, who is X, etc.)
@@ -1559,13 +1516,13 @@ function isSimpleFactual(message) {
   const m = message.toLowerCase().trim();
   const patterns = [
     /\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month)\b/i,
-    /\b(?:who is|who was|who are|who were) (?:the |a |an )/i,
-    /\b(?:what is|what are|what was|what were) (?:the |a |an )/i,
-    /\b(?:president|prime minister|chief minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach) (?:of|for|at)\b/i,
+    /\b(?:who|what|where|when|how) (?:is|was|are|were|do|does|did|has|have|had|can|could|will|would) /i,
+    /\b(?:president|prime minister|chief minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach) (?:of|for|at|in)\b/i,
     /\b(?:score|won|lost|beat)\b/i,
     /\b(?:price|cost|rate|value|stock|share|market)\b/i,
     /\b(?:population|area|distance|height|weight|age)\b/i,
     /\b(?:weather|temperature|rain|forecast)\b/i,
+    /\b(?:where am i|my location|my city|my country)\b/i,
   ];
   return patterns.some(p => p.test(m));
 }
@@ -1610,22 +1567,38 @@ function buildEnhancedSystemPrompt(tz, location, webContext, queryTier) {
 ## CURRENT CONTEXT
 - Date & time: ${formatted}${location ? `\n- User location: ${location}` : ''}
 
-## WEB SEARCH RESULTS (AUTHORITATIVE)
+## WEB SEARCH RESULTS (AUTHORITATIVE — THESE ARE LIVE RESULTS)
 ${webContext}
 
-## CRITICAL RULES
-- Base your answer PRIMARILY on the web search results above — they are current and authoritative
-- If the web results contain the answer, use them directly
-- If the web results don't fully cover it, supplement with your knowledge but prioritize the search data
-- Never say "based on my training" or "as of my knowledge cutoff" — just answer
-- Never tell the user to "check external sources" — you already have the information
-- Never mention that you searched the web or where the information came from`;
+## CRITICAL RULES FOR ANSWERING
+- The web search results above are LIVE, FRESH, and AUTHORITATIVE — use them as your PRIMARY source
+- Extract the specific answer from the search results and present it clearly
+- If multiple search results confirm the same fact, state it confidently
+- If the search results contain the answer but are scattered, synthesize them into one clear answer
+- NEVER say "based on my training data" or "as of my knowledge cutoff" — the search results ARE your source
+- NEVER say "I don't have real-time access" — you DO, the results are right above
+- NEVER say "please check external sources" — the information IS already here
+- NEVER ignore the search results and answer from memory
+- NEVER say "I searched the web" or "according to search results" — just give the answer naturally
+- If the search results are completely empty or irrelevant, say "I couldn't find current information on that"
+
+## LOCATION RULES
+- If the user asks "where am I", "my location", "what city am I in", "what country am I in", or any location question — use the User location field above
+- Answer directly: "You appear to be in [location]." or "Based on your IP, you're in [location]."
+- NEVER say "I don't know where you are" if the User location field has data
+- If User location is not available, say "I couldn't determine your exact location, but I can help with location-related questions."`;
   }
 
   return `${basePersonality}
 
 ## CURRENT CONTEXT
 - Date & time: ${formatted}${location ? `\n- User location: ${location}` : ''}
+
+## LOCATION RULES
+- If the user asks "where am I", "my location", "what city am I in", "what country am I in", or any location question — use the User location field above
+- Answer directly: "You appear to be in [location]." or "Based on your IP, you're in [location]."
+- NEVER say "I don't know where you are" if the User location field has data
+- If User location is not available, say "I couldn't determine your exact location, but I can help with location-related questions."
 
 ## RULES
 - Answer directly and confidently
@@ -1721,6 +1694,21 @@ export default {
           return jsonOk({ response, session_id: sessionId, type: 'chat' });
         }
 
+        // Location queries: route through LLM with location data in context
+        if (isLocationQuery(message)) {
+          const sysPrompt = buildEnhancedSystemPrompt(tz, location, null, 2);
+          const locMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
+          let locContent = null;
+          const locResults = await Promise.allSettled([
+            env.OPENROUTER_API_KEY ? callOpenRouter(locMsgs, env) : Promise.resolve(null),
+            tryPollinations(locMsgs, env),
+          ]);
+          for (const r of locResults) {
+            if (r.status === 'fulfilled' && r.value?.trim()) { locContent = r.value; break; }
+          }
+          return jsonOk({ response: locContent?.trim() || '', session_id: sessionId, type: 'chat' });
+        }
+
         let content = null;
 
         // Tier 1 (no search needed): Fast model only
@@ -1741,10 +1729,22 @@ export default {
 
         // Tier 2 factual (time, who is X, price, weather, etc.): search → extract answer directly
         if (classified.tier === 2 && classified.needsSearch && isSimpleFactual(message)) {
-          // Time/date queries: answer directly from system clock — no search needed
+          // Time/date queries: pass computed time to LLM for natural response
           if (isTimeQuery(message)) {
-            const timeAnswer = getTimeAnswer(message, tz);
-            return jsonOk({ response: timeAnswer, session_id: sessionId, type: 'chat' });
+            const timeData = computeLocalTime(tz);
+            const timeContext = `The user's current local time is ${timeData.time} on ${timeData.date} (timezone: ${timeData.tz}).`;
+            const sysPrompt = buildEnhancedSystemPrompt(tz, location, null, 2)
+              + `\n\n## TIME DATA (use this to answer the user's time/date question)\n${timeContext}`;
+            const timeMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
+            let timeContent = null;
+            const timeResults = await Promise.allSettled([
+              env.OPENROUTER_API_KEY ? callOpenRouter(timeMsgs, env) : Promise.resolve(null),
+              tryPollinations(timeMsgs, env),
+            ]);
+            for (const r of timeResults) {
+              if (r.status === 'fulfilled' && r.value?.trim()) { timeContent = r.value; break; }
+            }
+            return jsonOk({ response: timeContent?.trim() || '', session_id: sessionId, type: 'chat' });
           }
           // Other factual queries: search → extract → answer
           const webData = await webSearch(message, env);

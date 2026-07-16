@@ -30,7 +30,7 @@ class PreferencesService {
 
   Future<double> loadTtsSpeed() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getDouble(AppPrefKeys.ttsSpeed) ?? 0.5;
+    return prefs.getDouble(AppPrefKeys.ttsSpeed) ?? 0.55;
   }
 
   Future<void> saveTtsSpeed(double value) async {

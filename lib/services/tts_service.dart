@@ -9,10 +9,6 @@ class TtsService {
 
   double _platformAdjustedSpeed() {
     final raw = AppConfig.instance.ttsDefaultSpeed;
-    if (defaultTargetPlatform == TargetPlatform.iOS ||
-        defaultTargetPlatform == TargetPlatform.macOS) {
-      return raw * 0.8;
-    }
     return raw;
   }
 
