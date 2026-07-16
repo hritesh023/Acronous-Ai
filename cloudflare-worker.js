@@ -6,14 +6,7 @@ const LANDING_AUTH_PATHS = ['/api/auth/', '/login', '/login.html', '/signup', '/
 const SEARXNG_URLS = [
   'https://searx.be/search', 'https://search.sapti.me/search',
   'https://searx.tuxcloud.net/search', 'https://searx.work/search',
-  'https://searx.info/search', 'https://search.mdosch.de/search',
-  'https://northboot.xyz/search', 'https://searx.raspipc.nl/search',
-  'https://searx.roflcopter.fr/search', 'https://searx.xyz/search',
-  'https://s.mble.dk/search', 'https://searx.tyil.nl/search',
-  'https://searx.tiekoetter.com/search', 'https://searx.priv.au/search',
-  'https://searx.fmac.xyz/search', 'https://searx.hu/search',
-  'https://searx.no/search', 'https://searx.se/search',
-  'https://searx.de/search', 'https://searx.mv/search',
+  'https://searx.info/search',
 ];
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -37,6 +30,7 @@ function formatLocalTime(tz) {
 }
 
 async function resolveUserGeo(request) {
+  // Fast path: use Cloudflare's built-in data (instant, no extra latency)
   if (request.cf) {
     const tz = request.cf.timezone || null;
     const city = request.cf.city || '';
@@ -44,45 +38,7 @@ async function resolveUserGeo(request) {
     const location = [city, country].filter(Boolean).join(', ') || null;
     if (tz || location) return { tz, location };
   }
-
-  const ip = request.headers.get('CF-Connecting-IP') || request.headers.get('True-Client-IP');
-  if (!ip) return { tz: null, location: null };
-
-  // Skip private/loopback IPs
-  if (ip === '127.0.0.1' || ip === '::1' || ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('172.')) {
-    return { tz: null, location: null };
-  }
-
-  try {
-    const resp = await fetch(`https://ip-api.com/json/${ip}?fields=timezone,city,country,status`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (resp.ok) {
-      const d = await resp.json();
-      if (d.status === 'success') {
-        const tz = d.timezone || null;
-        const city = d.city || '';
-        const country = d.country || '';
-        const location = [city, country].filter(Boolean).join(', ') || null;
-        return { tz, location };
-      }
-    }
-  } catch {}
-
-  try {
-    const resp = await fetch(`https://freeipapi.com/api/json/${ip}`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (resp.ok) {
-      const d = await resp.json();
-      const tz = (d.timeZone || d.timezone || null);
-      const city = d.cityName || d.city || '';
-      const country = d.countryName || d.country || '';
-      const location = [city, country].filter(Boolean).join(', ') || null;
-      return { tz, location };
-    }
-  } catch {}
-
+  // No external API fallback — too slow for chat response times
   return { tz: null, location: null };
 }
 
@@ -176,7 +132,7 @@ async function duckDuckGoSearch(query) {
     async () => {
       const resp = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
         headers: { 'User-Agent': UA, 'Accept': 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
-      signal: AbortSignal.timeout(60000),
+      signal: AbortSignal.timeout(8000),
       });
       if (!resp.ok) return null;
       const html = await resp.text();
@@ -562,37 +518,33 @@ async function pythonWebSearch(query, env) {
 async function webSearch(query, env = {}) {
   const q = query.trim();
 
-  // Try Python search service first (free unlimited via BeautifulSoup)
-  const pyResult = await pythonWebSearch(q, env);
-  if (pyResult) return pyResult;
+  // Run ALL search engines IN PARALLEL — Python search runs alongside browser engines
+  const allEngines = [
+    pythonWebSearch(q, env),
+    duckDuckGoSearch(q),
+    searchSearxng(q),
+    wikipediaSearch(q),
+    googleSearch(q),
+    bingSearch(q),
+    duckDuckGoApi(q),
+    googleNewsRssSearch(q),
+    hackerNewsSearch(q),
+    guardianSearch(q),
+    googleSearchApi(q, env),
+  ];
 
-  const queries = [q, `${q} ${new Date().getFullYear()}`, `${q} latest`];
-  const stripped = q.replace(/^(who is|what is|tell me about|do you know|can you tell me|i want to know about|describe|explain)\b/i, '').trim();
-  if (stripped && stripped !== q && !queries.includes(stripped)) queries.push(stripped);
+  // Race all engines with a 5-second hard cap
+  const results = await Promise.allSettled(allEngines.map(async p => {
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000));
+    return Promise.race([p, timeout]);
+  }));
 
-  // Run ALL search engines in parallel for maximum speed
-  for (const qi of queries.slice(0, 3)) {
-    const allEngines = [
-      duckDuckGoSearch(qi),
-      searchSearxng(qi),
-      wikipediaSearch(qi),
-      googleSearch(qi),
-      bingSearch(qi),
-      duckDuckGoApi(qi),
-      googleNewsRssSearch(qi),
-      hackerNewsSearch(qi),
-      guardianSearch(qi),
-      googleSearchApi(qi, env),
-    ];
-    const results = await Promise.allSettled(allEngines);
-    // Collect ALL successful results for better coverage
-    const successful = results
-      .filter(r => r.status === 'fulfilled' && r.value)
-      .map(r => r.value);
-    if (successful.length > 0) {
-      // Combine top results from multiple engines for best coverage
-      return successful.slice(0, 3).join('\n\n');
-    }
+  // Collect ALL successful results for better coverage
+  const successful = results
+    .filter(r => r.status === 'fulfilled' && r.value)
+    .map(r => r.value);
+  if (successful.length > 0) {
+    return successful.slice(0, 3).join('\n\n');
   }
 
   return null;
@@ -654,23 +606,19 @@ async function callOpenRouter(messages, env) {
     'google/gemini-2.5-flash-lite-preview-02-15:free',
   ];
   for (const model of models) {
-    for (let retry = 0; retry < 2; retry++) {
-      try {
-        const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-          body: JSON.stringify({ messages, model, max_tokens: 4096, temperature: 0.7 })
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          const content = cleanResponse(data?.choices?.[0]?.message?.content);
-          if (content && content.trim()) return content;
-        }
-        if (resp.status === 429) {
-          await new Promise(r => setTimeout(r, 1200));
-        }
-      } catch { continue; }
-    }
+    try {
+      const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+        body: JSON.stringify({ messages, model, max_tokens: 4096, temperature: 0.7 })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        const content = cleanResponse(data?.choices?.[0]?.message?.content);
+        if (content && content.trim()) return content;
+      }
+      // On 429, try next model immediately — no backoff delay
+    } catch { continue; }
   }
   return null;
 }
@@ -700,42 +648,33 @@ async function callOpenRouterVision(messages, env) {
 
 async function tryWorkersAIChat(messages, env) {
   if (!env.AI) return null;
-  const models = [
-    '@cf/meta/llama-4-scout-17b-16e-instruct',
-    '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    '@cf/meta/llama-3.2-3b-instruct',
-  ];
-  for (const name of models) {
-    try {
-      const result = await env.AI.run(name, { messages, max_tokens: 2048 });
-      if (result && typeof result === 'object') {
-        const text = cleanResponse(result.response || '');
-        if (text.trim()) return text;
-      }
-    } catch { continue; }
-  }
+  // Use only the fastest, lightest model for Workers AI fallback
+  try {
+    const result = await env.AI.run('@cf/meta/llama-3.2-3b-instruct', { messages, max_tokens: 2048 });
+    if (result && typeof result === 'object') {
+      const text = cleanResponse(result.response || '');
+      if (text.trim()) return text;
+    }
+  } catch {}
   return null;
 }
 
 async function tryPollinations(messages, env) {
-  const pollModels = ['openai', 'mistral', 'llama', 'deepseek', 'qwen-coder'];
+  const pollModels = ['openai', 'mistral', 'llama'];
   for (const model of pollModels) {
-    for (let retry = 0; retry < 2; retry++) {
-      try {
-        const resp = await fetch('https://text.pollinations.ai', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, model, private: true, seed: Math.floor(Math.random() * 10000) })
-        });
-        if (resp.ok) {
-          const text = await resp.text();
-          const trimmed = text?.trim();
-          if (trimmed) return cleanResponse(trimmed);
-        } else if (resp.status === 429) {
-          await new Promise(r => setTimeout(r, 500 * (retry + 1)));
-        }
-      } catch { continue; }
-    }
+    try {
+      const resp = await fetch('https://text.pollinations.ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages, model, private: true, seed: Math.floor(Math.random() * 10000) })
+      });
+      if (resp.ok) {
+        const text = await resp.text();
+        const trimmed = text?.trim();
+        if (trimmed) return cleanResponse(trimmed);
+      }
+      // On 429, try next model immediately — no backoff
+    } catch { continue; }
   }
   return null;
 }
@@ -1355,73 +1294,47 @@ function classifyQuery(message) {
   }
   if (wordCount > 30) return { tier: 3, needsSearch: true, model: null };
 
-  // ── CRITICAL: Current-events / time / factual queries MUST use web search ──
-  // These cannot be answered from training data alone — they need live internet
+  // ── Tier 2: ONLY genuinely current-data queries that CANNOT be answered from training ──
   const mustSearchPatterns = [
-    // Time & date queries
+    // Time & date queries — need live clock
     /\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month|current month)\b/i,
-    /\b(?:right now|at the moment|as of now|as of today|currently|presently|latest|recent|updated)\b/i,
-    // People in power / officials — these change and need current data
-    /\b(?:chief minister|cm of|cm is|cm\b|president of|president is|president\b|prime minister|pm of|pm is|pm\b|governor|mayor|minister of|minister is|who is the|who leads|who heads|current leader)\b/i,
-    // Elections, politics, government
-    /\b(?:election|elections|voting|poll|polls|cabinet|parliament|senate|congress|assembly|legislature|government|opposition|coalition)\b/i,
-    // Sports scores, live events
-    /\b(?:score|scored|won|lost|match|game|tournament|championship|league|ipl|world cup|olympics|fifa|nba|nfl|cricket|football|soccer|tennis)\b/i,
-    // Prices, markets, economy
-    /\b(?:price|cost|rate|value|stock|share|market|rupee|dollar|euro|gdp|inflation|interest rate|salary|wage|tax)\b/i,
-    // Weather
-    /\b(?:weather|temperature|rain|rainfall|forecast|climate|humidity|wind|storm|cyclone|flood)\b/i,
-    // News
-    /\b(?:news|headlines|breaking|update|updates|happening|event|events|incident|accident|disaster|crisis|war|conflict|attack|protest)\b/i,
-    // Population, statistics
-    /\b(?:population|census|demographics|stats|statistics|data|numbers|figure|figures|count|total)\b/i,
-    // People — who is X (always needs current data)
-    /\bwho (?:is|was|are|were) /i,
-    // What is X (often needs current info)
-    /\bwhat (?:is|are|was|were) /i,
-    // General factual — any question that starts with question words
-    /\b(?:who|what|where|when|why|how|which) .*\b(?:now|currently|today|this year|this month|this week|latest|present|actual|real|true|official)\b/i,
-    // Position/role questions — "who is the X of Y"
-    /\b(?:who|what) .+ (?:of|for|at|in) \b/i,
+    // Live scores & sports
+    /\b(?:score|scored|match result|game result|live score|ipl|world cup|olympics|fifa|nba|nfl)\b/i,
+    // Current prices & markets
+    /\b(?:stock price|share price|current price|market cap|stock market|cryptocurrency price|bitcoin price|ethereum price)\b/i,
+    // Weather — needs real-time data
+    /\b(?:weather|temperature|rain|rainfall|forecast|humidity|wind speed|storm|cyclone)\b/i,
+    // Breaking news & current events
+    /\b(?:breaking|headlines|latest news|today news|current news|recent news|happening now)\b/i,
+    // Elections & politics — need current data
+    /\b(?:election results|voting results|poll results|cabinet|parliament session)\b/i,
   ];
   for (const p of mustSearchPatterns) {
     if (p.test(m)) return { tier: 2, needsSearch: true, model: null };
   }
 
-  // ALL questions (ending with ?) that contain informational keywords — must search
-  if (m.endsWith('?')) {
-    const infoKeywords = /\b(?:who|what|where|when|why|how|which|is|are|was|were|do|does|did|has|have|had|can|could|will|would|shall|should|name|tell|explain|describe|list|give|show|find|know)\b/i;
-    if (infoKeywords.test(m)) return { tier: 2, needsSearch: true, model: null };
+  // "Who is the current/who is X president/PM" — needs live data
+  if (/\bwho (?:is|was|are|were) (?:the |a |an )?(?:current|present|new|incoming|acting|interim|former|previous|next)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
   }
 
-  // Tier 1: Fast — ONLY for simple non-factual things (opinions, creative, no-search-needed)
-  const fastPatterns = [
-    /^(translate|meaning of) /i,
-    /^(can you|could you|please|would you) (?:help|write|create|make) /i,
-    /^(tell me a joke|say something funny|make me laugh)/i,
-    /^(what do you think|your opinion|do you like)/i,
-    /^(how do (?:you|I)|what's the best way to)/i,
-  ];
-  for (const p of fastPatterns) {
-    if (p.test(m)) return { tier: 1, needsSearch: false, model: null };
-  }
-
-  // Tier 2: Normal — everything else gets full treatment
-  return { tier: 2, needsSearch: true, model: null };
+  // Tier 1: Fast — opinions, creative, simple questions, no search needed
+  // This is the DEFAULT for most queries now
+  return { tier: 1, needsSearch: false, model: null };
 }
 
-// Dynamic greeting response — generated by LLM, never hardcoded
+// Dynamic greeting response — fast model only, no fallback chain
 async function generateGreeting(message, env) {
   const sysMsg = "You are Acronous AI, created by Acronous. Respond to this greeting naturally and warmly in 1-2 sentences. Never reveal model names, providers, or backend details. Never say 'As an AI'. Never use pre-written templates — generate a fresh, natural response each time.";
   const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: message }];
 
-  // Try OpenRouter first
+  // Single fast model call — no retries, no fallback chain
   if (env.OPENROUTER_API_KEY) {
     try {
       const resp = await fetch(`${env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ messages: msgs, model: env.FAST_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free', max_tokens: 100, temperature: 0.9 }),
+        body: JSON.stringify({ messages: msgs, model: env.FAST_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free', max_tokens: 50, temperature: 0.9 }),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -1431,27 +1344,7 @@ async function generateGreeting(message, env) {
     } catch {}
   }
 
-  // Fallback: Pollinations (free, no key)
-  try {
-    const pollResp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs, model: 'openai', private: true, seed: Math.floor(Math.random() * 10000) }),
-    });
-    if (pollResp.ok) {
-      const text = (await pollResp.text()).trim();
-      if (text) return cleanResponse(text);
-    }
-  } catch {}
-
-  // Final fallback: Workers AI
-  if (env.AI) {
-    try {
-      const result = await env.AI.run('@cf/meta/llama-3.2-3b-instruct', { messages: msgs, max_tokens: 100 });
-      if (result?.response?.trim()) return cleanResponse(result.response);
-    } catch {}
-  }
-
+  // Instant fallback — no LLM call needed for greetings
   return "Hey there! What can I help you with?";
 }
 
@@ -1726,15 +1619,19 @@ export default {
         let history = body.messages || [];
         if (history.length > 20) history = history.slice(-20);
 
-        // Always resolve geo from server first, then override with client data
-        const geo = await resolveUserGeo(request);
-        let tz = geo.tz;
-        let location = geo.location;
+        // ── Query classification FIRST — skip geo for simple queries ──
+        const classified = classifyQuery(message);
+
+        // Only resolve geo for queries that actually need it (Tier 2/3)
+        let tz = null;
+        let location = null;
+        if (classified.tier >= 2) {
+          const geo = await resolveUserGeo(request);
+          tz = geo.tz;
+          location = geo.location;
+        }
         if (body.timezone && body.timezone.trim()) tz = body.timezone;
         if (body.location && body.location.trim()) location = body.location;
-
-        // ── Query classification for tier-based routing ──
-        const classified = classifyQuery(message);
 
         // Tier 0: Greeting — dynamic response from fast model, no search
         if (classified.tier === 0) {
@@ -1744,32 +1641,21 @@ export default {
 
         // Location queries: route through LLM with location data in context
         if (isLocationQuery(message)) {
-          const sysPrompt = buildEnhancedSystemPrompt(tz, location, null, 2);
+          const sysPrompt = `You are Acronous AI, created by Acronous. The user's location is ${location || 'unknown'}. Answer their location question directly and concisely. Never reveal model names or providers.`;
           const locMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          let locContent = null;
-          const locResults = await Promise.allSettled([
-            env.OPENROUTER_API_KEY ? callOpenRouter(locMsgs, env) : Promise.resolve(null),
-            tryPollinations(locMsgs, env),
-          ]);
-          for (const r of locResults) {
-            if (r.status === 'fulfilled' && r.value?.trim()) { locContent = r.value; break; }
-          }
+          // Use fast model only — single call, no fallback chain
+          let locContent = await callOpenRouter(locMsgs, env);
           return jsonOk({ response: locContent?.trim() || '', session_id: sessionId, type: 'chat' });
         }
 
         let content = null;
 
-        // Tier 1 (no search needed): Fast model only
+        // Tier 1 (no search needed): Fast model only, short prompt
         if (classified.tier === 1 && !classified.needsSearch) {
-          const sysPrompt = buildEnhancedSystemPrompt(tz, location, null, 1);
+          const sysPrompt = `You are Acronous AI, created by Acronous. Be helpful, concise, and natural. Never reveal model names or providers. Never say "As an AI". Match the user's language.`;
           const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          const fastResults = await Promise.allSettled([
-            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-            tryPollinations(msgs, env),
-          ]);
-          for (const r of fastResults) {
-            if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
-          }
+          // Use fast model only — single call, no fallback chain
+          content = await callOpenRouter(msgs, env);
           if (content) content = content.trim();
           if (!content) content = '';
           return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
@@ -1781,17 +1667,10 @@ export default {
           if (isTimeQuery(message)) {
             const timeData = computeLocalTime(tz);
             const timeContext = `The user's current local time is ${timeData.time} on ${timeData.date} (timezone: ${timeData.tz}).`;
-            const sysPrompt = buildEnhancedSystemPrompt(tz, location, null, 2)
-              + `\n\n## TIME DATA (use this to answer the user's time/date question)\n${timeContext}`;
+            const sysPrompt = `You are Acronous AI, created by Acronous. Answer the user's time/date question using this data: ${timeContext}. Be concise. Never reveal model names or providers.`;
             const timeMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-            let timeContent = null;
-            const timeResults = await Promise.allSettled([
-              env.OPENROUTER_API_KEY ? callOpenRouter(timeMsgs, env) : Promise.resolve(null),
-              tryPollinations(timeMsgs, env),
-            ]);
-            for (const r of timeResults) {
-              if (r.status === 'fulfilled' && r.value?.trim()) { timeContent = r.value; break; }
-            }
+            // Use fast model only — single call
+            let timeContent = await callOpenRouter(timeMsgs, env);
             return jsonOk({ response: timeContent?.trim() || '', session_id: sessionId, type: 'chat' });
           }
           // Other factual queries: search → extract → answer
@@ -1803,13 +1682,8 @@ export default {
           // Fallback: use LLM to synthesize from search results
           const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 2);
           const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          const results = await Promise.allSettled([
-            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-            tryPollinations(msgs, env),
-          ]);
-          for (const r of results) {
-            if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
-          }
+          // Use fast model only — single call
+          content = await callOpenRouter(msgs, env);
           return jsonOk({ response: content?.trim() || '', session_id: sessionId, type: 'chat' });
         }
 
@@ -1827,26 +1701,24 @@ export default {
 
         // Run LLM providers — use more capable models for Tier 3
         const chatModels = classified.tier === 3
-          ? [env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free', 'google/gemini-2.5-flash-lite-preview-02-15:free']
+          ? [env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free']
           : [env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free'];
 
         const llmResults = await Promise.allSettled([
           ...chatModels.map(model => env.OPENROUTER_API_KEY ? (async () => {
-            for (let retry = 0; retry < 2; retry++) {
-              try {
-                const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-                  body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: 0.7 }),
-                });
-                if (resp.ok) {
-                  const data = await resp.json();
-                  const c = cleanResponse(data?.choices?.[0]?.message?.content);
-                  if (c?.trim()) return c;
-                }
-                if (resp.status === 429) await new Promise(r => setTimeout(r, 1200));
-              } catch { continue; }
-            }
+            try {
+              const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+                body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: 0.7 }),
+              });
+              if (resp.ok) {
+                const data = await resp.json();
+                const c = cleanResponse(data?.choices?.[0]?.message?.content);
+                if (c?.trim()) return c;
+              }
+              // On 429 or error, try next model immediately — no backoff
+            } catch {}
             return null;
           })() : Promise.resolve(null)),
           tryPollinations(msgs, env),
