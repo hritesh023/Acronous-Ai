@@ -156,29 +156,52 @@ async function generateGreeting(message) {
 // ---------------------------------------------------------------------------
 function extractFactualAnswer(query, webData) {
   if (!webData) return null;
-  const q = query.toLowerCase();
   const lines = webData.split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('['));
   if (lines.length === 0) return null;
-  // Find the most relevant snippet
-  const queryWords = q.replace(/[?.!,]/g, '').split(/\s+/).filter(w => w.length > 2);
+  const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'who', 'what', 'when', 'where', 'why', 'how', 'which', 'of', 'in', 'on', 'at', 'to', 'for', 'as', 'do', 'does', 'did', 'has', 'have', 'had', 'can', 'could', 'will', 'would', 'should', 'may', 'might', 'shall']);
+  const queryWords = query.toLowerCase().replace(/[?.!,]/g, '').split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+  if (queryWords.length === 0) return null;
   let bestLine = '';
   let bestScore = 0;
-  for (const line of lines) {
-    const lower = line.toLowerCase();
+  for (let i = 0; i < lines.length; i++) {
+    const lower = lines[i].toLowerCase();
     let score = 0;
     for (const w of queryWords) {
-      if (lower.includes(w)) score++;
+      if (lower.includes(w)) score += 2;
     }
+    if (/\bis\s+\w/.test(lower)) score += 1;
+    if (/\d{4}/.test(lower)) score += 1;
+    if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(lower)) score += 1;
+    if (lines[i].length > 300) score -= 1;
     if (score > bestScore) {
       bestScore = score;
-      bestLine = line;
+      bestLine = lines[i];
     }
   }
-  if (!bestLine) return null;
-  // Clean up: remove leading "- " or "[title](url): " prefix
+  if (!bestLine || bestScore < 3) return null;
   let answer = bestLine.replace(/^-\s*/, '').replace(/^\[.*?\]\(.*?\):\s*/, '').trim();
-  // Truncate to a reasonable length
-  if (answer.length > 500) answer = answer.slice(0, 500) + '...';
+  if (answer.length > 200) {
+    const sentences = answer.split(/[.!?]+/).filter(s => s.trim().length > 10);
+    let bestSentence = '';
+    let bestSentenceScore = 0;
+    for (const sentence of sentences) {
+      const lower = sentence.toLowerCase();
+      let sScore = 0;
+      for (const w of queryWords) {
+        if (lower.includes(w)) sScore += 2;
+      }
+      if (/\d{4}/.test(lower)) sScore += 1;
+      if (sScore > bestSentenceScore) {
+        bestSentenceScore = sScore;
+        bestSentence = sentence.trim();
+      }
+    }
+    if (bestSentence && bestSentenceScore >= 2) {
+      answer = bestSentence;
+    } else {
+      answer = answer.slice(0, 300) + '...';
+    }
+  }
   return answer || null;
 }
 
@@ -198,6 +221,43 @@ function isSimpleFactual(message) {
     /\b(?:weather|temperature|rain|forecast)\b/i,
   ];
   return patterns.some(p => p.test(m));
+}
+
+// ---------------------------------------------------------------------------
+// Check if a query is asking for the current time/date
+// ---------------------------------------------------------------------------
+function isTimeQuery(message) {
+  const m = message.toLowerCase().trim();
+  return /\b(?:what time|current time|time now|what date|current date|date today|what day|day today|what year|current year|what month|today's date|today date)\b/i.test(m)
+    || /^(time|date|day|year|month)\s*\??$/i.test(m);
+}
+
+// ---------------------------------------------------------------------------
+// Generate direct answer for time/date queries from system clock
+// ---------------------------------------------------------------------------
+function getTimeAnswer(message, tz) {
+  const now = new Date();
+  const userTz = tz || 'UTC';
+  const opts = { timeZone: userTz, timeZoneName: 'long' };
+  let formatted;
+  try { formatted = now.toLocaleString('en-US', opts); } catch { formatted = now.toISOString(); }
+  const m = message.toLowerCase().trim();
+  const timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
+  const dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  const full = `${dateOnly}, ${timeOnly}`;
+  if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
+    return `It's currently **${timeOnly}** on ${dateOnly}.`;
+  }
+  if (/\bdate\b|\bday\b|\btoday\b/.test(m) && !/\btime\b/.test(m)) {
+    return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
+  }
+  if (/\byear\b/.test(m)) {
+    return `The current year is **${now.getFullYear()}**.`;
+  }
+  if (/\bmonth\b/.test(m)) {
+    return `The current month is **${now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' })}**.`;
+  }
+  return `It's currently **${full}**.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -979,6 +1039,12 @@ app.post('/v1/chat', async (req, res) => {
 
     // Tier 2 factual (time, who is X, price, weather, etc.): search → extract answer directly
     if (classified.tier === 2 && classified.needsSearch && isSimpleFactual(message)) {
+      // Time/date queries: answer directly from system clock — no search needed
+      if (isTimeQuery(message)) {
+        const timeAnswer = getTimeAnswer(message, timezone || null);
+        return jsonOk(res, { response: timeAnswer, session_id, type: 'chat' });
+      }
+      // Other factual queries: search → extract → answer
       const webData = await webSearch(message);
       const directAnswer = extractFactualAnswer(message, webData);
       if (directAnswer) {
