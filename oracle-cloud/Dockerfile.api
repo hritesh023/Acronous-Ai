@@ -1,0 +1,12 @@
+FROM node:20-slim
+
+WORKDIR /app
+
+COPY api-server/package*.json ./
+RUN npm install --omit=dev
+
+COPY api-server/ ./
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]

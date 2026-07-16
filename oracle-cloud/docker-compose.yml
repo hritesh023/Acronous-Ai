@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # ── Nginx (reverse proxy + serves Flutter web) ──
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./web-build:/usr/share/nginx/html:ro
+      - ./data/certbot/conf:/etc/letsencrypt:ro
+      - ./data/certbot/www:/var/www/certbot:ro
+    depends_on:
+      - api-server
+    restart: unless-stopped
+    networks:
+      - acronous-net
+
+  # ── Node.js API Server (replaces Cloudflare Worker) ──
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      - PORT=3000
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-meta-llama/llama-3.3-70b-instruct:free}
+      - VISION_MODEL=${VISION_MODEL:-google/gemini-2.5-flash-lite}
+      - FALLBACK_VISION_MODEL=${FALLBACK_VISION_MODEL:-nvidia/nemotron-nano-12b-v2-vl:free}
+      - FAST_MODEL=${FAST_MODEL:-qwen/qwen3-next-80b-a3b-instruct:free}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - EDITOR_SERVICE_URL=http://image-service:7860
+      - HF_API_TOKEN=${HF_API_TOKEN:-}
+      - DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    networks:
+      - acronous-net
+
+  # ── Python Image Service (rembg + Pillow + CLIP + upscaling) ──
+  image-service:
+    build:
+      context: ../image-service
+      dockerfile: Dockerfile
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    networks:
+      - acronous-net
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+
+networks:
+  acronous-net:
+    driver: bridge

@@ -17,7 +17,7 @@
 ### Image Editing (modify existing images)
 **6-layer pipeline — all attempts produce an image (Pollinations last resort):**
 
-1. **Python Microservice** (`image-service/`) — rembg + Pillow + optional SD GPU. Set `EDITOR_SERVICE_URL`.
+1. **Python Microservice** (`image-service/`) — rembg + Pillow + CLIP vision + Real-ESRGAN upscaling + optional SD GPU. Set `EDITOR_SERVICE_URL`.
 2. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask. Tries both `image_b64` (base64) and raw array inputs, `strength: 1.0`.
 3. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, instruction-based editing (no mask required). 60s timeout for cold starts. ~30 req/hr without token, higher with `HF_API_TOKEN`.
 4. **Pollinations OpenAI Edit** — `POST https://gen.pollinations.ai/v1/images/edits` with multipart upload and `kontext` model for proper editing.

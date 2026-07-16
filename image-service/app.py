@@ -55,12 +55,118 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Diffusers / torch (optional GPU)
 # ---------------------------------------------------------------------------
+import torch
 HAS_TORCH_CUDA = False
 try:
-    import torch
     HAS_TORCH_CUDA = torch.cuda.is_available()
-except ImportError:
+except Exception:
     pass
+
+# ---------------------------------------------------------------------------
+# CLIP Vision (CPU)
+# ---------------------------------------------------------------------------
+HAS_CLIP = False
+clip_model = None
+clip_preprocess = None
+
+def _load_clip():
+    global clip_model, clip_preprocess, HAS_CLIP
+    if clip_model is not None:
+        return
+    try:
+        import open_clip
+        clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
+            'ViT-B-32', pretrained='laion2b_s34b_b79k', device='cpu'
+        )
+        clip_model.eval()
+        HAS_CLIP = True
+        logging.info("CLIP model loaded successfully")
+    except Exception as e:
+        logging.warning(f"CLIP load failed: {e}")
+        HAS_CLIP = False
+
+def analyze_with_clip(image: Image.Image, candidate_labels: list = None) -> dict:
+    """Analyze image using CLIP — zero-shot classification + feature extraction."""
+    if not HAS_CLIP:
+        _load_clip()
+    if not HAS_CLIP or clip_model is None:
+        return {"labels": [], "error": "CLIP not available"}
+    try:
+        import open_clip
+        image_input = clip_preprocess(image).unsqueeze(0)
+        with torch.no_grad():
+            image_features = clip_model.encode_image(image_input)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+
+        if not candidate_labels:
+            candidate_labels = [
+                "photo", "illustration", "painting", "drawing", "sketch",
+                "person", "animal", "landscape", "city", "building",
+                "food", "car", "nature", "sky", "water",
+                "text", "document", "screenshot", "meme", "logo",
+                "indoor", "outdoor", "portrait", "group photo", "selfie",
+            ]
+
+        text_inputs = open_clip.tokenize([f"a photo of {l}" for l in candidate_labels])
+        with torch.no_grad():
+            text_features = clip_model.encode_text(text_inputs)
+            text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+            similarities = (100.0 * image_features @ text_features.T).softmax(dim=-1)
+
+        scores, indices = similarities[0].topk(min(5, len(candidate_labels)))
+        labels = []
+        for score, idx in zip(scores.tolist(), indices.tolist()):
+            labels.append({"label": candidate_labels[idx], "score": round(score, 4)})
+        return {"labels": labels}
+    except Exception as e:
+        logging.warning(f"CLIP analysis error: {e}")
+        return {"labels": [], "error": str(e)}
+
+# ---------------------------------------------------------------------------
+# Real-ESRGAN upscaling (CPU)
+# ---------------------------------------------------------------------------
+HAS_UPSCALER = False
+upscaler_model = None
+
+def _load_upscaler():
+    global upscaler_model, HAS_UPSCALER
+    if upscaler_model is not None:
+        return
+    try:
+        from realesrgan import RealESRGANer
+        from basicsr.archs.rrdbnet_arch import RRDBNet
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+        # Download weights on first run
+        import urllib.request
+        weights_url = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth"
+        weights_path = "/tmp/RealESRGAN_x4plus.pth"
+        if not os.path.exists(weights_path):
+            urllib.request.urlretrieve(weights_url, weights_path)
+        upscaler_model = RealESRGANer(
+            scale=4, model_path=weights_path, model=model,
+            tile=256, tile_pad=10, pre_pad=0, half=False,
+        )
+        HAS_UPSCALER = True
+        logging.info("Real-ESRGAN upscaler loaded")
+    except Exception as e:
+        logging.warning(f"Upscaler load failed: {e}")
+        HAS_UPSCALER = False
+
+def upscale_image(image: Image.Image, scale: int = 4) -> Optional[Image.Image]:
+    """Upscale image using Real-ESRGAN."""
+    if not HAS_UPSCALER:
+        _load_upscaler()
+    if not HAS_UPSCALER or upscaler_model is None:
+        return None
+    try:
+        import cv2
+        img_array = cv2.cvtColor(np.array(image.convert("RGB")), cv2.COLOR_RGB2BGR)
+        output, _ = upscaler_model.enhance(img_array, outscale=scale)
+        result = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
+        return Image.fromarray(result)
+    except Exception as e:
+        logging.warning(f"Upscale error: {e}")
+        return None
 
 SD_PIPE = None
 
@@ -585,6 +691,8 @@ async def health():
         "service": "acronous-image-service",
         "rembg": HAS_REMBG,
         "gpu": HAS_TORCH_CUDA,
+        "clip": HAS_CLIP,
+        "upscaler": HAS_UPSCALER,
     }
 
 @app.post("/edit")
@@ -627,6 +735,47 @@ async def api_remove_bg(file: UploadFile = File(...)):
     data = await file.read()
     out = rembg_remove(data, session=rembg_session)
     return {"edited": base64.b64encode(out).decode()}
+
+@app.post("/analyze")
+async def api_analyze(
+    file: UploadFile = File(...),
+    labels: str = Query(None, description="Comma-separated candidate labels (optional)"),
+):
+    """Analyze image using CLIP vision — returns labels with confidence scores."""
+    data = await file.read()
+    img = bytes_to_img(data).convert("RGB")
+    candidate_labels = [l.strip() for l in labels.split(",")] if labels else None
+    result = analyze_with_clip(img, candidate_labels)
+    return result
+
+@app.post("/upscale")
+async def api_upscale(
+    file: UploadFile = File(...),
+    scale: int = Query(4, description="Upscale factor (2 or 4)"),
+):
+    """Upscale image using Real-ESRGAN."""
+    data = await file.read()
+    img = bytes_to_img(data).convert("RGB")
+    scale = max(2, min(scale, 4))
+    result = upscale_image(img, scale)
+    if result is None:
+        raise HTTPException(500, "Upscaling failed — model not loaded or error occurred")
+    return {
+        "edited": img_to_b64(result, "PNG"),
+        "width": result.width,
+        "height": result.height,
+        "scale": scale,
+    }
+
+@app.get("/capabilities")
+async def capabilities():
+    """Return available capabilities."""
+    return {
+        "rembg": HAS_REMBG,
+        "gpu": HAS_TORCH_CUDA,
+        "clip": HAS_CLIP,
+        "upscaler": HAS_UPSCALER,
+    }
 
 if __name__ == "__main__":
     import uvicorn
