@@ -1284,31 +1284,92 @@ function classifyQuery(message) {
   }
   if (wordCount > 30) return { tier: 3, needsSearch: true, model: null };
 
-  // ── Tier 2: ONLY genuinely current-data queries that CANNOT be answered from training ──
-  const mustSearchPatterns = [
-    // Time & date queries — need live clock
-    /\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month|current month)\b/i,
-    // Live scores & sports
-    /\b(?:score|scored|match result|game result|live score|ipl|world cup|olympics|fifa|nba|nfl)\b/i,
-    // Current prices & markets
-    /\b(?:stock price|share price|current price|market cap|stock market|cryptocurrency price|bitcoin price|ethereum price)\b/i,
-    // Weather — needs real-time data
-    /\b(?:weather|temperature|rain|rainfall|forecast|humidity|wind speed|storm|cyclone)\b/i,
-    // Breaking news & current events
-    /\b(?:breaking|headlines|latest news|today news|current news|recent news|happening now)\b/i,
-    // Elections & politics — need current data
-    /\b(?:election results|voting results|poll results|cabinet|parliament session)\b/i,
-  ];
-  for (const p of mustSearchPatterns) {
-    if (p.test(m)) return { tier: 2, needsSearch: true, model: null };
-  }
+  // ── Tier 2: ALL factual questions that need current/accurate data ──
+  // These CANNOT be reliably answered from training data alone
 
-  // "Who is the current/who is X president/PM" — needs live data
-  if (/\bwho (?:is|was|are|were) (?:the |a |an )?(?:current|present|new|incoming|acting|interim|former|previous|next)\b/i.test(m)) {
+  // "Who is X", "What is X", "Who was X", "Who are X" — always search
+  // This catches: "who is cm of tamil nadu", "who is president of india", "what is bitcoin", etc.
+  if (/\b(?:who|what|where|when|which) (?:is|was|are|were|do|does|did|has|have|had|can|could|will|would)\b/i.test(m)) {
     return { tier: 2, needsSearch: true, model: null };
   }
 
-  // Tier 1: Fast — opinions, creative, simple questions, no search needed
+  // Position/role questions — "who is the X of Y", "who leads/manages/heads/runs Y"
+  if (/\b(?:who|what) .+ (?:of|for|at|in|over|under|within)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+  if (/\b(?:who|what) (?:leads|manages|heads|runs|owns|controls|directs|governs|rules|commands)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Specific positions that change — need current data
+  if (/\b(?:president|prime minister|chief minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach|chancellor|secretary|spokesperson|leader|ruler|king|queen|prince|princess|emperor|dictator|commander)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Time & date queries — need live clock
+  if (/\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month|current month)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Live scores & sports
+  if (/\b(?:score|scored|match result|game result|live score|ipl|world cup|olympics|fifa|nba|nfl)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Current prices & markets
+  if (/\b(?:stock price|share price|current price|market cap|stock market|cryptocurrency price|bitcoin price|ethereum price|price of|cost of|rate of|value of)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Weather — needs real-time data
+  if (/\b(?:weather|temperature|rain|rainfall|forecast|humidity|wind speed|storm|cyclone)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Breaking news & current events
+  if (/\b(?:breaking|headlines|latest news|today news|current news|recent news|happening now|news about|latest about)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Elections & politics — need current data
+  if (/\b(?:election|elections|voting|poll|polls|cabinet|parliament|senate|congress|assembly|legislature|government|opposition|coalition)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Population, statistics, geography — factual data
+  if (/\b(?:population|area|distance|height|weight|age|capital|currency|language|state|country|city|district|region)\b/i.test(m)) {
+    return { tier: 2, needsSearch: true, model: null };
+  }
+
+  // Questions ending with ? that ask about specific entities
+  if (m.endsWith('?')) {
+    // "How old is X", "How tall is X", "How far is X", "How many X"
+    if (/\bhow (?:old|tall|far|long|big|large|deep|high|much|many|much does|much is|much cost|much weight|much volume)\b/i.test(m)) {
+      return { tier: 2, needsSearch: true, model: null };
+    }
+    // "When was X born", "When did X happen", "When is X"
+    if (/\bwhen (?:was|did|is|were|will|does|do)\b/i.test(m)) {
+      return { tier: 2, needsSearch: true, model: null };
+    }
+    // "Where is X", "Where was X", "Where can I find X"
+    if (/\bwhere (?:is|was|are|were|can|could|do|does|did)\b/i.test(m)) {
+      return { tier: 2, needsSearch: true, model: null };
+    }
+    // "Why is X", "Why did X", "Why does X"
+    if (/\bwhy (?:is|was|are|were|did|does|do|has|have|had|can|could|would|should)\b/i.test(m)) {
+      return { tier: 2, needsSearch: true, model: null };
+    }
+    // "How to X", "How do I X", "How does X work"
+    if (/\bhow (?:to|do|does|did|can|could|would|should|is|was|are)\b/i.test(m)) {
+      return { tier: 2, needsSearch: true, model: null };
+    }
+    // "Which X is Y", "What X is Y"
+    if (/\b(?:which|what) .+ (?:is|was|are|were|has|have|had|can|could|will|would)\b/i.test(m)) {
+      return { tier: 2, needsSearch: true, model: null };
+    }
+  }
+
+  // Tier 1: Fast — ONLY for simple non-factual things (opinions, creative, no-search-needed)
   // This is the DEFAULT for most queries now
   return { tier: 1, needsSearch: false, model: null };
 }
@@ -1517,6 +1578,8 @@ ${webContext}
 - NEVER say "I searched the web" or "according to search results" — just give the answer naturally
 - If the search results are completely empty or irrelevant, say "I couldn't find current information on that"
 - ALWAYS answer based on the SEARCH RESULTS FIRST, not your training data — your training data may be outdated
+- For questions about people (who is X, who leads X, who is the president/CM/PM/CEO), the search results contain the CURRENT answer — use it, not your training data which may be years out of date
+- If the search results say someone is the current holder of a position, state that as fact — do not add disclaimers about your training data
 
 ## LOCATION RULES
 - If the user asks "where am I", "my location", "what city am I in", "what country am I in", or any location question — use the User location field above
@@ -1621,14 +1684,15 @@ export default {
         // ── Query classification FIRST — skip geo for simple queries ──
         const classified = classifyQuery(message);
 
-        // Only resolve geo for queries that actually need it (Tier 2/3)
+        // Resolve geo for Tier 2/3 AND location queries (always need accurate location data)
         let tz = null;
         let location = null;
-        if (classified.tier >= 2) {
+        if (classified.tier >= 2 || isLocationQuery(message)) {
           const geo = await resolveUserGeo(request);
           tz = geo.tz;
           location = geo.location;
         }
+        // Override with client-provided data if available
         if (body.timezone && body.timezone.trim()) tz = body.timezone;
         if (body.location && body.location.trim()) location = body.location;
 
@@ -1641,21 +1705,30 @@ export default {
           // All greeting providers failed — fall through to main LLM path
         }
 
-        // Location queries: route through LLM with location data in context
+        // Location queries: give accurate answer from geo data, not LLM interpretation
         if (isLocationQuery(message)) {
-          const sysPrompt = `You are Acronous AI, created by Acronous. The user's location is ${location || 'unknown'}. Answer their location question directly and concisely. Never reveal model names or providers.`;
-          const locMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          // Race providers — first valid response wins
-          let locContent = null;
-          const locResults = await Promise.allSettled([
-            env.OPENROUTER_API_KEY ? callOpenRouter(locMsgs, env) : Promise.resolve(null),
-            tryPollinations(locMsgs, env),
-            tryWorkersAIChat(locMsgs, env),
-          ]);
-          for (const r of locResults) {
-            if (r.status === 'fulfilled' && r.value?.trim()) { locContent = r.value; break; }
+          // Build accurate location response from geo data
+          let locAnswer = null;
+          if (location) {
+            locAnswer = `You appear to be in ${location}.`;
+          } else if (tz) {
+            locAnswer = `Based on your timezone, you're in the ${tz} region.`;
+          } else {
+            // No geo data — ask LLM to explain
+            const sysPrompt = `You are Acronous AI, created by Acronous. The user asked where they are, but you don't have their location data. Explain that you can't determine their exact location from their IP, and suggest they share their location through device settings for a more accurate result. Never reveal model names or providers.`;
+            const locMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
+            let locContent = null;
+            const locResults = await Promise.allSettled([
+              env.OPENROUTER_API_KEY ? callOpenRouter(locMsgs, env) : Promise.resolve(null),
+              tryPollinations(locMsgs, env),
+              tryWorkersAIChat(locMsgs, env),
+            ]);
+            for (const r of locResults) {
+              if (r.status === 'fulfilled' && r.value?.trim()) { locContent = r.value; break; }
+            }
+            locAnswer = locContent?.trim() || null;
           }
-          return jsonOk({ response: locContent?.trim() || '', session_id: sessionId, type: 'chat' });
+          return jsonOk({ response: locAnswer || '', session_id: sessionId, type: 'chat' });
         }
 
         let content = null;
@@ -1678,8 +1751,8 @@ export default {
           return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
         }
 
-        // Tier 2 factual (time, who is X, price, weather, etc.): search → extract answer directly
-        if (classified.tier === 2 && classified.needsSearch && isSimpleFactual(message)) {
+        // Tier 2 factual (time, who is X, price, weather, etc.): web search + LLM synthesis
+        if (classified.tier === 2 && classified.needsSearch) {
           // Time/date queries: pass computed time to LLM for natural response
           if (isTimeQuery(message)) {
             const timeData = computeLocalTime(tz);
@@ -1698,22 +1771,17 @@ export default {
             }
             return jsonOk({ response: timeContent?.trim() || '', session_id: sessionId, type: 'chat' });
           }
-          // Other factual queries: search → extract → answer
+          // All other factual queries: ALWAYS web search → LLM synthesis with live results
           const webData = await webSearch(message, env);
-          const directAnswer = extractFactualAnswer(message, webData);
-          if (directAnswer) {
-            return jsonOk({ response: directAnswer, session_id: sessionId, type: 'chat' });
-          }
-          // Fallback: use LLM to synthesize from search results
           const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 2);
           const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
           // Race providers — first valid response wins
-          const fallbackResults = await Promise.allSettled([
+          const factualResults = await Promise.allSettled([
             env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
             tryPollinations(msgs, env),
             tryWorkersAIChat(msgs, env),
           ]);
-          for (const r of fallbackResults) {
+          for (const r of factualResults) {
             if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
           }
           return jsonOk({ response: content?.trim() || '', session_id: sessionId, type: 'chat' });
