@@ -20,7 +20,7 @@ ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
 # Python image editing service URL — set to your Oracle Cloud image-service
 # Example: http://your-oracle-ip:7860 (runs locally with tiny SD model on CPU)
-EDITOR_SERVICE_URL = ""
+EDITOR_SERVICE_URL = "http://140.245.224.36/image-service"
 
 [[kv_namespaces]]
 binding = "AUTH_USERS"
