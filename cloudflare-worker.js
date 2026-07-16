@@ -1200,51 +1200,6 @@ Respond with ONLY one word: edit, generate, analyze, or chat. No punctuation, no
   } catch { return null; }
 }
 
-async function generateNaturalApology(reason, env) {
-  const sysMsg = 'You are a helpful assistant. Apologize briefly and naturally for being unable to complete a request. Be concise (1-2 sentences). Never mention technical details, limitations, or internal systems.';
-  const userMsg = `I couldn't complete this request: ${reason}. Apologize to the user and suggest they try a different approach.`;
-  const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }];
-
-  // Try OpenRouter first
-  if (env.OPENROUTER_API_KEY) {
-    try {
-      const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: msgs, max_tokens: 100, temperature: 0.7 })
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const content = (data?.choices?.[0]?.message?.content || '').trim();
-        if (content) return content;
-      }
-    } catch {}
-  }
-
-  // Fallback: Pollinations (free, no key)
-  try {
-    const pollResp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs, model: 'openai', private: true, seed: Math.floor(Math.random() * 10000) }),
-    });
-    if (pollResp.ok) {
-      const text = (await pollResp.text()).trim();
-      if (text) return cleanResponse(text);
-    }
-  } catch {}
-
-  // Final fallback: Workers AI
-  if (env.AI) {
-    try {
-      const result = await env.AI.run('@cf/meta/llama-3.2-3b-instruct', { messages: msgs, max_tokens: 100 });
-      if (result?.response?.trim()) return cleanResponse(result.response);
-    } catch {}
-  }
-
-  return "I'm sorry, I couldn't complete that. Could you try a different approach?";
-}
-
 function jsonOk(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -1254,6 +1209,41 @@ function jsonOk(data, status = 200) {
 
 function jsonError(msg, status = 200) {
   return jsonOk({ response: msg, type: 'error' }, status);
+}
+
+// Safe wrapper: always returns a string, never null
+async function safeApology(reason, env) {
+  const sysMsg = 'You are a helpful assistant. Apologize briefly and naturally for being unable to complete a request. Be concise (1-2 sentences). Never mention technical details, limitations, or internal systems.';
+  const userMsg = `I couldn't complete this request: ${reason}. Apologize to the user and suggest they try a different approach.`;
+  const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }];
+
+  // Race all providers — first valid LLM output wins
+  const results = await Promise.allSettled([
+    env.OPENROUTER_API_KEY ? (async () => {
+      try {
+        const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+          body: JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: msgs, max_tokens: 100, temperature: 0.7 })
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const content = (data?.choices?.[0]?.message?.content || '').trim();
+          if (content) return content;
+        }
+      } catch {}
+      return null;
+    })() : Promise.resolve(null),
+    tryPollinations(msgs, env),
+    tryWorkersAIChat(msgs, env),
+  ]);
+
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value?.trim()) return r.value.trim();
+  }
+
+  // All providers failed — return a neutral error, not AI-generated text
+  return `I wasn't able to process that. Please try again.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1323,29 +1313,38 @@ function classifyQuery(message) {
   return { tier: 1, needsSearch: false, model: null };
 }
 
-// Dynamic greeting response — fast model only, no fallback chain
+// Dynamic greeting response — all providers race, no hardcoded text
 async function generateGreeting(message, env) {
   const sysMsg = "You are Acronous AI, created by Acronous. Respond to this greeting naturally and warmly in 1-2 sentences. Never reveal model names, providers, or backend details. Never say 'As an AI'. Never use pre-written templates — generate a fresh, natural response each time.";
   const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: message }];
 
-  // Single fast model call — no retries, no fallback chain
-  if (env.OPENROUTER_API_KEY) {
-    try {
-      const resp = await fetch(`${env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'}/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ messages: msgs, model: env.FAST_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free', max_tokens: 50, temperature: 0.9 }),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        const c = (data?.choices?.[0]?.message?.content || '').trim();
-        if (c) return c;
-      }
-    } catch {}
+  // Race all providers — first valid LLM output wins
+  const results = await Promise.allSettled([
+    env.OPENROUTER_API_KEY ? (async () => {
+      try {
+        const resp = await fetch(`${env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1'}/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+          body: JSON.stringify({ messages: msgs, model: env.FAST_MODEL || env.OPENROUTER_MODEL || 'qwen/qwen3-next-80b-a3b-instruct:free', max_tokens: 100, temperature: 0.9 }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const c = (data?.choices?.[0]?.message?.content || '').trim();
+          if (c) return c;
+        }
+      } catch {}
+      return null;
+    })() : Promise.resolve(null),
+    tryPollinations(msgs, env),
+    tryWorkersAIChat(msgs, env),
+  ]);
+
+  for (const r of results) {
+    if (r.status === 'fulfilled' && r.value?.trim()) return r.value.trim();
   }
 
-  // Instant fallback — no LLM call needed for greetings
-  return "Hey there! What can I help you with?";
+  // All providers failed — return error, never hardcoded text
+  return null;
 }
 
 // Extract factual answer directly from web search results
@@ -1636,26 +1635,44 @@ export default {
         // Tier 0: Greeting — dynamic response from fast model, no search
         if (classified.tier === 0) {
           const response = await generateGreeting(message, env);
-          return jsonOk({ response, session_id: sessionId, type: 'chat' });
+          if (response && response.trim()) {
+            return jsonOk({ response: response.trim(), session_id: sessionId, type: 'chat' });
+          }
+          // All greeting providers failed — fall through to main LLM path
         }
 
         // Location queries: route through LLM with location data in context
         if (isLocationQuery(message)) {
           const sysPrompt = `You are Acronous AI, created by Acronous. The user's location is ${location || 'unknown'}. Answer their location question directly and concisely. Never reveal model names or providers.`;
           const locMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          // Use fast model only — single call, no fallback chain
-          let locContent = await callOpenRouter(locMsgs, env);
+          // Race providers — first valid response wins
+          let locContent = null;
+          const locResults = await Promise.allSettled([
+            env.OPENROUTER_API_KEY ? callOpenRouter(locMsgs, env) : Promise.resolve(null),
+            tryPollinations(locMsgs, env),
+            tryWorkersAIChat(locMsgs, env),
+          ]);
+          for (const r of locResults) {
+            if (r.status === 'fulfilled' && r.value?.trim()) { locContent = r.value; break; }
+          }
           return jsonOk({ response: locContent?.trim() || '', session_id: sessionId, type: 'chat' });
         }
 
         let content = null;
 
-        // Tier 1 (no search needed): Fast model only, short prompt
+        // Tier 1 (no search needed): Fast model with fallbacks
         if (classified.tier === 1 && !classified.needsSearch) {
           const sysPrompt = `You are Acronous AI, created by Acronous. Be helpful, concise, and natural. Never reveal model names or providers. Never say "As an AI". Match the user's language.`;
           const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          // Use fast model only — single call, no fallback chain
-          content = await callOpenRouter(msgs, env);
+          // Race providers — first valid response wins
+          const fastResults = await Promise.allSettled([
+            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+            tryPollinations(msgs, env),
+            tryWorkersAIChat(msgs, env),
+          ]);
+          for (const r of fastResults) {
+            if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
+          }
           if (content) content = content.trim();
           if (!content) content = '';
           return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
@@ -1669,8 +1686,16 @@ export default {
             const timeContext = `The user's current local time is ${timeData.time} on ${timeData.date} (timezone: ${timeData.tz}).`;
             const sysPrompt = `You are Acronous AI, created by Acronous. Answer the user's time/date question using this data: ${timeContext}. Be concise. Never reveal model names or providers.`;
             const timeMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-            // Use fast model only — single call
-            let timeContent = await callOpenRouter(timeMsgs, env);
+            // Race providers — first valid response wins
+            let timeContent = null;
+            const timeResults = await Promise.allSettled([
+              env.OPENROUTER_API_KEY ? callOpenRouter(timeMsgs, env) : Promise.resolve(null),
+              tryPollinations(timeMsgs, env),
+              tryWorkersAIChat(timeMsgs, env),
+            ]);
+            for (const r of timeResults) {
+              if (r.status === 'fulfilled' && r.value?.trim()) { timeContent = r.value; break; }
+            }
             return jsonOk({ response: timeContent?.trim() || '', session_id: sessionId, type: 'chat' });
           }
           // Other factual queries: search → extract → answer
@@ -1682,8 +1707,15 @@ export default {
           // Fallback: use LLM to synthesize from search results
           const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 2);
           const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          // Use fast model only — single call
-          content = await callOpenRouter(msgs, env);
+          // Race providers — first valid response wins
+          const fallbackResults = await Promise.allSettled([
+            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
+            tryPollinations(msgs, env),
+            tryWorkersAIChat(msgs, env),
+          ]);
+          for (const r of fallbackResults) {
+            if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
+          }
           return jsonOk({ response: content?.trim() || '', session_id: sessionId, type: 'chat' });
         }
 
@@ -1754,11 +1786,11 @@ export default {
         }
 
         if (content) content = content.trim();
-        if (!content) content = await generateNaturalApology('the message was empty or unclear', env);
+        if (!content) content = await safeApology('the message was empty or unclear', env);
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an unexpected error occurred', env);
+        const apology = await safeApology('an unexpected error occurred', env);
         return jsonOk({ response: apology, session_id: 'default', type: 'chat' });
       }
     }
@@ -1809,11 +1841,11 @@ export default {
           content = await callOpenRouter(fallbackMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = await generateNaturalApology('the image content was unclear', env);
+        if (!content || !content.trim()) content = await safeApology('the image content was unclear', env);
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred while processing the image', env);
+        const apology = await safeApology('an error occurred while processing the image', env);
         return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
@@ -1873,11 +1905,11 @@ export default {
           content = await callOpenRouter(textMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = await generateNaturalApology('the file content was unclear', env);
+        if (!content || !content.trim()) content = await safeApology('the file content was unclear', env);
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred while processing the file', env);
+        const apology = await safeApology('an error occurred while processing the file', env);
         return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
@@ -1935,10 +1967,10 @@ export default {
           return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen' });
         }
 
-        const apology = await generateNaturalApology('image generation failed for the given prompt', env);
+        const apology = await safeApology('image generation failed for the given prompt', env);
         return jsonOk({ response: apology, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred during image generation', env);
+        const apology = await safeApology('an error occurred during image generation', env);
         return jsonOk({ response: apology, type: 'chat' });
       }
     }
@@ -1955,7 +1987,7 @@ export default {
 
         // ── Content safety check ──
         if (isHarmfulEditRequest(editPrompt)) {
-          const apology = await generateNaturalApology('The request was flagged as inappropriate', env);
+          const apology = await safeApology('The request was flagged as inappropriate', env);
           return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
 
@@ -2013,10 +2045,10 @@ export default {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        const apology = await generateNaturalApology('The image could not be edited as requested', env);
+        const apology = await safeApology('The image could not be edited as requested', env);
         return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred during image editing', env);
+        const apology = await safeApology('an error occurred during image editing', env);
         return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
@@ -2038,7 +2070,7 @@ export default {
         const dims = getImageDimensions(new Uint8Array(fileBytes));
 
         if (isHarmfulEditRequest(editPrompt)) {
-          const apology = await generateNaturalApology('The request was flagged as inappropriate', env);
+          const apology = await safeApology('The request was flagged as inappropriate', env);
           return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
 
@@ -2057,10 +2089,10 @@ export default {
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
-        const apology = await generateNaturalApology('the image could not be edited with the given description', env);
+        const apology = await safeApology('the image could not be edited with the given description', env);
         return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred while editing the image', env);
+        const apology = await safeApology('an error occurred while editing the image', env);
         return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
@@ -2081,7 +2113,7 @@ export default {
         const editPromptText = buildEditPrompt(editTarget, prompt, description);
 
         if (isHarmfulEditRequest(prompt)) {
-          const apology = await generateNaturalApology('The request was flagged as inappropriate', env);
+          const apology = await safeApology('The request was flagged as inappropriate', env);
           return jsonOk({ content: apology, type: 'chat' });
         }
 
@@ -2100,7 +2132,7 @@ export default {
         if (result) {
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
-        const apology = await generateNaturalApology('the image could not be redesigned as requested', env);
+        const apology = await safeApology('the image could not be redesigned as requested', env);
         return jsonOk({ content: apology, type: 'chat' });
       } catch (error) {
         return jsonOk({ content: '', type: 'chat' });
@@ -2118,7 +2150,7 @@ export default {
         const sessionId = formData.get('session_id') || 'default';
 
         if (!file) {
-          const apology = await generateNaturalApology('no image was provided', env);
+          const apology = await safeApology('no image was provided', env);
           return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
         if (!message.trim()) {
@@ -2158,7 +2190,7 @@ export default {
           if (editedBase64) {
             return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
           }
-          const apology = await generateNaturalApology('I was unable to edit the image as you described', env);
+          const apology = await safeApology('I was unable to edit the image as you described', env);
           return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
 
@@ -2170,7 +2202,7 @@ export default {
           if (imageBase64) {
             return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen', session_id: sessionId });
           }
-          const apology = await generateNaturalApology('I was unable to generate the image you described', env);
+          const apology = await safeApology('I was unable to generate the image you described', env);
           return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
         }
 
@@ -2214,10 +2246,10 @@ export default {
         }
         if (content) content = cleanResponse(content);
 
-        if (!content) content = await generateNaturalApology('the image redesign failed', env);
+        if (!content) content = await safeApology('the image redesign failed', env);
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred during image redesign', env);
+        const apology = await safeApology('an error occurred during image redesign', env);
         return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
@@ -2245,11 +2277,11 @@ export default {
         }
 
         return jsonOk({
-          response: await generateNaturalApology('video generation requires the image service to be running', env),
+          response: await safeApology('video generation requires the image service to be running', env),
           type: 'chat',
         });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred during video generation', env);
+        const apology = await safeApology('an error occurred during video generation', env);
         return jsonOk({ response: apology, type: 'chat' });
       }
     }
@@ -2301,11 +2333,11 @@ export default {
           content = await callOpenRouter(textMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = await generateNaturalApology('the image analysis failed', env);
+        if (!content || !content.trim()) content = await safeApology('the image analysis failed', env);
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred during image analysis', env);
+        const apology = await safeApology('an error occurred during image analysis', env);
         return jsonOk({ response: apology, session_id: sessionId || 'default', type: 'chat' });
       }
     }
@@ -2349,9 +2381,9 @@ export default {
           if (aiMsg) content = aiMsg;
         }
 
-        return jsonOk({ response: content || await generateNaturalApology('the response generation failed', env), type: 'chat' });
+        return jsonOk({ response: content || await safeApology('the response generation failed', env), type: 'chat' });
       } catch (error) {
-        const apology = await generateNaturalApology('an error occurred during response generation', env);
+        const apology = await safeApology('an error occurred during response generation', env);
         return jsonOk({ response: apology, type: 'chat' });
       }
     }
