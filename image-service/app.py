@@ -1,15 +1,13 @@
 """
-Acronous AI - Image Editing Service
+Acronous AI — Multimedia Service
 
-CPU-first image editing using:
-- rembg (free CPU-based segmentation)
-- Pillow + numpy (compositing, color matching, smart editing)
-- Optional: diffusers + torch (GPU inpainting)
-
-Strategies:
-1. SD Inpainting (GPU) - best quality
-2. rembg + Smart Compositing (CPU) - good for clothing/style changes
-3. Color Palette Transfer (CPU) - works when no GPU available
+Local-first processing on Oracle Cloud (24GB RAM):
+- Image Generation: SD models (no external API dependency)
+- Image Editing: rembg + Pillow + CLIP + Real-ESRGAN
+- Video Generation: moviepy + local SD frames
+- Voice TTS: edge-tts (Microsoft Neural TTS, 300+ voices)
+- Voice Editing: pydub (trim, speed, volume, fade, reverse)
+- Web Search: DuckDuckGo HTML scraping
 """
 
 import io
@@ -18,6 +16,8 @@ import re
 import json
 import base64
 import logging
+import tempfile
+import asyncio as _asyncio
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -171,6 +171,27 @@ def upscale_image(image: Image.Image, scale: int = 4) -> Optional[Image.Image]:
 SD_PIPE = None
 LOCAL_GEN_PIPE = None
 
+HAS_EDGE_TTS = False
+try:
+    import edge_tts
+    HAS_EDGE_TTS = True
+except ImportError:
+    pass
+
+HAS_SOUNDFILE = False
+try:
+    import soundfile as sf
+    HAS_SOUNDFILE = True
+except ImportError:
+    pass
+
+HAS_PYDUB = False
+try:
+    from pydub import AudioSegment
+    HAS_PYDUB = True
+except ImportError:
+    pass
+
 def _load_sd_pipe():
     global SD_PIPE
     if SD_PIPE is not None:
@@ -205,7 +226,7 @@ def _load_local_gen_pipe():
         )
         LOCAL_GEN_PIPE.enable_attention_slicing()
         LOCAL_GEN_PIPE.enable_model_cpu_offload()
-        logging.info("Local image generation pipeline loaded (segmind/small-1.0)")
+        logging.info("Acronous AI local image generation pipeline loaded")
         return LOCAL_GEN_PIPE
     except Exception as e:
         logging.warning(f"Local gen pipeline load failed: {e}")
@@ -746,6 +767,8 @@ async def health():
         "gpu": HAS_TORCH_CUDA,
         "clip": HAS_CLIP,
         "upscaler": HAS_UPSCALER,
+        "voice_tts": HAS_EDGE_TTS,
+        "voice_edit": HAS_PYDUB,
     }
 
 @app.post("/edit")
@@ -762,7 +785,7 @@ async def api_edit(
     return edit_image(data, prompt)
 
 # ---------------------------------------------------------------------------
-# Photorealistic Image Generation — Pollinations + post-processing
+# Photorealistic Image Generation — local SD + post-processing
 # ---------------------------------------------------------------------------
 
 def enhance_photorealistic(image: Image.Image) -> Image.Image:
@@ -795,23 +818,6 @@ def enhance_photorealistic(image: Image.Image) -> Image.Image:
 
     return img
 
-def generate_from_pollinations(prompt: str) -> Optional[Image.Image]:
-    """Generate image from Pollinations API and return as PIL Image."""
-    try:
-        enhanced = f"{prompt}, photorealistic, high quality, detailed, sharp, well-lit, professional photography"
-        url = f"https://image.pollinations.ai/prompt/{quote_plus(enhanced)}?width=1024&height=1024&nofeed=true"
-        resp = requests.get(url, timeout=60)
-        if resp.status_code != 200:
-            # Retry without enhancement
-            url = f"https://image.pollinations.ai/prompt/{quote_plus(prompt)}?width=1024&height=1024&nofeed=true"
-            resp = requests.get(url, timeout=60)
-        if resp.status_code != 200:
-            return None
-        return Image.open(io.BytesIO(resp.content)).convert("RGB")
-    except Exception as e:
-        logging.warning(f"Pollinations generation error: {e}")
-        return None
-
 @app.post("/generate")
 async def api_generate(
     prompt: str = Form(...),
@@ -821,7 +827,7 @@ async def api_generate(
 ):
     """
     Generate a photorealistic image from a text prompt.
-    Uses Pollinations for base generation + Pillow post-processing for realism.
+    Uses local SD model + Pillow post-processing for realism.
     """
     if not prompt.strip():
         raise HTTPException(400, "No prompt provided")
@@ -833,15 +839,11 @@ async def api_generate(
     import asyncio
     loop = asyncio.get_event_loop()
 
-    # Strategy 1: Local generation using tiny SD model (no API dependency)
+    # Local generation using tiny SD model (no API dependency)
     image = await loop.run_in_executor(None, generate_local, prompt, width, height)
 
-    # Strategy 2: Fallback to Pollinations API
     if image is None:
-        image = await loop.run_in_executor(None, generate_from_pollinations, prompt)
-
-    if image is None:
-        raise HTTPException(500, "Image generation failed — Pollinations API error")
+        raise HTTPException(500, "Image generation failed — local model error")
 
     # Resize to requested dimensions
     if image.size != (width, height):
@@ -861,7 +863,7 @@ async def api_generate(
         "edited": img_to_b64(image, "PNG"),
         "width": image.width,
         "height": image.height,
-        "strategy": "local sd + photorealistic enhance" if LOCAL_GEN_PIPE else "pollinations + photorealistic enhance",
+        "strategy": "local sd + photorealistic enhance",
     }
 
 @app.post("/segment")
@@ -932,10 +934,13 @@ async def capabilities():
         "clip": HAS_CLIP,
         "upscaler": HAS_UPSCALER,
         "video": True,
+        "voice_tts": HAS_EDGE_TTS,
+        "voice_edit": HAS_PYDUB,
+        "image_gen": True,
     }
 
 # ---------------------------------------------------------------------------
-# Video Generation — moviepy + Pollinations frames
+# Video Generation — moviepy + local SD frames
 # ---------------------------------------------------------------------------
 
 HAS_MOVIEPY = False
@@ -950,23 +955,26 @@ except ImportError:
         pass
 
 def generate_video_frames(prompt: str, num_frames: int = 4) -> list:
-    """Generate multiple image frames from a prompt with slight variations."""
+    """Generate multiple image frames from a prompt with slight variations using local SD model."""
     frames = []
     variations = [
-        f"{prompt}",
-        f"{prompt}, slightly different angle, cinematic",
-        f"{prompt}, different lighting, golden hour",
-        f"{prompt}, close-up detail shot, professional",
+        f"{prompt}, photorealistic, high quality, detailed, sharp, well-lit",
+        f"{prompt}, slightly different angle, cinematic, photorealistic, golden hour lighting",
+        f"{prompt}, different warm lighting, golden hour, photorealistic, atmospheric",
+        f"{prompt}, close-up detail shot, professional photography, photorealistic, shallow depth of field",
+        f"{prompt}, wide angle, dramatic sky, photorealistic, epic composition",
+        f"{prompt}, soft natural lighting, photorealistic, intimate mood",
+        f"{prompt}, backlit, lens flare, photorealistic, ethereal atmosphere",
+        f"{prompt}, overhead view, geometric composition, photorealistic, striking perspective",
     ]
     for i, var in enumerate(variations[:num_frames]):
         try:
-            enhanced = f"{var}, photorealistic, high quality, detailed"
-            url = f"https://image.pollinations.ai/prompt/{quote_plus(enhanced)}?width=768&height=768&nofeed=true&seed={i * 42}"
-            resp = requests.get(url, timeout=60)
-            if resp.status_code == 200:
-                img = Image.open(io.BytesIO(resp.content)).convert("RGB")
+            img = generate_local(var, width=768, height=768)
+            if img is not None:
                 img = enhance_photorealistic(img)
                 frames.append(img)
+            else:
+                logging.warning(f"Frame {i} local generation returned None")
         except Exception as e:
             logging.warning(f"Frame {i} generation error: {e}")
     return frames
@@ -1033,6 +1041,105 @@ async def api_generate_video(
     except Exception as e:
         logging.error(f"Video creation error: {e}")
         raise HTTPException(500, f"Video creation failed: {str(e)}")
+
+# ---------------------------------------------------------------------------
+# Voice Services — TTS + Voice Editing
+# ---------------------------------------------------------------------------
+
+@app.post("/tts")
+async def api_tts(
+    text: str = Form(...),
+    voice: str = Form("en-US-AriaNeural"),
+    rate: str = Form("+0%"),
+    pitch: str = Form("+0Hz"),
+):
+    """Generate speech from text using edge-tts (Microsoft Neural TTS)."""
+    if not HAS_EDGE_TTS:
+        raise HTTPException(500, "edge-tts not available")
+    if not text.strip():
+        raise HTTPException(400, "No text provided")
+    try:
+        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        tmp_path = os.path.join(tempfile.gettempdir(), f"tts_{os.getpid()}.mp3")
+        await communicate.save(tmp_path)
+        with open(tmp_path, "rb") as f:
+            audio_bytes = f.read()
+        os.remove(tmp_path)
+        return {
+            "audio_data": base64.b64encode(audio_bytes).decode(),
+            "format": "mp3",
+            "voice": voice,
+            "text": text,
+        }
+    except Exception as e:
+        logging.error(f"TTS error: {e}")
+        raise HTTPException(500, f"TTS failed: {str(e)}")
+
+@app.get("/voices")
+async def api_voices():
+    """List available TTS voices."""
+    if not HAS_EDGE_TTS:
+        return {"voices": [], "error": "edge-tts not available"}
+    try:
+        voices = await edge_tts.list_voices()
+        return {"voices": voices}
+    except Exception as e:
+        return {"voices": [], "error": str(e)}
+
+@app.get("/tts/voices")
+async def api_tts_voices():
+    return await api_voices()
+
+@app.post("/voice/edit")
+async def api_voice_edit(
+    file: UploadFile = File(...),
+    action: str = Form("trim"),
+    start_ms: int = Form(0),
+    end_ms: int = Form(-1),
+    speed: float = Form(1.0),
+    pitch_shift: float = Form(0),
+    volume: float = Form(1.0),
+    fade_in: int = Form(0),
+    fade_out: int = Form(0),
+):
+    """Edit audio: trim, speed change, pitch shift, volume, fade."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "No audio data")
+    if not HAS_PYDUB:
+        raise HTTPException(500, "pydub not available")
+    try:
+        audio = AudioSegment.from_file(io.BytesIO(data))
+        if action == "trim":
+            if end_ms == -1:
+                end_ms = len(audio)
+            audio = audio[start_ms:end_ms]
+        elif action == "speed":
+            new_frame_rate = int(audio.frame_rate * speed)
+            audio = audio._spawn(audio.raw_data, overrides={"frame_rate": new_frame_rate}).set_frame_rate(audio.frame_rate)
+        elif action == "volume":
+            audio = audio + (20 * (volume - 1.0))  # dB change
+        elif action == "fade":
+            if fade_in > 0:
+                audio = audio.fade_in(fade_in)
+            if fade_out > 0:
+                audio = audio.fade_out(fade_out)
+        elif action == "reverse":
+            audio = audio.reverse()
+        elif action == "normalize":
+            audio = audio.apply_gain(-audio.max_dBFS)
+        buf = io.BytesIO()
+        audio.export(buf, format="mp3", bitrate="192k")
+        buf.seek(0)
+        return {
+            "audio_data": base64.b64encode(buf.getvalue()).decode(),
+            "format": "mp3",
+            "duration_ms": len(audio),
+            "action": action,
+        }
+    except Exception as e:
+        logging.error(f"Voice edit error: {e}")
+        raise HTTPException(500, f"Voice edit failed: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

@@ -40,7 +40,7 @@ services:
     networks:
       - acronous-net
 
-  # ── Python Image Service (rembg + Pillow + CLIP + upscaling) ──
+  # ── Python Multimedia Service (image gen/edit, video gen, voice TTS/edit, web search) ──
   image-service:
     build:
       context: ../image-service
@@ -49,13 +49,15 @@ services:
       - "7860:7860"
     volumes:
       - ./data:/data
+    environment:
+      - HF_HOME=/data/hf_cache
     restart: unless-stopped
     networks:
       - acronous-net
     deploy:
       resources:
         limits:
-          memory: 12G
+          memory: 14G
 
 networks:
   acronous-net:

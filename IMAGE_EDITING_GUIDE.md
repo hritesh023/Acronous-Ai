@@ -12,7 +12,7 @@ User uploads image + edit prompt
   └─► Cloudflare Worker (cloudflare-worker.js)
       │
       ├─ Strategy 1: Python Service (if EDITOR_SERVICE_URL set)
-      │   └─ image-service/app.py (rembg + Pillow + optional SD GPU)
+      │   └─ image-service/app.py (rembg + Pillow + CLIP + SD + Real-ESRGAN)
       │
       ├─ Strategy 2: Hugging Face InstructPix2Pix (free, no key, no mask)
       │   └─ timbrooks/instruct-pix2pix — instruction-based image editing
@@ -22,13 +22,16 @@ User uploads image + edit prompt
       │   ├─ Creates pixel-level mask at exact image dimensions
       │   └─ Uses @cf/runwayml/stable-diffusion-v1-5-inpainting
       │
-      ├─ Strategy 4: Vision-Guided Pollinations
+      ├─ Strategy 4: OpenRouter InstructPix2Pix (secondary fallback)
+      │   └─ Via OpenRouter vision models
+      │
+      ├─ Strategy 5: Vision-Guided Python Service
       │   ├─ Analyze image with OpenRouter vision model
       │   ├─ Craft edit prompt with LLM
-      │   └─ Send enhanced prompt + image to Pollinations
+      │   └─ Send enhanced prompt + image to Python service
       │
-      └─ Strategy 5: Standard Pollinations img2img
-          └─ POST with image + prompt (no text-to-image fallback)
+      └─ Strategy 6: Apology
+          └─ If all strategies fail, return natural apology text
 ```
 
 ## Python Microservice (`image-service/`)
@@ -36,30 +39,42 @@ User uploads image + edit prompt
 A FastAPI service that provides:
 - **rembg segmentation** (CPU) — clothing/person/foreground masks
 - **Smart recoloring** (CPU) — color palette transfer based on edit description
-- **SD Inpainting** (GPU, optional) — Stable Diffusion 2 inpainting pipeline
+- **SD Inpainting** (CPU) — Stable Diffusion local model
+- **Image generation** (CPU) — photorealistic by default
+- **Real-ESRGAN upscaling** (CPU)
+- **CLIP analysis** (CPU)
+- **Voice TTS** — Edge-TTS (300+ Microsoft Neural TTS voices)
+- **Voice editing** — pydub + soundfile (trim, speed, volume)
+- **Video frames** — MoviePy assembly from SD-generated frames
 
-### Deploy to Hugging Face Spaces (Free)
+### Deploy to Oracle Cloud
 
 ```bash
-cd image-service
-git init && git add . && git commit -m "init"
-git remote add space https://huggingface.co/spaces/YOUR_USER/acronous-image-service
-git push space main
-```
+cd oracle-cloud
+# Set EDITOR_SERVICE_URL in .env
+cp .env.example .env
+nano .env
+# Set EDITOR_SERVICE_URL=http://localhost:7860
 
-Then set Cloudflare Worker secret:
-```bash
-npx wrangler secret put EDITOR_SERVICE_URL
-# Value: https://YOUR_USER-acronous-image-service.hf.space
+# Start all services
+docker compose up -d --build
 ```
 
 ### API Endpoints
 | Endpoint | Method | Description |
 |---|---|---|
 | `/edit` | POST | Edit image with prompt (multipart) |
+| `/generate` | POST | Generate image from prompt |
+| `/generate-photorealistic` | POST | Generate photorealistic image |
 | `/segment` | POST | Get segmentation mask |
 | `/remove-bg` | POST | Remove background |
+| `/upscale` | POST | Upscale image with Real-ESRGAN |
+| `/analyze` | POST | Analyze image with CLIP |
+| `/generate-video` | POST | Generate video from prompt |
+| `/tts` | POST | Text-to-speech |
+| `/voice/edit` | POST | Edit voice/audio |
 | `/health` | GET | Health check |
+| `/capabilities` | GET | List capabilities |
 
 ## Key Functions (cloudflare-worker.js)
 
@@ -67,17 +82,13 @@ npx wrangler secret put EDITOR_SERVICE_URL
 |---|---|
 | `getImageDimensions()` | Reads JPEG/PNG/WebP pixel dimensions from binary header |
 | `createEditMask()` | Creates pixel-level grayscale mask at exact image dimensions |
-| `tryEditorService()` | Calls Python microservice (rembg + Pillow + optional SD) |
+| `tryEditorService()` | Calls Python microservice (rembg + Pillow + SD) |
 | `analyzeImageWithVision()` | Uses OpenRouter vision model to describe image |
 | `buildEditPrompt()` | Crafts precise edit instruction with vision context |
 | `parseEditTarget()` | Classifies prompt into clothing/background/face/hair/color/auto |
 | `tryWorkersAIInpaint()` | CF Workers AI inpainting with dimension-matched mask |
-| `tryBetterPollinationsEdit()` | Enhanced Pollinations with vision context (tries turbo/flux/sdxl) |
-| `tryPollinationsImageEdit()` | Standard Pollinations img2img |
 | `tryHuggingFaceEdit()` | Hugging Face InstructPix2Pix (free, instruction-based, no mask) |
-| `tryWorkersAIInpaint()` | CF Workers AI inpainting with dimension-matched mask |
-| `tryBetterPollinationsEdit()` | Enhanced Pollinates with vision context |
-| `tryPollinationsImageEdit()` | Standard Pollinates img2img |
+| `tryOpenRouterEdit()` | OpenRouter-based image editing |
 
 ## Working Edit Examples
 

@@ -143,19 +143,6 @@ async function generateGreeting(message) {
     } catch {}
   }
 
-  // Fallback: Pollinations (free, no key)
-  try {
-    const pollResp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs, model: 'openai', private: true, seed: Math.floor(Math.random() * 10000) }),
-    });
-    if (pollResp.ok) {
-      const text = (await pollResp.text()).trim();
-      if (text) return cleanResponse(text);
-    }
-  } catch {}
-
   // Final fallback: Workers AI (if available)
   if (ENV.AI) {
     try {
@@ -440,7 +427,7 @@ function cleanResponse(text) {
   if (!clean) return '';
   clean = clean
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
-    .replace(/\b(pollinations\.ai|openrouter)\b[^.\n]*/gi, '')
+    .replace(/\b(openrouter)\b[^.\n]*/gi, '')
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*)/gi, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
@@ -713,24 +700,7 @@ async function callOpenRouterVision(messages) {
 }
 
 async function tryPollinations(messages) {
-  const pollModels = ['openai', 'mistral', 'llama', 'deepseek', 'qwen-coder'];
-  for (const model of pollModels) {
-    for (let retry = 0; retry < 2; retry++) {
-      try {
-        const resp = await fetch('https://text.pollinations.ai', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages, model, private: true, seed: Math.floor(Math.random() * 10000) }),
-        });
-        if (resp.ok) {
-          const text = await resp.text();
-          if (text?.trim()) return cleanResponse(text.trim());
-        } else if (resp.status === 429) {
-          await new Promise(r => setTimeout(r, 500 * (retry + 1)));
-        }
-      } catch { continue; }
-    }
-  }
+  // Pollinations removed — all generation now handled by Python image-service
   return null;
 }
 
@@ -738,12 +708,8 @@ async function tryPollinations(messages) {
 // Image generation
 // ---------------------------------------------------------------------------
 async function tryPollinationsImage(prompt) {
-  try {
-    const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt) + '?width=1024&height=1024&nofeed=true');
-    if (!resp.ok) return null;
-    const buf = await resp.arrayBuffer();
-    return arrayBufferToBase64(buf);
-  } catch { return null; }
+  // Pollinations removed — all generation now handled by Python image-service
+  return null;
 }
 
 async function tryOpenRouterImage(prompt) {
@@ -757,6 +723,22 @@ async function tryOpenRouterImage(prompt) {
     if (!resp.ok) return null;
     const data = await resp.json();
     return data?.data?.[0]?.b64_json || null;
+  } catch { return null; }
+}
+
+async function tryEditorServiceGenerate(prompt) {
+  if (!ENV.EDITOR_SERVICE_URL) return null;
+  try {
+    const formData = new URLSearchParams();
+    formData.append('prompt', prompt);
+    const resp = await fetch(`${ENV.EDITOR_SERVICE_URL}/generate`, {
+      method: 'POST',
+      body: formData,
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return data?.edited || null;
   } catch { return null; }
 }
 
@@ -878,54 +860,17 @@ async function tryHuggingFaceEdit(imageBytes, prompt) {
 }
 
 async function tryPollinationsOpenAIEdit(fileBytes, prompt, mimeType) {
-  try {
-    const FormData = (await import('form-data')).default;
-    const form = new FormData();
-    const ext = mimeType?.includes('png') ? 'png' : 'jpg';
-    form.append('image', Buffer.from(fileBytes), { filename: `image.${ext}`, contentType: mimeType || 'image/jpeg' });
-    form.append('prompt', prompt);
-    form.append('model', 'kontext');
-    const resp = await fetch('https://gen.pollinations.ai/v1/images/edits', { method: 'POST', body: form, headers: form.getHeaders() });
-    if (!resp.ok) return null;
-    const ct2 = resp.headers.get('content-type') || '';
-    if (ct2.includes('application/json')) {
-      const data = await resp.json();
-      if (data?.data?.[0]?.b64_json) return data.data[0].b64_json;
-      return null;
-    }
-    const buf = await resp.arrayBuffer();
-    if (buf && buf.byteLength > 200) return arrayBufferToBase64(buf);
-    return null;
-  } catch { return null; }
+  // Pollinations removed — all generation now handled by Python image-service
+  return null;
 }
 
 async function tryPollinationsImageEdit(imageBase64, prompt, width, height) {
-  try {
-    const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(prompt), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ img: imageBase64, width: width || 1024, height: height || 1024, nofeed: true }),
-    });
-    if (!resp.ok) return null;
-    const buf = await resp.arrayBuffer();
-    if (!buf || buf.byteLength < 200) return null;
-    return arrayBufferToBase64(buf);
-  } catch { return null; }
+  // Pollinations removed — all generation now handled by Python image-service
+  return null;
 }
 
 async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, width, height) {
-  const ctx = imageDescription ? `Original image context: ${imageDescription.slice(0, 250)}. ` : '';
-  const enhanced = `${ctx}Edit instruction: ${editPrompt}. IMPORTANT: Keep the exact same person, pose, expression, background, lighting, composition, and photo style. Only apply the described edit. High quality, photorealistic.`;
-  for (const model of ['flux', 'turbo', 'sdxl', 'seedream', 'p-image-edit']) {
-    try {
-      const resp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(enhanced), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ img: imageBase64, width: width || 1024, height: height || 1024, nofeed: true, model }),
-      });
-      if (!resp.ok) continue;
-      const buf = await resp.arrayBuffer();
-      if (buf && buf.byteLength > 200) return arrayBufferToBase64(buf);
-    } catch { continue; }
-  }
+  // Pollinations removed — all generation now handled by Python image-service
   return null;
 }
 
@@ -947,14 +892,9 @@ async function tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, width, height
     const data = await resp.json();
     const genPrompt = (data?.choices?.[0]?.message?.content || '').trim();
     if (!genPrompt || genPrompt.length < 15) return null;
-    const imgResp = await fetch('https://image.pollinations.ai/prompt/' + encodeURIComponent(genPrompt), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ width: width || 1024, height: height || 1024, nofeed: true, model: 'flux' }),
-    });
-    if (!imgResp.ok) return null;
-    const buf = await imgResp.arrayBuffer();
-    if (!buf || buf.byteLength < 200) return null;
-    return arrayBufferToBase64(buf);
+    // Step 3: Generate via Python image-service
+    const generated = await tryEditorServiceGenerate(genPrompt);
+    return generated;
   } catch { return null; }
 }
 
@@ -997,19 +937,6 @@ async function generateNaturalApology(reason) {
       }
     } catch {}
   }
-
-  // Fallback: Pollinations (free, no key)
-  try {
-    const pollResp = await fetch('https://text.pollinations.ai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: msgs, model: 'openai', private: true, seed: Math.floor(Math.random() * 10000) }),
-    });
-    if (pollResp.ok) {
-      const text = (await pollResp.text()).trim();
-      if (text) return cleanResponse(text);
-    }
-  } catch {}
 
   // Final fallback: Workers AI (if available)
   if (ENV.AI) {
@@ -1098,7 +1025,7 @@ app.post('/v1/chat', async (req, res) => {
           }
         } catch { continue; }
       }
-      if (!locContent) locContent = await tryPollinations(locMsgs);
+      if (!locContent) locContent = await callOpenRouter(locMsgs);
       return jsonOk(res, { response: locContent?.trim() || '', session_id, type: 'chat' });
     }
 
@@ -1214,7 +1141,6 @@ app.post('/v1/chat', async (req, res) => {
           }
           return null;
         })()),
-        tryPollinations(msgs),
       ];
 
       const results = await Promise.allSettled(allAttempts);
@@ -1227,7 +1153,7 @@ app.post('/v1/chat', async (req, res) => {
     if (!content) {
       const sysNoWeb = buildEnhancedSystemPrompt(timezone || null, location || null, null, classified.tier);
       const fallbackMsgs = [{ role: 'system', content: sysNoWeb }, ...history.slice(-20), { role: 'user', content: message }];
-      const results2 = await Promise.allSettled([tryPollinations(fallbackMsgs), callOpenRouter(fallbackMsgs)]);
+      const results2 = await Promise.allSettled([callOpenRouter(fallbackMsgs)]);
       for (const r of results2) {
         if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
       }
@@ -1394,28 +1320,12 @@ app.post('/v1/image/generate', async (req, res) => {
     // Try multiple generation strategies — editor service first (local Python), then APIs
     let imageBase64 = null;
     // Strategy 1: Local Python image-service (tiny SD model on CPU, no API dependency)
-    if (ENV.EDITOR_SERVICE_URL) {
-      try {
-        const formData = new URLSearchParams();
-        formData.append('prompt', enhancedPrompt);
-        const resp = await fetch(`${ENV.EDITOR_SERVICE_URL}/generate`, {
-          method: 'POST',
-          body: formData,
-          signal: AbortSignal.timeout(120000),
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data?.edited) imageBase64 = data.edited;
-        }
-      } catch {}
-    }
-    // Strategy 2: Pollinations API
-    if (!imageBase64) imageBase64 = await tryPollinationsImage(enhancedPrompt);
-    // Strategy 3: OpenRouter FLUX
+    imageBase64 = await tryEditorServiceGenerate(enhancedPrompt);
+    // Strategy 2: OpenRouter FLUX
     if (!imageBase64) imageBase64 = await tryOpenRouterImage(enhancedPrompt);
     // Fallback with original prompt if enhanced failed
     if (!imageBase64 && enhancedPrompt !== prompt) {
-      imageBase64 = await tryPollinationsImage(prompt);
+      imageBase64 = await tryEditorServiceGenerate(prompt);
     }
     if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen' });
     const apology = await generateNaturalApology('image generation failed for the given prompt');
@@ -1488,7 +1398,7 @@ app.post('/v1/image/smart-edit', upload.single('file'), async (req, res) => {
       return jsonOk(res, { ...result, session_id: req.body.session_id || 'default' });
     }
     if (intent === 'generate') {
-      let imageBase64 = await tryPollinationsImage(message);
+      let imageBase64 = await tryEditorServiceGenerate(message);
       if (!imageBase64) imageBase64 = await tryOpenRouterImage(message);
       if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen', session_id: req.body.session_id || 'default' });
       const a = await generateNaturalApology('I was unable to generate the image');
@@ -1694,7 +1604,6 @@ app.post('/v1/chat/generate-natural-response', async (req, res) => {
       { role: 'user', content: prompt },
     ];
     let content = await callOpenRouter(messages);
-    if (!content) { const poll = await tryPollinations(messages); if (poll?.trim()) content = poll; }
     if (!content) content = await generateNaturalApology('the response generation failed');
     return jsonOk(res, { response: content, type: 'chat' });
   } catch {

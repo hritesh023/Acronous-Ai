@@ -162,8 +162,8 @@ docker compose up -d
 │  └─────────┘  └──────────┘  └────────┘ │
 │       │              │            │      │
 │   Flutter Web    OpenRouter   rembg     │
-│   build          Pollinations  Pillow   │
-│                  HuggingFace           │
+│   build          HuggingFace  Pillow   │
+│                  CLIP, SD, Edge-TTS    │
 └─────────────────────────────────────────┘
 ```
 
@@ -172,10 +172,10 @@ docker compose up -d
 | Service | RAM |
 |---------|-----|
 | Node.js API | ~512MB |
-| Python Image Service | ~2-4GB (with rembg models) |
+| Python Image Service | ~14GB (SD + CLIP + rembg + Edge-TTS) |
 | Nginx | ~50MB |
 | OS + Docker | ~1GB |
-| **Available for growth** | **~18GB** |
+| **Available for growth** | **~8.5GB** |
 
 ## Quick Commands
 

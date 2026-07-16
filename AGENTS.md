@@ -4,32 +4,32 @@
 
 ### Chat (Text)
 - **Primary**: OpenRouter (`OPENROUTER_API_KEY`) — main LLM provider
-- **Fallback**: Pollinations Text API (`https://text.pollinations.ai`) — free, no API key needed, used when OpenRouter fails
+- **Fallback**: Workers AI chat — secondary free fallback
 - **Timeouts**: Generous (30s greeting, 90s simple, 3m moderate, 5m complex) — no hard limits
 - **All responses LLM-generated** — no hardcoded fallback text
 - **Web Search**: DuckDuckGo HTML search (primary) + Instant Answer API (fallback) — always-on for EVERY user query to ensure internet-aware answers
-- **Chat Memory**: Full conversation history (`messages` array) is sent with every API call to both OpenRouter and Pollinations, ensuring context awareness across the entire conversation
+- **Chat Memory**: Full conversation history (`messages` array) is sent with every API call to ensure context awareness across the entire conversation
 
 ### Image Generation (Text-to-Image)
-- **Local Python** (primary) — tiny SD model (`segmind/small-1.0`) running on Oracle Cloud CPU via `image-service/`. Set `EDITOR_SERVICE_URL` to your Oracle Cloud image-service URL.
-- **Pollinations.ai** fallback (`https://image.pollinations.ai/prompt/...`) — used only when local generation fails
+- **Python Image Service** (primary) — SD model running on Oracle Cloud CPU via `image-service/`. Set `EDITOR_SERVICE_URL` to your Oracle Cloud image-service URL. Photorealistic by default.
 - **OpenRouter** flux models for secondary fallback
+- **Workers AI** as tertiary fallback
 
 ### Image Editing (modify existing images)
-**6-layer pipeline — all attempts produce an image (Pollinations last resort):**
+**6-layer pipeline — all attempts produce an image:**
 
-1. **Python Microservice** (`image-service/`) — rembg + Pillow + CLIP vision + Real-ESRGAN upscaling + optional SD GPU. Set `EDITOR_SERVICE_URL`.
+1. **Python Microservice** (`image-service/`) — rembg + Pillow + CLIP vision + Real-ESRGAN upscaling + SD local generation. Set `EDITOR_SERVICE_URL`.
 2. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask. Tries both `image_b64` (base64) and raw array inputs, `strength: 1.0`.
 3. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, instruction-based editing (no mask required). 60s timeout for cold starts. ~30 req/hr without token, higher with `HF_API_TOKEN`.
-4. **Pollinations OpenAI Edit** — `POST https://gen.pollinations.ai/v1/images/edits` with multipart upload and `kontext` model for proper editing.
-5. **Better Pollinations** — LLM vision analysis guides the edit prompt. Loops through `flux`, `turbo`, `sdxl`, `seedream`, `p-image-edit` models. Emphasizes preservation of original composition.
-6. **Standard Pollinations POST** — Original img2img fallback with original dimensions. If all fail, returns natural apology text.
+4. **OpenRouter InstructPix2Pix** — secondary fallback via OpenRouter vision models.
+5. **Standard Python service** — LLM vision analysis guides the edit prompt via Python service.
+6. **Apology** — If all strategies fail, returns natural apology text.
 
 **Key rules:**
 - Image dimensions detected from binary header → mask created at exact pixel size
-- Pollinations `/v1/images/edits` with `kontext` is the most likely to succeed (proper edit endpoint)
+- Python image-service is the primary edit/generation engine
 - InstructPix2Pix has 60s timeout to handle HuggingFace free tier cold starts
-- Always return an image if possible — Pollinations last resort with "keep everything else identical" prompt
+- Always return an image if possible — Python service with "keep everything else identical" prompt
 - If all strategies fail, return a natural apology — never a random image
 
 ### Image Editing Endpoints in Worker
@@ -43,18 +43,26 @@
 ### Image Analysis (Vision)
 - **OpenRouter** with vision models (`VISION_MODEL`, `FALLBACK_VISION_MODEL`)
 
+### Video Generation
+- **Python Image Service** — local SD model generates 8 photorealistic frames → MoviePy assembles into MP4
+
+### Voice TTS
+- **Python Image Service** — Edge-TTS (300+ Microsoft Neural TTS voices), no API key needed
+
+### Voice Editing
+- **Python Image Service** — pydub + soundfile for audio manipulation (trim, speed, volume, normalize)
+
 ### File Processing
 - **OpenRouter** for file analysis/code generation
 
-## API Setup
+## Python Image Service (Oracle Cloud)
+- **URL**: Set `EDITOR_SERVICE_URL` env var to your Oracle Cloud image-service URL
+- **Capabilities**: Background removal, image upscaling, CLIP analysis, image generation, image editing, video frame generation, voice TTS, voice editing
+- **Models**: rembg (background removal), Real-ESRGAN (upscaling), CLIP (analysis), Stable Diffusion (generation), Edge-TTS (voice)
+- **Docker Compose**: `oracle-cloud/docker-compose.yml` — nginx (port 80), api-server (port 3000), image-service (port 7860)
+- **Memory**: 14GB limit for image-service (fits SD + CLIP + rembg in 24GB RAM)
 
-### Pollinations (always free, no key, fallback for chat)
-- Chat: POST `https://text.pollinations.ai` with `{ messages: [...], model: "openai", private: true }`
-- Images: GET `https://image.pollinations.ai/prompt/{encoded}`
-- Img2img: POST `https://image.pollinations.ai/prompt/{prompt}` with body `{ img: base64, width, height, model }`
-- Edit endpoint: POST `https://gen.pollinations.ai/v1/images/edits` multipart with `image` file + `prompt` + `model=kontext`
-- Edit models: `kontext` (best for edits), `flux` (img2img), `p-image-edit`, `seedream`
-- Image gen models: `flux` (default), `turbo`, `sdxl`, `seedream`, `gptimage`, `zimage`
+## API Setup
 
 ### Hugging Face (free tier, no key needed for inference)
 - Instruct-pix2pix: POST `https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix` with base64 image + prompt. 60s timeout for cold starts.
