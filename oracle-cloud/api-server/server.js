@@ -1317,15 +1317,16 @@ app.post('/v1/image/generate', async (req, res) => {
       }
     }
 
-    // Try multiple generation strategies — editor service first (local Python), then APIs
+    // Try multiple generation strategies — OpenRouter FLUX first (fast), then local Python
     let imageBase64 = null;
-    // Strategy 1: Local Python image-service (tiny SD model on CPU, no API dependency)
-    imageBase64 = await tryEditorServiceGenerate(enhancedPrompt);
-    // Strategy 2: OpenRouter FLUX
-    if (!imageBase64) imageBase64 = await tryOpenRouterImage(enhancedPrompt);
+    // Strategy 1: OpenRouter FLUX (fast, cloud-based)
+    imageBase64 = await tryOpenRouterImage(enhancedPrompt);
+    // Strategy 2: Local Python image-service (SD on CPU — slow, last resort)
+    if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(enhancedPrompt);
     // Fallback with original prompt if enhanced failed
     if (!imageBase64 && enhancedPrompt !== prompt) {
-      imageBase64 = await tryEditorServiceGenerate(prompt);
+      imageBase64 = await tryOpenRouterImage(prompt);
+      if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(prompt);
     }
     if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen' });
     const apology = await generateNaturalApology('image generation failed for the given prompt');
@@ -1398,8 +1399,8 @@ app.post('/v1/image/smart-edit', upload.single('file'), async (req, res) => {
       return jsonOk(res, { ...result, session_id: req.body.session_id || 'default' });
     }
     if (intent === 'generate') {
-      let imageBase64 = await tryEditorServiceGenerate(message);
-      if (!imageBase64) imageBase64 = await tryOpenRouterImage(message);
+      let imageBase64 = await tryOpenRouterImage(message);
+      if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(message);
       if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen', session_id: req.body.session_id || 'default' });
       const a = await generateNaturalApology('I was unable to generate the image');
       return jsonOk(res, { response: a, session_id: req.body.session_id || 'default', type: 'chat' });

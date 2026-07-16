@@ -2044,15 +2044,16 @@ export default {
           } catch {}
         }
 
-        // Strategy 1: Python image-service (photorealistic post-processing)
-        let imageBase64 = await tryEditorServiceGenerate(enhancedPrompt, env);
-        // Strategy 2: OpenRouter FLUX
+        // Strategy 1: Workers AI SDXL (fast, free, runs on CF GPU)
+        let imageBase64 = await tryWorkersImage(enhancedPrompt, env);
+        // Strategy 2: OpenRouter FLUX (free tier)
         if (!imageBase64) imageBase64 = await tryOpenRouterImage(enhancedPrompt, env);
-        // Strategy 3: Workers AI SDXL
-        if (!imageBase64) imageBase64 = await tryWorkersImage(enhancedPrompt, env);
+        // Strategy 3: Python image-service (local SD on CPU — slow, last resort)
+        if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(enhancedPrompt, env);
         // Fallback with original prompt if enhanced failed
         if (!imageBase64 && enhancedPrompt !== prompt) {
-          imageBase64 = await tryEditorServiceGenerate(prompt, env);
+          imageBase64 = await tryWorkersImage(prompt, env);
+          if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
         }
 
         if (imageBase64) {
@@ -2289,9 +2290,9 @@ export default {
         if (intent === 'generate') {
           // Generate a new image based on the prompt (ignore uploaded image)
           const prompt = message;
-          let imageBase64 = await tryEditorServiceGenerate(prompt, env);
+          let imageBase64 = await tryWorkersImage(prompt, env);
           if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
-          if (!imageBase64) imageBase64 = await tryWorkersImage(prompt, env);
+          if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(prompt, env);
           if (imageBase64) {
             return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen', session_id: sessionId });
           }
