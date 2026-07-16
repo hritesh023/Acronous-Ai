@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -33,17 +34,33 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static final RegExp _privateInfoLinePattern = RegExp(
-    r'(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by pollinations|pollinations\.ai|openrouter[.\s]|based on (my|the|our) (web )?search|according to (my|the|our) (web )?(search|results?|findings?)|i (searched|looked up|checked|found|retrieved|gathered) (online|the web|information|data)|let me (search|look up|check|find))',
+    r'(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by (pollinations|openrouter|meta|google|deepseek|llama|qwen|nvidia)|pollinations\.ai|openrouter[.\s]|duckduckgo|searxng|mojeek|bing\.com|google\.com/search|wikipedia\.org/api|hacker\s*news|reddit\.com|guardianapis|cloudflare|workers?\s*ai|hugging\s*face|instructpix2pix|stable\s*diffusion|flux\.?[1s]|based on (my|the|our) (training|web )?(data|)?search|according to (my|the|our) (web )?(search|results?|findings?)|i (searched|looked\s+up|checked|found|retrieved|gathered) (online|the\s+web|information|data)|let me (search|look\s+up|check|find)|as of my (knowledge\s+)?(cutoff|training)|knowledge cutoff|last (updated|trained|update)|training data|meta[-/]?llama|llama[- ]3|deepseek|qwen|gemini|nemotron|open\s*router|\d{1,3}\.\d{2,6}\s*°?\s*[NSns]\s*[,;]?\s*\d{1,3}\.\d{2,6}\s*°?\s*[EWew])',
     caseSensitive: false,
   );
 
   static String _sanitizeAssistantText(String text) {
     if (text.trim().isEmpty) return '';
-    final cleaned = text
+    var cleaned = text
         .replaceAll(RegExp(r'\[Internal[^\]]*\]'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
     if (cleaned.isEmpty) return text.trim();
+    // Whole-text cleanup: strip backend leak phrases anywhere in the text
+    cleaned = cleaned
+        .replaceAll(RegExp(r'(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|provided\s+by)\s+[^.\n]*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\b(?:pollinations\.ai|openrouter|open\s*router|duckduckgo|searxng|mojeek|cloudflare|workers?\s*ai|hugging\s*face)\b[^.\n]*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\b(?:meta[/-]llama|llama[ -]3|deepseek|qwen|gemini|nvidia|nemotron|instructpix2pix|stable\s*diffusion|flux\.?[1s])\b[^.\n]*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\b(?:based\s+on\s+(?:my|the|our)\s+(?:training|web\s+)?(?:data\s+)?search|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)|as\s+per\s+(?:my|the)\s+search|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)|let\s+me\s+(?:search|look\s+up|check|find))\b[^.\n]*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\b(?:as\s+of\s+my\s+(?:knowledge\s+)?cutoff|knowledge\s+cutoff|last\s+(?:updated|trained|update\s+in)|training\s+data|based\s+on\s+my\s+training)\b[^.\n]*', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\bas\s+of\s+(?:my\s+)?(?:last\s+)?(?:knowledge\s+)?(?:cutoff\s+)?(?:in\s+)?\d{4}\b[^.\n]*', caseSensitive: false), '')
+        // Strip GPS coordinates from responses
+        .replaceAll(RegExp(r'\d{1,3}\.\d{2,6}\s*°?\s*[NSns]\s*[,;]?\s*\d{1,3}\.\d{2,6}\s*°?\s*[EWew]'), '')
+        .replaceAll(RegExp(r'\b(?:latitude|lat|lng|longitude)\s*[:=]?\s*-?\d{1,3}\.\d{1,6}', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\(\s*-?\d{1,3}\.\d{1,6}\s*,\s*-?\d{1,3}\.\d{1,6}\s*\)'), '')
+        .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+        .replaceAll(RegExp(r'\s{2,}'), ' ')
+        .trim();
+    // Line-by-line cleanup as well
     final lines = cleaned.split('\n');
     final filtered = lines.where((line) {
       return !_privateInfoLinePattern.hasMatch(line.trim());
@@ -287,6 +304,7 @@ class ChatProvider extends ChangeNotifier {
   }
 
   String _cachedLocation = '';
+  String _cachedGpsCoords = '';
 
   Future<void> _fetchLocationInfo() async {
     // Try GPS first for exact location, fall back to IP-based
@@ -306,11 +324,9 @@ class ChatProvider extends ChangeNotifier {
 
   Future<bool> _fetchFromGps() async {
     try {
-      // Check if location services are enabled
       bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return false;
 
-      // Check permission
       geo.LocationPermission permission = await geo.Geolocator.checkPermission();
       if (permission == geo.LocationPermission.denied) {
         permission = await geo.Geolocator.requestPermission();
@@ -318,7 +334,6 @@ class ChatProvider extends ChangeNotifier {
       }
       if (permission == geo.LocationPermission.deniedForever) return false;
 
-      // Get precise GPS position
       final position = await geo.Geolocator.getCurrentPosition(
         locationSettings: const geo.LocationSettings(
           accuracy: geo.LocationAccuracy.high,
@@ -326,41 +341,50 @@ class ChatProvider extends ChangeNotifier {
         ),
       );
 
-      // Reverse geocode to get exact address
-      try {
-        final placemarks = await geocoding.placemarkFromCoordinates(
-          position.latitude,
-          position.longitude,
-        );
-        if (placemarks.isNotEmpty) {
-          final place = placemarks.first;
-          final parts = <String>[];
-          final locality = place.locality ?? '';
-          final subAdmin = place.subAdministrativeArea ?? '';
-          final admin = place.administrativeArea ?? '';
-          final country = place.country ?? '';
-          if (locality.isNotEmpty && locality != subAdmin) {
-            parts.add(locality);
-          } else if (subAdmin.isNotEmpty) {
-            parts.add(subAdmin);
+      final lat = position.latitude;
+      final lng = position.longitude;
+      _cachedGpsCoords = '$lat,$lng';
+
+      // On web, the Flutter geocoding package returns inaccurate city names
+      // (e.g. Bhubaneswar instead of Brahmapur). Skip it on web and let the
+      // server use Nominatim reverse geocoding with the raw GPS coords instead.
+      if (!kIsWeb) {
+        try {
+          final placemarks = await geocoding.placemarkFromCoordinates(lat, lng);
+          if (placemarks.isNotEmpty) {
+            final place = placemarks.first;
+            final parts = <String>[];
+            final street = place.street ?? '';
+            final subLocality = place.subLocality ?? '';
+            final locality = place.locality ?? '';
+            final subAdmin = place.subAdministrativeArea ?? '';
+            final admin = place.administrativeArea ?? '';
+            final postalCode = place.postalCode ?? '';
+            final country = place.country ?? '';
+            if (street.isNotEmpty && street != locality && street != subAdmin) {
+              parts.add(street);
+            }
+            if (subLocality.isNotEmpty && subLocality != locality && subLocality != subAdmin) {
+              parts.add(subLocality);
+            }
+            if (locality.isNotEmpty && locality != subAdmin) {
+              parts.add(locality);
+            } else if (subAdmin.isNotEmpty) {
+              parts.add(subAdmin);
+            }
+            if (admin.isNotEmpty && admin != locality) {
+              parts.add(admin);
+            }
+            if (postalCode.isNotEmpty) parts.add(postalCode);
+            if (country.isNotEmpty) parts.add(country);
+            final address = parts.join(', ');
+            if (address.isNotEmpty) {
+              _cachedLocation = address;
+            }
           }
-          if (admin.isNotEmpty && admin != locality) {
-            parts.add(admin);
-          }
-          if (country.isNotEmpty) {
-            parts.add(country);
-          }
-          final address = parts.join(', ');
-          if (address.isNotEmpty) {
-            _cachedLocation = address;
-          }
-        }
-      } catch (_) {
-        // Reverse geocoding failed — use lat/lng as location
-        _cachedLocation = '${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}';
+        } catch (_) {}
       }
 
-      // Set timezone from device if not already set
       if (_cachedTimezoneName.isEmpty) {
         _cachedTimezoneName = _deviceTimezoneIana;
       }
@@ -381,6 +405,7 @@ class ChatProvider extends ChangeNotifier {
       if (data['status'] != 'success') return false;
       _updateLocationData(
         city: data['city'] as String? ?? '',
+        region: data['regionName'] as String? ?? '',
         country: data['country'] as String? ?? '',
         timezone: data['timezone'] as String? ?? '',
       );
@@ -400,6 +425,7 @@ class ChatProvider extends ChangeNotifier {
       if (data['status'] != 'success') return false;
       _updateLocationData(
         city: data['cityName'] as String? ?? data['city'] as String? ?? '',
+        region: data['regionName'] as String? ?? data['region'] as String? ?? '',
         country:
             data['countryName'] as String? ?? data['country'] as String? ?? '',
         timezone:
@@ -413,15 +439,16 @@ class ChatProvider extends ChangeNotifier {
 
   void _updateLocationData({
     required String city,
+    String region = '',
     required String country,
     required String timezone,
   }) {
-    if (city.isNotEmpty && country.isNotEmpty) {
-      _cachedLocation = '$city, $country';
-    } else if (city.isNotEmpty) {
-      _cachedLocation = city;
-    } else if (country.isNotEmpty) {
-      _cachedLocation = country;
+    final parts = <String>[];
+    if (city.isNotEmpty) parts.add(city);
+    if (region.isNotEmpty && region != city) parts.add(region);
+    if (country.isNotEmpty) parts.add(country);
+    if (parts.isNotEmpty) {
+      _cachedLocation = parts.join(', ');
     }
     if (timezone.isNotEmpty) {
       _cachedTimezoneName = timezone;
@@ -1147,6 +1174,7 @@ class ChatProvider extends ChangeNotifier {
         ? _cachedTimezoneName
         : _deviceTimezoneIana;
     final location = _cachedLocation.isNotEmpty ? _cachedLocation : null;
+    final gpsCoords = _cachedGpsCoords.isNotEmpty ? _cachedGpsCoords : null;
 
     if (hasImage) {
       final imgAttach = userMsg.attachments.firstWhere(
@@ -1417,6 +1445,7 @@ class ChatProvider extends ChangeNotifier {
             sessionId: sessionId,
             timezone: timezone.isNotEmpty ? timezone : null,
             location: location,
+            gpsCoords: gpsCoords,
             messages: history,
           );
           final rawContent = _stripMarkdownFences(chatResp.content);
@@ -1470,6 +1499,7 @@ class ChatProvider extends ChangeNotifier {
       sessionId: sessionId,
       timezone: timezone.isNotEmpty ? timezone : null,
       location: location,
+      gpsCoords: gpsCoords,
       messages: history,
     );
     return {
