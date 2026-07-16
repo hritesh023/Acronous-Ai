@@ -1843,11 +1843,10 @@ export default {
                 const c = cleanResponse(data?.choices?.[0]?.message?.content);
                 if (c?.trim()) return c;
               }
-              // On 429 or error, try next model immediately — no backoff
             } catch {}
-      return null;
-    })() : Promise.resolve(null),
-    tryWorkersAIChat(msgs, env),
+            return null;
+          })() : Promise.resolve(null)),
+          tryWorkersAIChat(msgs, env),
         ]);
         for (const r of llmResults) {
           if (r.status === 'fulfilled' && r.value && r.value.trim()) {
