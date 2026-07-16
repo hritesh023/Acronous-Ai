@@ -119,6 +119,37 @@ class ChatMessageWidget extends StatelessWidget {
                           size: AppDimens.iconSmall,
                           color: cs.onPrimary.withValues(alpha: 0.45),
                         ),
+                        if (message.content.isNotEmpty) ...[
+                          SizedBox(width: AppDimens.gapSM),
+                          Tooltip(
+                            message: 'Copy message',
+                            waitDuration: const Duration(milliseconds: 300),
+                            child: _ActionIcon(
+                              icon: Icons.content_copy_outlined,
+                              size: AppDimens.iconSmall,
+                              onTap: () {
+                                Clipboard.setData(
+                                  ClipboardData(text: message.content),
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(AppStrings.copied),
+                                    behavior: SnackBarBehavior.floating,
+                                    duration: const Duration(seconds: 1),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 6,
+                                    ),
+                                    margin: const EdgeInsets.only(bottom: 60),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ],

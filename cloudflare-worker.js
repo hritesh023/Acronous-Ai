@@ -1775,11 +1775,11 @@ export default {
         if (body.timezone && body.timezone.trim()) tz = body.timezone;
         if (body.location && body.location.trim()) location = body.location;
 
-        // Server-side reverse geocoding — only ENHANCE location, never replace client-provided one
-        // The client geocoding package already gives the best city-level result
-        // Nominatim is only used to add street-level detail when client has no location
+        // Server-side reverse geocoding via Nominatim — MOST ACCURATE source
+        // When GPS coords are available, Nominatim always beats Cloudflare edge
+        // and client-side IP geocoding. Use it to REPLACE less accurate location.
         const gpsCoords = (body.gps_coords || '').trim();
-        if (!location && gpsCoords && gpsCoords.includes(',')) {
+        if (gpsCoords && gpsCoords.includes(',')) {
           const [latStr, lngStr] = gpsCoords.split(',');
           const lat = parseFloat(latStr.trim());
           const lng = parseFloat(lngStr.trim());
