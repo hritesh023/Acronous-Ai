@@ -225,7 +225,7 @@ def _load_local_gen_pipe():
             torch_dtype=torch.float32,
         )
         LOCAL_GEN_PIPE.enable_attention_slicing()
-        LOCAL_GEN_PIPE.enable_model_cpu_offload()
+        # NO enable_model_cpu_offload — that requires CUDA, we're CPU-only
         logging.info("Acronous AI local image generation pipeline loaded")
         return LOCAL_GEN_PIPE
     except Exception as e:
@@ -248,14 +248,16 @@ def generate_local(prompt: str, width: int = 1024, height: int = 1024) -> Option
     """Generate image locally using tiny SD model on CPU."""
     pipe = _load_local_gen_pipe()
     if pipe is None:
+        logging.warning("Local gen pipeline not available — model failed to load")
         return None
     try:
         enhanced = f"{prompt}, photorealistic, high quality, detailed, sharp, well-lit"
+        # Use fewer steps on CPU for speed (15 steps instead of 20)
         result = pipe(
             enhanced,
             width=width,
             height=height,
-            num_inference_steps=20,
+            num_inference_steps=15,
             guidance_scale=7.5,
         )
         return result.images[0].convert("RGB")
@@ -957,19 +959,23 @@ except ImportError:
 def generate_video_frames(prompt: str, num_frames: int = 4) -> list:
     """Generate multiple image frames from a prompt with slight variations using local SD model."""
     frames = []
+    # Fewer, simpler variations for CPU speed
     variations = [
         f"{prompt}, photorealistic, high quality, detailed, sharp, well-lit",
-        f"{prompt}, slightly different angle, cinematic, photorealistic, golden hour lighting",
-        f"{prompt}, different warm lighting, golden hour, photorealistic, atmospheric",
-        f"{prompt}, close-up detail shot, professional photography, photorealistic, shallow depth of field",
-        f"{prompt}, wide angle, dramatic sky, photorealistic, epic composition",
-        f"{prompt}, soft natural lighting, photorealistic, intimate mood",
-        f"{prompt}, backlit, lens flare, photorealistic, ethereal atmosphere",
-        f"{prompt}, overhead view, geometric composition, photorealistic, striking perspective",
+        f"{prompt}, slightly different angle, cinematic, golden hour lighting",
+        f"{prompt}, different warm lighting, atmospheric, photorealistic",
+        f"{prompt}, close-up detail shot, professional photography, shallow depth of field",
+        f"{prompt}, wide angle, dramatic sky, epic composition",
+        f"{prompt}, soft natural lighting, intimate mood",
+        f"{prompt}, backlit, lens flare, ethereal atmosphere",
+        f"{prompt}, overhead view, geometric composition, striking perspective",
     ]
+    # Limit to 4 frames max on CPU for reasonable generation time
+    num_frames = min(num_frames, 4)
     for i, var in enumerate(variations[:num_frames]):
         try:
-            img = generate_local(var, width=768, height=768)
+            # Use smaller resolution for video frames (512x512) for speed
+            img = generate_local(var, width=512, height=512)
             if img is not None:
                 img = enhance_photorealistic(img)
                 frames.append(img)
