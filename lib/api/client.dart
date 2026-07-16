@@ -346,6 +346,7 @@ class ApiClient {
     String? sessionId,
     String? timezone,
     String? location,
+    String? gpsCoords,
     List<Map<String, String>>? messages,
   }) async {
     final body = <String, dynamic>{
@@ -357,6 +358,9 @@ class ApiClient {
     }
     if (location != null && location.isNotEmpty) {
       body['location'] = location;
+    }
+    if (gpsCoords != null && gpsCoords.isNotEmpty) {
+      body['gps_coords'] = gpsCoords;
     }
     if (messages != null && messages.isNotEmpty) {
       body['messages'] = messages;

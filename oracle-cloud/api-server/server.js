@@ -713,17 +713,8 @@ async function tryPollinationsImage(prompt) {
 }
 
 async function tryOpenRouterImage(prompt) {
-  if (!ENV.OPENROUTER_API_KEY) return null;
-  try {
-    const resp = await fetch(`${ENV.OPENROUTER_BASE_URL}/images/generations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-      body: JSON.stringify({ model: 'black-forest-labs/FLUX.1-schnell-free', prompt, n: 1 }),
-    });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    return data?.data?.[0]?.b64_json || null;
-  } catch { return null; }
+  // OpenRouter FLUX removed — model no longer available on OpenRouter
+  return null;
 }
 
 async function tryEditorServiceGenerate(prompt) {
@@ -859,19 +850,32 @@ async function tryHuggingFaceEdit(imageBytes, prompt) {
   } catch { return null; }
 }
 
-async function tryPollinationsOpenAIEdit(fileBytes, prompt, mimeType) {
-  // Pollinations removed — all generation now handled by Python image-service
-  return null;
+// ── Strategy D: OpenRouter FLUX generation (free) ──
+async function tryOpenRouterFLUXGenerate(prompt) {
+  return tryOpenRouterImage(prompt);
 }
 
-async function tryPollinationsImageEdit(imageBase64, prompt, width, height) {
-  // Pollinations removed — all generation now handled by Python image-service
-  return null;
-}
-
-async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, width, height) {
-  // Pollinations removed — all generation now handled by Python image-service
-  return null;
+// ── Strategy E: LLM-Guided FLUX (vision context + OpenRouter FLUX) ──
+async function tryLLMGuidedFLUX(imageBase64, mimeType, editPrompt, width, height) {
+  if (!ENV.OPENROUTER_API_KEY) return null;
+  try {
+    const description = await analyzeImageWithVision(imageBase64, mimeType, editPrompt);
+    const hasVision = description && description.length >= 20;
+    const genMessages = [
+      { role: 'system', content: 'You create image generation prompts. Given image context and an edit request, write a prompt that describes the result after editing. Include key details plus the change. Return ONLY the prompt, 1-2 sentences.' },
+      { role: 'user', content: hasVision ? `Original image: ${description.slice(0, 400)}\n\nEdit request: ${editPrompt}\n\nWrite a prompt for the edited image.` : `Generate a prompt for an image based on this edit: ${editPrompt}. Make it descriptive and detailed.` },
+    ];
+    const resp = await fetch(`${ENV.OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model: ENV.FAST_MODEL, messages: genMessages, max_tokens: 300, temperature: 0.7 }),
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const genPrompt = (data?.choices?.[0]?.message?.content || '').trim();
+    if (!genPrompt || genPrompt.length < 15) return null;
+    return tryEditorServiceGenerate(genPrompt);
+  } catch { return null; }
 }
 
 async function tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, width, height) {
@@ -892,8 +896,8 @@ async function tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, width, height
     const data = await resp.json();
     const genPrompt = (data?.choices?.[0]?.message?.content || '').trim();
     if (!genPrompt || genPrompt.length < 15) return null;
-    // Step 3: Generate via Python image-service
-    const generated = await tryEditorServiceGenerate(genPrompt);
+    // Step 3: Try Python image-service (Docker-internal, always works)
+    let generated = await tryEditorServiceGenerate(genPrompt);
     return generated;
   } catch { return null; }
 }
@@ -949,7 +953,7 @@ async function generateNaturalApology(reason) {
   return "I'm sorry, I couldn't complete that. Could you try a different approach?";
 }
 
-// Full edit pipeline (mirrors the worker's 6-strategy approach)
+// Full edit pipeline (mirrors the worker's multi-strategy approach)
 async function runEditPipeline(fileBytes, editPrompt, mimeType) {
   const imageBase64 = arrayBufferToBase64(fileBytes);
   const editTarget = parseEditTarget(editPrompt);
@@ -965,20 +969,16 @@ async function runEditPipeline(fileBytes, editPrompt, mimeType) {
   edited = await tryHuggingFaceEdit(fileBytes, editPrompt);
   if (edited) return { image_data: edited };
 
-  // Strategy 3: Pollinations OpenAI Edit
-  edited = await tryPollinationsOpenAIEdit(fileBytes, editPrompt, mimeType);
-  if (edited) return { image_data: edited };
-
-  // Strategy 4: LLM-Guided Edit
+  // Strategy 3: LLM-Guided Edit (Python service + all backends)
   edited = await tryLLMGuidedEdit(imageBase64, mimeType || 'image/jpeg', editPrompt, dims?.width, dims?.height);
   if (edited) return { image_data: edited };
 
-  // Strategy 5: Better Pollinations
-  edited = await tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, dims?.width, dims?.height);
+  // Strategy 4: LLM-Guided FLUX (vision context + OpenRouter FLUX)
+  edited = await tryLLMGuidedFLUX(imageBase64, mimeType || 'image/jpeg', editPrompt, dims?.width, dims?.height);
   if (edited) return { image_data: edited };
 
-  // Strategy 6: Standard Pollinations img2img
-  edited = await tryPollinationsImageEdit(imageBase64, editPrompt, dims?.width, dims?.height);
+  // Strategy 5: OpenRouter FLUX direct (dead — model removed)
+  edited = await tryOpenRouterFLUXGenerate(editPrompt);
   if (edited) return { image_data: edited };
 
   const apology = await generateNaturalApology('The image could not be edited as requested');
@@ -1317,16 +1317,16 @@ app.post('/v1/image/generate', async (req, res) => {
       }
     }
 
-    // Try multiple generation strategies — OpenRouter FLUX first (fast), then local Python
+    // Try Python image-service (Docker-internal, always works)
     let imageBase64 = null;
-    // Strategy 1: OpenRouter FLUX (fast, cloud-based)
-    imageBase64 = await tryOpenRouterImage(enhancedPrompt);
-    // Strategy 2: Local Python image-service (SD on CPU — slow, last resort)
-    if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(enhancedPrompt);
+    // Strategy 1: Python image-service (SD on CPU — local, reliable)
+    imageBase64 = await tryEditorServiceGenerate(enhancedPrompt);
+    // Strategy 2: OpenRouter FLUX (dead — kept for compatibility)
+    if (!imageBase64) imageBase64 = await tryOpenRouterImage(enhancedPrompt);
     // Fallback with original prompt if enhanced failed
     if (!imageBase64 && enhancedPrompt !== prompt) {
-      imageBase64 = await tryOpenRouterImage(prompt);
-      if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(prompt);
+      imageBase64 = await tryEditorServiceGenerate(prompt);
+      if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt);
     }
     if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen' });
     const apology = await generateNaturalApology('image generation failed for the given prompt');
@@ -1399,8 +1399,8 @@ app.post('/v1/image/smart-edit', upload.single('file'), async (req, res) => {
       return jsonOk(res, { ...result, session_id: req.body.session_id || 'default' });
     }
     if (intent === 'generate') {
-      let imageBase64 = await tryOpenRouterImage(message);
-      if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(message);
+      let imageBase64 = await tryEditorServiceGenerate(message);
+      if (!imageBase64) imageBase64 = await tryOpenRouterImage(message);
       if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen', session_id: req.body.session_id || 'default' });
       const a = await generateNaturalApology('I was unable to generate the image');
       return jsonOk(res, { response: a, session_id: req.body.session_id || 'default', type: 'chat' });

@@ -12,31 +12,32 @@
 
 ### Image Generation (Text-to-Image)
 - **Python Image Service** (primary) — SD model running on Oracle Cloud CPU via `image-service/`. Set `EDITOR_SERVICE_URL` to your Oracle Cloud image-service URL. Photorealistic by default.
-- **OpenRouter** flux models for secondary fallback
-- **Workers AI** as tertiary fallback
+- **Workers AI FLUX 1 Schnell** (`@cf/black-forest-labs/flux-1-schnell`) — free, runs on CF GPU, instant, unlimited.
+- **Workers AI SDXL** (`@cf/stabilityai/stable-diffusion-xl-base-1.0`) — free fallback.
 
 ### Image Editing (modify existing images)
-**6-layer pipeline — all attempts produce an image:**
+**7-layer pipeline — OpenRouter FLUX replaced with Workers AI FLUX:**
 
 1. **Python Microservice** (`image-service/`) — rembg + Pillow + CLIP vision + Real-ESRGAN upscaling + SD local generation. Set `EDITOR_SERVICE_URL`.
 2. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask. Tries both `image_b64` (base64) and raw array inputs, `strength: 1.0`.
 3. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, instruction-based editing (no mask required). 60s timeout for cold starts. ~30 req/hr without token, higher with `HF_API_TOKEN`.
-4. **OpenRouter InstructPix2Pix** — secondary fallback via OpenRouter vision models.
-5. **Standard Python service** — LLM vision analysis guides the edit prompt via Python service.
-6. **Apology** — If all strategies fail, returns natural apology text.
+4. **LLM-Guided Edit** — LLM vision analysis + Python service SD generation (tries Workers FLUX + Workers AI as fallbacks).
+5. **LLM-Guided FLUX** — LLM vision analysis + Workers AI FLUX 1 Schnell generation.
+6. **Workers AI FLUX direct** — text-to-image via `@cf/black-forest-labs/flux-1-schnell` (free, unlimited via Workers AI).
+7. **Workers AI SDXL** — text-to-image via Stable Diffusion XL (free, CF GPU).
 
 **Key rules:**
 - Image dimensions detected from binary header → mask created at exact pixel size
 - Python image-service is the primary edit/generation engine
-- InstructPix2Pix has 60s timeout to handle HuggingFace free tier cold starts
-- Always return an image if possible — Python service with "keep everything else identical" prompt
+- OpenRouter image models (FLUX.1-schnell-free) are DEAD — do NOT use
+- Workers AI FLUX 1 Schnell (`@cf/black-forest-labs/flux-1-schnell`) is the main free fallback
 - If all strategies fail, return a natural apology — never a random image
 
 ### Image Editing Endpoints in Worker
 | Endpoint | Purpose |
 |---|---|
-| `/v1/image/edit` | Main editing endpoint (6 strategies) |
-| `/v1/image/ultra-edit` | Frontend fallback 1 (5 strategies) |
+| `/v1/image/edit` | Main editing endpoint (7 strategies) |
+| `/v1/image/ultra-edit` | Frontend fallback 1 (6 strategies) |
 | `/api/image/redesign` | Frontend fallback 2 (6 strategies with vision) |
 | `/v1/image/smart-edit` | Intelligent routing (LLM classifies edit/generate/analyze) |
 

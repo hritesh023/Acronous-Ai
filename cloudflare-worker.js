@@ -688,19 +688,18 @@ async function tryPollinations(messages, env) {
   return null;
 }
 
-async function tryOpenRouterImage(prompt, env) {
-  if (!env.OPENROUTER_API_KEY) return null;
+async function tryWorkersFLUX(prompt, env) {
+  if (!env.AI) return null;
   try {
-    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/images/generations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-      body: JSON.stringify({ model: 'black-forest-labs/FLUX.1-schnell-free', prompt, n: 1 })
+    const result = await env.AI.run('@cf/black-forest-labs/flux-1-schnell', {
+      prompt,
+      seed: Math.floor(Math.random() * 1000000),
     });
-    if (!resp.ok) return null;
-    const data = await resp.json();
-    if (data?.data?.[0]?.b64_json) return data.data[0].b64_json;
+    if (result?.image) return result.image;
     return null;
-  } catch { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
 function arrayBufferToBase64(buf) {
@@ -721,7 +720,12 @@ async function tryPollinationsImage(prompt) {
 async function tryWorkersImage(prompt, env) {
   if (!env.AI) return null;
   try {
-    const result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', { prompt });
+    let result = await env.AI.run('@cf/black-forest-labs/flux-1-schnell', {
+      prompt,
+      seed: Math.floor(Math.random() * 1000000),
+    });
+    if (result?.image) return result.image;
+    result = await env.AI.run('@cf/stabilityai/stable-diffusion-xl-base-1.0', { prompt });
     if (result?.image) return result.image;
     return null;
   } catch { return null; }
@@ -929,19 +933,24 @@ async function tryEditorService(imageBytes, editPrompt, env) {
 async function tryEditorServiceGenerate(prompt, env) {
   const serviceUrl = env.EDITOR_SERVICE_URL;
   if (!serviceUrl) return null;
+  let resp;
   try {
-    const formData = new FormData();
-    formData.append('prompt', prompt);
-    const resp = await fetch(`${serviceUrl}/generate`, {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+    resp = await fetch(`${serviceUrl}/generate`, {
       method: 'POST',
-      body: formData,
-      signal: AbortSignal.timeout(90000),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ prompt }).toString(),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     if (!resp.ok) return null;
     const data = await resp.json();
     if (data?.edited) return data.edited;
     return null;
-  } catch { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
 // Python image-service: generate video from text prompt
@@ -949,11 +958,12 @@ async function tryEditorServiceVideo(prompt, env) {
   const serviceUrl = env.EDITOR_SERVICE_URL;
   if (!serviceUrl) return null;
   try {
-    const formData = new FormData();
-    formData.append('prompt', prompt);
+    const params = new URLSearchParams();
+    params.set('prompt', prompt);
     const resp = await fetch(`${serviceUrl}/generate-video`, {
       method: 'POST',
-      body: formData,
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
       signal: AbortSignal.timeout(180000),
     });
     if (!resp.ok) return null;
@@ -1040,20 +1050,42 @@ async function tryHuggingFaceEdit(imageBytes, prompt, env) {
   } catch { return null; }
 }
 
-// ── Strategy D: Pollinations OpenAI-compatible edit endpoint (/v1/images/edits) ──
-// Uses multipart upload with the kontext model for proper image editing
-async function tryPollinationsOpenAIEdit(fileBytes, prompt, mimeType) {
-  return null;
+// ── Strategy D: Workers AI FLUX generation (free) ──
+// Generates a new image from prompt using Workers AI FLUX 1 Schnell
+async function tryWorkersFLUXGenerate(prompt, env) {
+  return tryWorkersFLUX(prompt, env);
 }
 
-// ── Strategy E: Pollinations img2img (free fallback) ──
-// IMPORTANT: Uses original image dimensions to avoid generating at wrong size
-async function tryPollinationsImageEdit(imageBase64, prompt, width, height) {
-  return null;
+// ── Strategy E: LLM-Guided Generation via Workers AI FLUX ──
+// Uses vision context to craft a text-to-image prompt, then generates via FLUX
+async function tryLLMGuidedFLUX(imageBase64, mimeType, editPrompt, env, width, height) {
+  if (!env.OPENROUTER_API_KEY) return null;
+  try {
+    const description = await analyzeImageWithVision(imageBase64, mimeType, editPrompt, env);
+    const hasVision = description && description.length >= 20;
+    const genMessages = [
+      { role: 'system', content: 'You create image generation prompts. Given image context and an edit request, write a prompt that describes the result after editing. Include key details plus the change. Return ONLY the prompt, 1-2 sentences.' },
+      { role: 'user', content: hasVision
+        ? `Original image: ${description.slice(0, 400)}\n\nEdit request: ${editPrompt}\n\nWrite a prompt for the edited image.`
+        : `Generate a prompt for an image based on this edit: ${editPrompt}. Make it descriptive and detailed.` }
+    ];
+    const fastModel = env.FAST_MODEL || 'meta-llama/llama-3.3-70b-instruct:free';
+    const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
+      body: JSON.stringify({ model: fastModel, messages: genMessages, max_tokens: 300, temperature: 0.7 })
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const genPrompt = (data?.choices?.[0]?.message?.content || '').trim();
+    if (!genPrompt || genPrompt.length < 15) return null;
+    return tryWorkersFLUX(genPrompt, env);
+  } catch { return null; }
 }
 
-async function tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, width, height) {
-  return null;
+// ── Strategy F: Workers AI SDXL generation (free, fast) ──
+async function tryWorkersImageGenerate(prompt, env) {
+  return tryWorkersImage(prompt, env);
 }
 
 async function analyzeImageWithVision(imageBase64, mimeType, editPrompt, env) {
@@ -1108,10 +1140,10 @@ async function tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, env, width, h
     const genPrompt = (data?.choices?.[0]?.message?.content || '').trim();
     if (!genPrompt || genPrompt.length < 15) return null;
 
-    // Step 3: Generate via Python image-service
-    const w = width || 1024;
-    const h = height || 1024;
-    const generated = await tryEditorServiceGenerate(genPrompt, env);
+    // Step 3: Try all generation backends — Python service, Workers FLUX, Workers AI
+    let generated = await tryEditorServiceGenerate(genPrompt, env);
+    if (!generated) generated = await tryWorkersFLUX(genPrompt, env);
+    if (!generated) generated = await tryWorkersImage(genPrompt, env);
     return generated;
   } catch { return null; }
 }
@@ -2044,16 +2076,17 @@ export default {
           } catch {}
         }
 
-        // Strategy 1: Workers AI SDXL (fast, free, runs on CF GPU)
-        let imageBase64 = await tryWorkersImage(enhancedPrompt, env);
-        // Strategy 2: OpenRouter FLUX (free tier)
-        if (!imageBase64) imageBase64 = await tryOpenRouterImage(enhancedPrompt, env);
-        // Strategy 3: Python image-service (local SD on CPU — slow, last resort)
+        // Strategy 1: Workers AI FLUX 1 Schnell (free, runs on CF GPU)
+        let imageBase64 = await tryWorkersFLUX(enhancedPrompt, env);
+        // Strategy 2: Workers AI SDXL (free fallback)
+        if (!imageBase64) imageBase64 = await tryWorkersImage(enhancedPrompt, env);
+        // Strategy 3: Python image-service (Oracle Cloud)
         if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(enhancedPrompt, env);
         // Fallback with original prompt if enhanced failed
         if (!imageBase64 && enhancedPrompt !== prompt) {
-          imageBase64 = await tryWorkersImage(prompt, env);
-          if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
+          imageBase64 = await tryWorkersFLUX(prompt, env);
+          if (!imageBase64) imageBase64 = await tryWorkersImage(prompt, env);
+          if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(prompt, env);
         }
 
         if (imageBase64) {
@@ -2111,29 +2144,27 @@ export default {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 4: Pollinations OpenAI-compatible edit (proper edit endpoint) ──
-        const polDims = getImageDimensionsFromBase64(imageBase64);
-        editedBase64 = await tryPollinationsOpenAIEdit(fileBytes, editPrompt, mimeType);
+        // ── Strategy 4: LLM-Guided Generation (Python service + all backends) ──
+        const imgDims = getImageDimensionsFromBase64(imageBase64);
+        editedBase64 = await tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, env, imgDims?.width, imgDims?.height);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 5: LLM-Guided Generation (chatbot uses its brain) ──
-        // When real editing tools fail, the LLM analyzes the image and generates
-        // a text-to-image prompt for the EDITED version, preserving context.
-        editedBase64 = await tryLLMGuidedEdit(imageBase64, mimeType, editPrompt, env, polDims?.width, polDims?.height);
+        // ── Strategy 5: LLM-Guided FLUX (vision context + OpenRouter FLUX) ──
+        editedBase64 = await tryLLMGuidedFLUX(imageBase64, mimeType, editPrompt, env, imgDims?.width, imgDims?.height);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 6: Better Pollinations (vision context + loop through models) ──
-        editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, imageDescription, polDims?.width, polDims?.height);
+        // ── Strategy 6: OpenRouter FLUX direct generation (free, text-to-image) ──
+        editedBase64 = await tryWorkersFLUXGenerate(editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
 
-        // ── Strategy 6: Standard Pollinations img2img (last resort) ──
-        editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, polDims?.width, polDims?.height);
+        // ── Strategy 7: Workers AI SDXL direct generation (free, text-to-image) ──
+        editedBase64 = await tryWorkersImageGenerate(editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
@@ -2170,15 +2201,15 @@ export default {
         let editedBase64 = await tryEditorService(fileBytes, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPrompt, env);
         if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, editPrompt, env);
-        if (!editedBase64) editedBase64 = await tryPollinationsOpenAIEdit(fileBytes, editPrompt, file.type || 'image/jpeg');
 
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
-        const polDims = getImageDimensionsFromBase64(imageBase64);
-        if (!editedBase64) editedBase64 = await tryLLMGuidedEdit(imageBase64, file.type || 'image/jpeg', editPrompt, env, polDims?.width, polDims?.height);
-        if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, editPrompt, null, polDims?.width, polDims?.height);
-        if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, editPrompt, polDims?.width, polDims?.height);
+        const imgDims = getImageDimensionsFromBase64(imageBase64);
+        if (!editedBase64) editedBase64 = await tryLLMGuidedEdit(imageBase64, file.type || 'image/jpeg', editPrompt, env, imgDims?.width, imgDims?.height);
+        if (!editedBase64) editedBase64 = await tryLLMGuidedFLUX(imageBase64, file.type || 'image/jpeg', editPrompt, env, imgDims?.width, imgDims?.height);
+        if (!editedBase64) editedBase64 = await tryWorkersFLUXGenerate(editPrompt, env);
+        if (!editedBase64) editedBase64 = await tryWorkersImageGenerate(editPrompt, env);
         if (editedBase64) {
           return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
         }
@@ -2213,15 +2244,15 @@ export default {
         let result = await tryEditorService(fileBytes, prompt, env);
         if (!result) result = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
         if (!result) result = await tryHuggingFaceEdit(fileBytes, prompt, env);
-        if (!result) result = await tryPollinationsOpenAIEdit(fileBytes, prompt, file.type || 'image/jpeg');
 
         if (result) {
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
-        const polDims = getImageDimensionsFromBase64(imageBase64);
-        if (!result) result = await tryLLMGuidedEdit(imageBase64, file.type || 'image/jpeg', prompt, env, polDims?.width, polDims?.height);
-        if (!result) result = await tryBetterPollinationsEdit(imageBase64, prompt, description, polDims?.width, polDims?.height);
-        if (!result) result = await tryPollinationsImageEdit(imageBase64, prompt, polDims?.width, polDims?.height);
+        const imgDims = getImageDimensionsFromBase64(imageBase64);
+        if (!result) result = await tryLLMGuidedEdit(imageBase64, file.type || 'image/jpeg', prompt, env, imgDims?.width, imgDims?.height);
+        if (!result) result = await tryLLMGuidedFLUX(imageBase64, file.type || 'image/jpeg', prompt, env, imgDims?.width, imgDims?.height);
+        if (!result) result = await tryWorkersFLUXGenerate(prompt, env);
+        if (!result) result = await tryWorkersImageGenerate(prompt, env);
         if (result) {
           return jsonOk({ content: result, image_data: result, type: 'image_gen' });
         }
@@ -2271,15 +2302,15 @@ export default {
           let editedBase64 = await tryEditorService(fileBytes, message, env);
           if (!editedBase64) editedBase64 = await tryInpaintingWithFallback(fileBytes, editTarget, editPromptText, env);
           if (!editedBase64) editedBase64 = await tryHuggingFaceEdit(fileBytes, message, env);
-          if (!editedBase64) editedBase64 = await tryPollinationsOpenAIEdit(fileBytes, message, mimeType);
 
           if (editedBase64) {
             return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
           }
-          const polDims = getImageDimensionsFromBase64(imageBase64);
-          if (!editedBase64) editedBase64 = await tryLLMGuidedEdit(imageBase64, mimeType, message, env, polDims?.width, polDims?.height);
-          if (!editedBase64) editedBase64 = await tryBetterPollinationsEdit(imageBase64, message, imageDescription, polDims?.width, polDims?.height);
-          if (!editedBase64) editedBase64 = await tryPollinationsImageEdit(imageBase64, message, polDims?.width, polDims?.height);
+          const imgDims = getImageDimensionsFromBase64(imageBase64);
+          if (!editedBase64) editedBase64 = await tryLLMGuidedEdit(imageBase64, mimeType, message, env, imgDims?.width, imgDims?.height);
+          if (!editedBase64) editedBase64 = await tryLLMGuidedFLUX(imageBase64, mimeType, message, env, imgDims?.width, imgDims?.height);
+          if (!editedBase64) editedBase64 = await tryWorkersFLUXGenerate(message, env);
+          if (!editedBase64) editedBase64 = await tryWorkersImageGenerate(message, env);
           if (editedBase64) {
             return jsonOk({ response: '', image_data: editedBase64, type: 'image_gen', session_id: sessionId });
           }
@@ -2290,9 +2321,9 @@ export default {
         if (intent === 'generate') {
           // Generate a new image based on the prompt (ignore uploaded image)
           const prompt = message;
-          let imageBase64 = await tryWorkersImage(prompt, env);
-          if (!imageBase64) imageBase64 = await tryOpenRouterImage(prompt, env);
-          if (!imageBase64) imageBase64 = await tryEditorServiceGenerate(prompt, env);
+          let imageBase64 = await tryEditorServiceGenerate(prompt, env);
+          if (!imageBase64) imageBase64 = await tryWorkersFLUX(prompt, env);
+          if (!imageBase64) imageBase64 = await tryWorkersImage(prompt, env);
           if (imageBase64) {
             return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen', session_id: sessionId });
           }
