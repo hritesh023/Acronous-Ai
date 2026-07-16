@@ -1418,24 +1418,35 @@ function isTimeQuery(message) {
 
 // Generate direct answer for time/date queries from system clock
 function getTimeAnswer(message, tz) {
-  const now = new Date();
-  const userTz = tz || 'UTC';
-  const timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
-  const dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const m = message.toLowerCase().trim();
-  if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
-    return `It's currently **${timeOnly}** on ${dateOnly}.`;
+  try {
+    const now = new Date();
+    const userTz = tz || 'UTC';
+    let timeOnly, dateOnly;
+    try {
+      timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
+      dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    } catch {
+      timeOnly = now.toUTCString().slice(17, 25) + ' UTC';
+      dateOnly = now.toUTCString().slice(0, 16) + now.getFullYear();
+    }
+    const m = message.toLowerCase().trim();
+    if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
+      return `It's currently **${timeOnly}** on ${dateOnly}.`;
+    }
+    if (/\bdate\b|\bday\b|\btoday\b/.test(m) && !/\btime\b/.test(m)) {
+      return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
+    }
+    if (/\byear\b/.test(m)) {
+      return `The current year is **${now.getFullYear()}**.`;
+    }
+    if (/\bmonth\b/.test(m)) {
+      const monthYear = now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' });
+      return `The current month is **${monthYear}**.`;
+    }
+    return `It's currently **${dateOnly}, ${timeOnly}**.`;
+  } catch {
+    return `It's currently **${new Date().toUTCString()}**.`;
   }
-  if (/\bdate\b|\bday\b|\btoday\b/.test(m) && !/\btime\b/.test(m)) {
-    return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
-  }
-  if (/\byear\b/.test(m)) {
-    return `The current year is **${now.getFullYear()}**.`;
-  }
-  if (/\bmonth\b/.test(m)) {
-    return `The current month is **${now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' })}**.`;
-  }
-  return `It's currently **${dateOnly}, ${timeOnly}**.`;
 }
 
 // Check if a query is a simple factual lookup (time, date, who is X, etc.)
@@ -1718,11 +1729,11 @@ export default {
         }
 
         if (content) content = content.trim();
-        if (!content) content = '';
+        if (!content) content = "I'm here to help! Could you rephrase that?";
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: 'default', type: 'chat' });
+        return jsonOk({ response: "I ran into an issue. Could you try again?", session_id: 'default', type: 'chat' });
       }
     }
 
@@ -1772,11 +1783,11 @@ export default {
           content = await callOpenRouter(fallbackMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = '';
+        if (!content || !content.trim()) content = "I see the image but couldn't generate a response. Could you describe what you need?";
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: "I had trouble processing that image. Could you try again?", session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -1835,11 +1846,11 @@ export default {
           content = await callOpenRouter(textMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = '';
+        if (!content || !content.trim()) content = "I processed the file but couldn't generate a summary. Could you try again?";
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: "I had trouble processing that file. Could you try again?", session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -1891,9 +1902,9 @@ export default {
           return jsonOk({ response: '', image_data: imageBase64, type: 'image_gen' });
         }
 
-        return jsonOk({ response: '', type: 'error', error: 'generation_failed' });
+        return jsonOk({ response: "I couldn't generate that image. Could you try a different prompt?", type: 'error', error: 'generation_failed' });
       } catch (error) {
-        return jsonOk({ response: '', type: 'error', error: 'generation_failed' });
+        return jsonOk({ response: "Image generation failed. Could you try a simpler prompt?", type: 'error', error: 'generation_failed' });
       }
     }
 
@@ -2014,7 +2025,7 @@ export default {
         const apology = await generateNaturalApology('the image could not be edited with the given description', env);
         return jsonOk({ response: apology, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: "I couldn't edit that image. Could you try a different request?", session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -2167,9 +2178,9 @@ export default {
         }
         if (content) content = cleanResponse(content);
 
-        return jsonOk({ response: content || '', session_id: sessionId, type: 'chat' });
+        return jsonOk({ response: content || "I couldn't redesign that image. Could you try again?", session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: "I had trouble redesigning that image. Could you try again?", session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -2220,11 +2231,11 @@ export default {
           content = await callOpenRouter(textMessages, env);
         }
         if (content) content = cleanResponse(content);
-        if (!content || !content.trim()) content = '';
+        if (!content || !content.trim()) content = "I couldn't analyze that image. Could you try again?";
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', session_id: sessionId || 'default', type: 'chat' });
+        return jsonOk({ response: "I had trouble analyzing that image. Could you try again?", session_id: sessionId || 'default', type: 'chat' });
       }
     }
 
@@ -2267,9 +2278,9 @@ export default {
           if (aiMsg) content = aiMsg;
         }
 
-        return jsonOk({ response: content || '', type: 'chat' });
+        return jsonOk({ response: content || "I'm here to help! Could you try rephrasing your question?", type: 'chat' });
       } catch (error) {
-        return jsonOk({ response: '', type: 'chat' });
+        return jsonOk({ response: "I'm having trouble right now. Could you try again?", type: 'chat' });
       }
     }
 

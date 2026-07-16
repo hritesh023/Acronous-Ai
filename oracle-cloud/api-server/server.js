@@ -236,28 +236,36 @@ function isTimeQuery(message) {
 // Generate direct answer for time/date queries from system clock
 // ---------------------------------------------------------------------------
 function getTimeAnswer(message, tz) {
-  const now = new Date();
-  const userTz = tz || 'UTC';
-  const opts = { timeZone: userTz, timeZoneName: 'long' };
-  let formatted;
-  try { formatted = now.toLocaleString('en-US', opts); } catch { formatted = now.toISOString(); }
-  const m = message.toLowerCase().trim();
-  const timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
-  const dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const full = `${dateOnly}, ${timeOnly}`;
-  if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
-    return `It's currently **${timeOnly}** on ${dateOnly}.`;
+  try {
+    const now = new Date();
+    const userTz = tz || 'UTC';
+    const m = message.toLowerCase().trim();
+    let timeOnly, dateOnly;
+    try {
+      timeOnly = now.toLocaleTimeString('en-US', { timeZone: userTz, hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true, timeZoneName: 'short' });
+      dateOnly = now.toLocaleDateString('en-US', { timeZone: userTz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    } catch {
+      timeOnly = now.toUTCString().slice(17, 25) + ' UTC';
+      dateOnly = now.toUTCString().slice(0, 16) + now.getFullYear();
+    }
+    if (/\btime\b/.test(m) && !/\bdate\b/.test(m) && !/\bday\b/.test(m)) {
+      return `It's currently **${timeOnly}** on ${dateOnly}.`;
+    }
+    if (/\bdate\b|\bday\b|\btoday\b/.test(m) && !/\btime\b/.test(m)) {
+      return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
+    }
+    if (/\byear\b/.test(m)) {
+      return `The current year is **${now.getFullYear()}**.`;
+    }
+    if (/\bmonth\b/.test(m)) {
+      const monthYear = now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' });
+      return `The current month is **${monthYear}**.`;
+    }
+    return `It's currently **${dateOnly}, ${timeOnly}**.`;
+  } catch {
+    const now = new Date();
+    return `It's currently **${now.toUTCString()}**.`;
   }
-  if (/\bdate\b|\bday\b|\btoday\b/.test(m) && !/\btime\b/.test(m)) {
-    return `Today is **${dateOnly}**. The current time is ${timeOnly}.`;
-  }
-  if (/\byear\b/.test(m)) {
-    return `The current year is **${now.getFullYear()}**.`;
-  }
-  if (/\bmonth\b/.test(m)) {
-    return `The current month is **${now.toLocaleDateString('en-US', { timeZone: userTz, month: 'long', year: 'numeric' })}**.`;
-  }
-  return `It's currently **${full}**.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,7 +1077,7 @@ app.post('/v1/chat', async (req, res) => {
           }
         } catch { continue; }
       }
-      return jsonOk(res, { response: content?.trim() || '', session_id, type: 'chat' });
+      return jsonOk(res, { response: content?.trim() || "I couldn't analyze that code. Could you try again?", session_id, type: 'chat' });
     }
 
     // Tier 2 & 3 (and Tier 1 with needsSearch): Full brain — web search + main model, no timeout for Tier 3
@@ -1139,8 +1147,15 @@ app.post('/v1/chat', async (req, res) => {
       }
     }
 
-    return jsonOk(res, { response: content?.trim() || '', session_id, type: 'chat' });
-  } catch { return jsonOk(res, { response: '', session_id: req.body?.session_id || 'default', type: 'chat' }); }
+    // Universal safety net — NEVER return empty response
+    if (!content || !content.trim()) {
+      content = "I'm here to help! Could you rephrase that or ask me something else?";
+    }
+
+    return jsonOk(res, { response: content.trim(), session_id, type: 'chat' });
+  } catch {
+    return jsonOk(res, { response: "I'm here to help! Could you rephrase that or ask me something else?", session_id: req.body?.session_id || 'default', type: 'chat' });
+  }
 });
 
 // Chat with image — enhanced vision routing
@@ -1190,8 +1205,8 @@ app.post('/v1/chat/image', upload.single('file'), async (req, res) => {
       content = await callOpenRouter(fallback);
     }
     if (content) content = cleanResponse(content);
-    return jsonOk(res, { response: content || '', session_id, type: 'chat' });
-  } catch { return jsonOk(res, { response: '', session_id: req.body?.session_id || 'default', type: 'chat' }); }
+    return jsonOk(res, { response: content || "I see the image but couldn't generate a response. Could you describe what you need?", session_id, type: 'chat' });
+  } catch { return jsonOk(res, { response: "I had trouble processing that image. Could you try again?", session_id: req.body?.session_id || 'default', type: 'chat' }); }
 });
 
 // Chat with file — enhanced file analysis
@@ -1239,8 +1254,8 @@ app.post('/v1/chat/file', upload.single('file'), async (req, res) => {
     const msgs = [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: userMsgContent }];
     let content = await callOpenRouter(msgs);
     if (content) content = cleanResponse(content);
-    return jsonOk(res, { response: content || '', session_id, type: 'chat' });
-  } catch { return jsonOk(res, { response: '', session_id: req.body?.session_id || 'default', type: 'chat' }); }
+    return jsonOk(res, { response: content || "I processed the file but couldn't generate a summary. Could you try again?", session_id, type: 'chat' });
+  } catch { return jsonOk(res, { response: "I had trouble processing that file. Could you try again?", session_id: req.body?.session_id || 'default', type: 'chat' }); }
 });
 
 // Image generate — enhanced with auto-prompt enhancement
@@ -1289,8 +1304,8 @@ app.post('/v1/image/generate', async (req, res) => {
       imageBase64 = await tryPollinationsImage(prompt);
     }
     if (imageBase64) return jsonOk(res, { response: '', image_data: imageBase64, type: 'image_gen' });
-    return jsonOk(res, { response: '', type: 'error', error: 'generation_failed' });
-  } catch { return jsonOk(res, { response: '', type: 'error', error: 'generation_failed' }); }
+    return jsonOk(res, { response: "I couldn't generate that image. Could you try a different prompt?", type: 'error', error: 'generation_failed' });
+  } catch { return jsonOk(res, { response: "Image generation failed. Could you try a simpler prompt?", type: 'error', error: 'generation_failed' }); }
 });
 
 // Image edit
@@ -1323,7 +1338,7 @@ app.post('/v1/image/ultra-edit', upload.single('file'), async (req, res) => {
     }
     const result = await runEditPipeline(req.file.buffer, editPrompt, req.file.mimetype);
     return jsonOk(res, { ...result, session_id: req.body.session_id || 'default' });
-  } catch { return jsonOk(res, { response: '', session_id: req.body?.session_id || 'default', type: 'chat' }); }
+  } catch { return jsonOk(res, { response: "I couldn't edit that image. Could you try a different request?", session_id: req.body?.session_id || 'default', type: 'chat' }); }
 });
 
 // Smart edit — enhanced with intelligent routing
@@ -1341,7 +1356,7 @@ app.post('/v1/image/smart-edit', upload.single('file'), async (req, res) => {
           if (result) return jsonOk(res, { response: result, session_id: req.body.session_id || 'default', type: 'chat' });
         } catch { continue; }
       }
-      return jsonOk(res, { response: '', session_id: req.body.session_id || 'default', type: 'chat' });
+      return jsonOk(res, { response: "I couldn't analyze that image with vision models. Could you try again?", session_id: req.body.session_id || 'default', type: 'chat' });
     }
 
     // Classify intent
@@ -1382,8 +1397,8 @@ app.post('/v1/image/smart-edit', upload.single('file'), async (req, res) => {
     }
     if (!content) { const fb = [{ role: 'system', content: systemPrompt }, ...history, { role: 'user', content: `${message}\n\n[The user attached an image]` }]; content = await callOpenRouter(fb); }
     if (content) content = cleanResponse(content);
-    return jsonOk(res, { response: content || '', session_id: req.body.session_id || 'default', type: 'chat' });
-  } catch { return jsonOk(res, { response: '', session_id: req.body?.session_id || 'default', type: 'chat' }); }
+    return jsonOk(res, { response: content || "I see the image but couldn't respond. Could you describe what you need?", session_id: req.body.session_id || 'default', type: 'chat' });
+  } catch { return jsonOk(res, { response: "I had trouble with that image. Could you try again?", session_id: req.body?.session_id || 'default', type: 'chat' }); }
 });
 
 // Streaming chat endpoint
@@ -1475,8 +1490,8 @@ app.post('/api/image/analyze', upload.single('file'), async (req, res) => {
     ];
     let content = await callOpenRouterVision(visionMessages);
     if (content) content = cleanResponse(content);
-    return jsonOk(res, { response: content || '', session_id: req.body.session_id || 'default', type: 'chat' });
-  } catch { return jsonOk(res, { response: '', type: 'chat' }); }
+    return jsonOk(res, { response: content || "I couldn't analyze that image. Could you try again?", session_id: req.body.session_id || 'default', type: 'chat' });
+  } catch { return jsonOk(res, { response: "I had trouble analyzing that image. Could you try again?", type: 'chat' }); }
 });
 
 // Redesign
@@ -1550,8 +1565,8 @@ app.post('/v1/chat/generate-natural-response', async (req, res) => {
     ];
     let content = await callOpenRouter(messages);
     if (!content) { const poll = await tryPollinations(messages); if (poll?.trim()) content = poll; }
-    return jsonOk(res, { response: content || '', type: 'chat' });
-  } catch { return jsonOk(res, { response: '', type: 'chat' }); }
+    return jsonOk(res, { response: content || "I'm here to help! Could you try rephrasing your question?", type: 'chat' });
+  } catch { return jsonOk(res, { response: "I'm having trouble right now. Could you try again?", type: 'chat' }); }
 });
 
 // SPA fallback
