@@ -68,7 +68,7 @@ class ChatProvider extends ChangeNotifier {
 
   String _searchQuery = '';
 
-  double _ttsSpeed = 0.55;
+  double _ttsSpeed = 1.0;
   double _ttsPitch = 1.0;
   bool _autoSendVoice = false;
   bool _continuousVoiceEnabled = true;
