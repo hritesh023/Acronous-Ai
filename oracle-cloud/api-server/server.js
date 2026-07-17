@@ -651,26 +651,45 @@ function reformatJS(code) {
   return result.join('\n');
 }
 function reformatBraceLanguage(code) {
-  let lines = code.split('\n');
-  const result = [];
-  for (let line of lines) {
-    if (line.trim() === '') { result.push(''); continue; }
-    const indent = line.match(/^(\s*)/)?.[1] || '';
-    const trimmed = line.trim();
-    if (/\)\s*\{/.test(trimmed) && /\}\s*$/.test(trimmed) && trimmed.includes(';')) {
-      const fnMatch = trimmed.match(/^(.*\)\s*\{)\s*(.+)\}$/);
-      if (fnMatch) {
-        result.push(indent + fnMatch[1]);
-        for (const b of fnMatch[2].split(/\s*;\s*/).filter(s => s.trim())) {
-          result.push(indent + '    ' + b.trim() + ';');
-        }
-        result.push(indent + '}');
-        continue;
-      }
+  const braceCount = (code.match(/[{}]/g) || []).length;
+  const newlineCount = (code.match(/\n/g) || []).length;
+  if (newlineCount > braceCount / 2) return code;
+  const INDENT = '    ';
+  let result = '';
+  let depth = 0;
+  let i = 0;
+  const s = code;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '{') {
+      result += ' {\n'; depth++; i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      continue;
     }
-    result.push(line);
+    if (ch === '}') {
+      depth = Math.max(0, depth - 1);
+      result += INDENT.repeat(depth) + '}\n'; i++;
+      while (i < s.length && /[\s;]/.test(s[i])) i++;
+      continue;
+    }
+    if (ch === ';') {
+      result += ';\n' + INDENT.repeat(depth); i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      if (i < s.length && s[i] === '}') result = result.trimEnd() + '\n';
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch; result += ch; i++;
+      while (i < s.length && s[i] !== quote) {
+        if (s[i] === '\\') { result += s[i]; i++; }
+        result += s[i]; i++;
+      }
+      if (i < s.length) { result += s[i]; i++; }
+      continue;
+    }
+    result += ch; i++;
   }
-  return result.join('\n');
+  return result.replace(/^\s+/, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // ---------------------------------------------------------------------------

@@ -1621,50 +1621,73 @@ function reformatJS(code) {
 
 // Reformat brace-based languages (Java, C, C++, C#)
 function reformatBraceLanguage(code) {
-  let lines = code.split('\n');
-  const result = [];
+  // Only reformat if the code looks compressed (few newlines relative to braces/semicolons)
+  const braceCount = (code.match(/[{}]/g) || []).length;
+  const semicolonCount = (code.match(/;/g) || []).length;
+  const newlineCount = (code.match(/\n/g) || []).length;
+  // If already well-formatted (more newlines than braces), skip
+  if (newlineCount > braceCount / 2) return code;
 
-  for (let line of lines) {
-    if (line.trim() === '') {
-      result.push('');
+  const INDENT = '    ';
+  let result = '';
+  let depth = 0;
+  let i = 0;
+  const s = code;
+
+  while (i < s.length) {
+    const ch = s[i];
+
+    if (ch === '{') {
+      result += ' {\n';
+      depth++;
+      i++;
+      // Skip whitespace after {
+      while (i < s.length && /\s/.test(s[i])) i++;
       continue;
     }
 
-    const indent = line.match(/^(\s*)/)?.[1] || '';
-    const trimmed = line.trim();
-
-    // Fix: "public class X { public static void main..." → expand
-    if (/\bclass\s+\w+.*\{/.test(trimmed) && /\b(?:public|private|static|void|int|String)\b/.test(trimmed) && trimmed.includes('{')) {
-      // Try to split at the first { that starts a method
-      const methodMatch = trimmed.match(/^(\w[\w\s]*\w+\s*\{)\s*(\w[\w\s]*\(.*?\)\s*\{?.*)/);
-      if (methodMatch) {
-        result.push(indent + methodMatch[1]);
-        // Process remaining
-        const remaining = methodMatch[2];
-        const innerResult = reformatBraceLanguage(indent + '    ' + remaining);
-        result.push(innerResult);
-        continue;
-      }
+    if (ch === '}') {
+      depth = Math.max(0, depth - 1);
+      result += INDENT.repeat(depth) + '}\n';
+      i++;
+      // Skip whitespace/semicolons after }
+      while (i < s.length && /[\s;]/.test(s[i])) i++;
+      continue;
     }
 
-    // Fix: "public static void main(String[] args) { stmt; }" → expand
-    if (/\)\s*\{/.test(trimmed) && /\}\s*$/.test(trimmed) && trimmed.includes(';')) {
-      const fnMatch = trimmed.match(/^(.*\)\s*\{)\s*(.+)\}$/);
-      if (fnMatch) {
-        result.push(indent + fnMatch[1]);
-        const body = fnMatch[2].split(/\s*;\s*/).filter(s => s.trim());
-        for (const b of body) {
-          result.push(indent + '    ' + b.trim() + ';');
-        }
-        result.push(indent + '}');
-        continue;
+    if (ch === ';') {
+      result += ';\n' + INDENT.repeat(depth);
+      i++;
+      // Skip whitespace after ;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      // Don't add indent if next char is } or end of code
+      if (i < s.length && s[i] === '}') {
+        result = result.trimEnd() + '\n';
       }
+      continue;
     }
 
-    result.push(line);
+    // Inside a string literal — copy verbatim
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      result += ch;
+      i++;
+      while (i < s.length && s[i] !== quote) {
+        if (s[i] === '\\') { result += s[i]; i++; }
+        result += s[i];
+        i++;
+      }
+      if (i < s.length) { result += s[i]; i++; }
+      continue;
+    }
+
+    // Regular character
+    result += ch;
+    i++;
   }
 
-  return result.join('\n');
+  // Clean up: ensure first line has no leading indent, remove trailing whitespace
+  return result.replace(/^\s+/, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // ---------------------------------------------------------------------------
