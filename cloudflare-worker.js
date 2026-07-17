@@ -189,6 +189,7 @@ class DataProcessor:
 ## INTENT MATCHING — MOST IMPORTANT RULE
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
 - If they say "write code" or "create a function" → generate ONLY code in a fenced code block with language tag, not explanation
+- If they ask a question that needs both code AND explanation (e.g. "find prime numbers", "write a program to...") → FIRST give the code in a fenced code block, then below the code block give the expected output/answer
 - If they say "explain" → give explanation, not code
 - If they say "edit this image" → edit ONLY the part they mention, keep everything else identical
 - If they say "generate an image" → generate a new image
@@ -200,6 +201,20 @@ class DataProcessor:
 - NEVER give code when explanation was requested
 - NEVER give incomplete answers — finish the full response before stopping
 - NEVER give a response that only partially addresses the user's query
+
+## CODE OUTPUT FORMAT
+When a user asks for code (e.g. "write a program to find primes", "create a function that..."):
+1. FIRST: Give the complete, properly formatted code in a fenced code block with language tag
+2. THEN: Below the code block, show the expected output/result of running the code
+Example for "find prime numbers from 1 to 10":
+\`\`\`c
+// code here
+\`\`\`
+Output:
+\`\`\`
+Prime numbers from 1 to 10:
+2 3 5 7
+\`\`\`
 
 ## CRITICAL: ACCURACY RULES
 - NEVER give wrong answers — saying "I don't know" is better than guessing
@@ -1683,67 +1698,75 @@ function expandPythonDef(defLine, indent) {
   return result;
 }
 
-// Reformat JavaScript/TypeScript code
+// Reformat JavaScript/TypeScript code — uses same brace-based approach as C/Java
 function reformatJS(code) {
-  let lines = code.split('\n');
-  const result = [];
+  // Check if code is already well-formatted (has many newlines)
+  const braceCount = (code.match(/[{}]/g) || []).length;
+  const newlineCount = (code.match(/\n/g) || []).length;
+  if (newlineCount > braceCount / 2) return code;
 
-  for (let line of lines) {
-    if (line.trim() === '') {
-      result.push('');
+  // For compressed JS, use the same brace-based reformatter with 2-space indent
+  const savedIndent = '    ';
+  const INDENT = '  ';
+  let result = '';
+  let depth = 0;
+  let atLineStart = true;
+  let i = 0;
+  const s = code;
+
+  while (i < s.length) {
+    const ch = s[i];
+
+    if (ch === '{') {
+      result += ' {\n';
+      depth++;
+      atLineStart = true;
+      i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
       continue;
     }
 
-    const indent = line.match(/^(\s*)/)?.[1] || '';
-    const trimmed = line.trim();
-
-    // Fix: "function X(...) { stmt }" → expand
-    if (/^function\s+\w+.*\{.*\}/.test(trimmed) && !trimmed.includes('\n')) {
-      const fnMatch = trimmed.match(/^(function\s+\w+\s*\([^)]*\))\s*\{(.+)\}/);
-      if (fnMatch) {
-        result.push(indent + fnMatch[1] + ' {');
-        const body = fnMatch[2].split(/\s*;\s*/).filter(s => s.trim());
-        for (const b of body) {
-          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
-        }
-        result.push(indent + '}');
-        continue;
-      }
+    if (ch === '}') {
+      depth = Math.max(0, depth - 1);
+      result += INDENT.repeat(depth) + '}\n';
+      atLineStart = true;
+      i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      continue;
     }
 
-    // Fix: "const X = (...) => { stmt }" → expand arrow functions
-    if (/^(?:const|let|var)\s+\w+\s*=\s*\(?.*\)?\s*=>\s*\{.*\}/.test(trimmed)) {
-      const arrowMatch = trimmed.match(/^((?:const|let|var)\s+\w+\s*=\s*(?:\(?.*\)?\s*=>))\s*\{(.+)\}/);
-      if (arrowMatch) {
-        result.push(indent + arrowMatch[1] + ' {');
-        const body = arrowMatch[2].split(/\s*;\s*/).filter(s => s.trim());
-        for (const b of body) {
-          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
-        }
-        result.push(indent + '}');
-        continue;
-      }
+    if (ch === ';') {
+      result += ';';
+      i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      if (i < s.length && s[i] === '}') continue;
+      result += '\n';
+      atLineStart = true;
+      continue;
     }
 
-    // Fix multiple statements on one line separated by semicolons (only if braces present)
-    if (trimmed.includes('{') && trimmed.includes('}') && trimmed.includes(';')) {
-      // This is likely a compressed block — try to expand
-      const braceMatch = trimmed.match(/^(\w.*\{)(.+)\}$/);
-      if (braceMatch && braceMatch[2].split(';').filter(s => s.trim()).length > 1) {
-        result.push(indent + braceMatch[1]);
-        const body = braceMatch[2].split(/\s*;\s*/).filter(s => s.trim());
-        for (const b of body) {
-          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
-        }
-        result.push(indent + '}');
-        continue;
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch;
+      result += ch;
+      i++;
+      while (i < s.length && s[i] !== quote) {
+        if (s[i] === '\\') { result += s[i]; i++; }
+        result += s[i];
+        i++;
       }
+      if (i < s.length) { result += s[i]; i++; }
+      continue;
     }
 
-    result.push(line);
+    if (atLineStart && ch !== '\n' && ch !== '\r') {
+      result += INDENT.repeat(depth);
+      atLineStart = false;
+    }
+    result += ch;
+    i++;
   }
 
-  return result.join('\n');
+  return result.replace(/^\s+/, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 // Reformat brace-based languages (Java, C, C++, C#)
@@ -1758,6 +1781,7 @@ function reformatBraceLanguage(code) {
   const INDENT = '    ';
   let result = '';
   let depth = 0;
+  let atLineStart = true;
   let i = 0;
   const s = code;
 
@@ -1767,6 +1791,7 @@ function reformatBraceLanguage(code) {
     if (ch === '{') {
       result += ' {\n';
       depth++;
+      atLineStart = true;
       i++;
       // Skip whitespace after {
       while (i < s.length && /\s/.test(s[i])) i++;
@@ -1776,21 +1801,25 @@ function reformatBraceLanguage(code) {
     if (ch === '}') {
       depth = Math.max(0, depth - 1);
       result += INDENT.repeat(depth) + '}\n';
+      atLineStart = true;
       i++;
-      // Skip whitespace/semicolons after }
-      while (i < s.length && /[\s;]/.test(s[i])) i++;
+      // Skip whitespace after }
+      while (i < s.length && /\s/.test(s[i])) i++;
+      // Don't skip semicolons after } — let the main loop handle them
       continue;
     }
 
     if (ch === ';') {
-      result += ';\n' + INDENT.repeat(depth);
+      result += ';';
       i++;
       // Skip whitespace after ;
       while (i < s.length && /\s/.test(s[i])) i++;
-      // Don't add indent if next char is } or end of code
+      // If next char is }, don't add newline — let } handle it
       if (i < s.length && s[i] === '}') {
-        result = result.trimEnd() + '\n';
+        continue;
       }
+      result += '\n';
+      atLineStart = true;
       continue;
     }
 
@@ -1808,7 +1837,11 @@ function reformatBraceLanguage(code) {
       continue;
     }
 
-    // Regular character
+    // Regular character — add indentation if at line start
+    if (atLineStart && ch !== '\n' && ch !== '\r') {
+      result += INDENT.repeat(depth);
+      atLineStart = false;
+    }
     result += ch;
     i++;
   }

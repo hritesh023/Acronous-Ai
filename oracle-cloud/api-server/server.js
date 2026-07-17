@@ -703,64 +703,33 @@ function reformatPython(code) {
   return result.join('\n');
 }
 function reformatJS(code) {
-  let lines = code.split('\n');
-  const result = [];
-  for (let line of lines) {
-    if (line.trim() === '') { result.push(''); continue; }
-    const indent = line.match(/^(\s*)/)?.[1] || '';
-    const trimmed = line.trim();
-    if (/^function\s+\w+.*\{.*\}/.test(trimmed) && !trimmed.includes('\n')) {
-      const fnMatch = trimmed.match(/^(function\s+\w+\s*\([^)]*\))\s*\{(.+)\}/);
-      if (fnMatch) {
-        result.push(indent + fnMatch[1] + ' {');
-        for (const b of fnMatch[2].split(/\s*;\s*/).filter(s => s.trim())) {
-          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
-        }
-        result.push(indent + '}');
-        continue;
-      }
-    }
-    if (/\)\s*\{/.test(trimmed) && /\}\s*$/.test(trimmed) && trimmed.includes(';')) {
-      const fnMatch = trimmed.match(/^(.*\)\s*\{)\s*(.+)\}$/);
-      if (fnMatch) {
-        result.push(indent + fnMatch[1]);
-        for (const b of fnMatch[2].split(/\s*;\s*/).filter(s => s.trim())) {
-          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
-        }
-        result.push(indent + '}');
-        continue;
-      }
-    }
-    result.push(line);
-  }
-  return result.join('\n');
-}
-function reformatBraceLanguage(code) {
   const braceCount = (code.match(/[{}]/g) || []).length;
   const newlineCount = (code.match(/\n/g) || []).length;
   if (newlineCount > braceCount / 2) return code;
-  const INDENT = '    ';
+  const INDENT = '  ';
   let result = '';
   let depth = 0;
+  let atLineStart = true;
   let i = 0;
   const s = code;
   while (i < s.length) {
     const ch = s[i];
     if (ch === '{') {
-      result += ' {\n'; depth++; i++;
+      result += ' {\n'; depth++; atLineStart = true; i++;
       while (i < s.length && /\s/.test(s[i])) i++;
       continue;
     }
     if (ch === '}') {
       depth = Math.max(0, depth - 1);
-      result += INDENT.repeat(depth) + '}\n'; i++;
-      while (i < s.length && /[\s;]/.test(s[i])) i++;
+      result += INDENT.repeat(depth) + '}\n'; atLineStart = true; i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
       continue;
     }
     if (ch === ';') {
-      result += ';\n' + INDENT.repeat(depth); i++;
+      result += ';'; i++;
       while (i < s.length && /\s/.test(s[i])) i++;
-      if (i < s.length && s[i] === '}') result = result.trimEnd() + '\n';
+      if (i < s.length && s[i] === '}') continue;
+      result += '\n'; atLineStart = true;
       continue;
     }
     if (ch === '"' || ch === "'" || ch === '`') {
@@ -771,6 +740,55 @@ function reformatBraceLanguage(code) {
       }
       if (i < s.length) { result += s[i]; i++; }
       continue;
+    }
+    if (atLineStart && ch !== '\n' && ch !== '\r') {
+      result += INDENT.repeat(depth); atLineStart = false;
+    }
+    result += ch; i++;
+  }
+  return result.replace(/^\s+/, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function reformatBraceLanguage(code) {
+  const braceCount = (code.match(/[{}]/g) || []).length;
+  const newlineCount = (code.match(/\n/g) || []).length;
+  if (newlineCount > braceCount / 2) return code;
+  const INDENT = '    ';
+  let result = '';
+  let depth = 0;
+  let atLineStart = true;
+  let i = 0;
+  const s = code;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '{') {
+      result += ' {\n'; depth++; atLineStart = true; i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      continue;
+    }
+    if (ch === '}') {
+      depth = Math.max(0, depth - 1);
+      result += INDENT.repeat(depth) + '}\n'; atLineStart = true; i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      continue;
+    }
+    if (ch === ';') {
+      result += ';'; i++;
+      while (i < s.length && /\s/.test(s[i])) i++;
+      if (i < s.length && s[i] === '}') continue;
+      result += '\n'; atLineStart = true;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === '`') {
+      const quote = ch; result += ch; i++;
+      while (i < s.length && s[i] !== quote) {
+        if (s[i] === '\\') { result += s[i]; i++; }
+        result += s[i]; i++;
+      }
+      if (i < s.length) { result += s[i]; i++; }
+      continue;
+    }
+    if (atLineStart && ch !== '\n' && ch !== '\r') {
+      result += INDENT.repeat(depth); atLineStart = false;
     }
     result += ch; i++;
   }
@@ -1174,6 +1192,7 @@ class DataProcessor:
 ## INTENT MATCHING — MOST IMPORTANT RULE
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
 - If they say "write code" or "create a function" → generate ONLY code in a fenced code block with language tag, not explanation
+- If they ask a question that needs both code AND explanation (e.g. "find prime numbers", "write a program to...") → FIRST give the code in a fenced code block, then below the code block give the expected output/answer
 - If they say "explain" → give explanation, not code
 - If they say "edit this image" → edit ONLY the part they mention, keep everything else identical
 - If they say "generate an image" → generate a new image
@@ -1185,6 +1204,21 @@ class DataProcessor:
 - NEVER give code when explanation was requested
 - NEVER give incomplete answers — finish the full response before stopping
 - NEVER give a response that only partially addresses the user's query
+
+## CODE OUTPUT FORMAT
+When a user asks for code (e.g. "write a program to find primes", "create a function that..."):
+1. FIRST: Give the complete, properly formatted code in a fenced code block with language tag
+2. THEN: Below the code block, show the expected output/result of running the code
+Example for "find prime numbers from 1 to 10":
+```
+c
+// code here
+```
+Output:
+```
+Prime numbers from 1 to 10:
+2 3 5 7
+```
 
 ## CRITICAL: ACCURACY RULES
 - NEVER give wrong answers — saying "I don't know" is better than guessing
