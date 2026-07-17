@@ -34,7 +34,7 @@ class ChatProvider extends ChangeNotifier {
   bool get isConnecting => _isConnecting;
 
   static final RegExp _privateInfoLinePattern = RegExp(
-    r"(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by (openrouter|meta|google|deepseek|llama|qwen|nvidia)|openrouter[.\s]|duckduckgo|searxng|mojeek|bing\.com|google\.com/search|wikipedia\.org/api|hacker\s*news|reddit\.com|guardianapis|cloudflare|workers?\s*ai|hugging\s*face|instructpix2pix|stable\s*diffusion|flux\.?[1s]|based on (my|the|our) (training|web )?(data|)?search|according to (my|the|our) (web )?(search|results?|findings?)|i (searched|looked\s+up|checked|found|retrieved|gathered) (online|the\s+web|information|data)|let me (search|look\s+up|check|find)|as of my (knowledge\s+)?(cutoff|training)|knowledge cutoff|last (updated|trained|update)|training data|meta[-/]?llama|llama[- ]3|deepseek|qwen|gemini|nemotron|open\s*router|gpt[ -]4|gpt[ -]3|chatgpt|claude|anthropic|mistral|\d{1,3}\.\d{2,6}\s*°?\s*[NSns]\s*[,;]?\s*\d{1,3}\.\d{2,6}\s*°?\s*[EWew]|as an AI|as a language model|as an AI assistant)",
+    r"(api[ _]?key[\s:=]+|system prompt[\s:=]+|internal (configuration|instructions|prompt)[\s:=]+|powered by \w|based on (my|the|our) (training|web )?(data|)?search|according to (my|the|our) (web )?(search|results?|findings?)|i (searched|looked\s+up|checked|found|retrieved|gathered) (online|the\s+web|information|data)|let me (search|look\s+up|check|find)|as of my (knowledge\s+)?(cutoff|training)|knowledge cutoff|last (updated|trained|update)|training data|as an AI|as a language model|as an AI assistant)",
     caseSensitive: false,
   );
 
@@ -48,15 +48,11 @@ class ChatProvider extends ChangeNotifier {
     // Whole-text cleanup: strip backend leak phrases anywhere in the text
     cleaned = cleaned
         .replaceAll(RegExp(r'(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|provided\s+by)\s+[^.\n]*', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\b(?:openrouter|open\s*router|duckduckgo|searxng|mojeek|cloudflare|workers?\s*ai|hugging\s*face)\b[^.\n]*', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\b(?:meta[/-]llama|llama[ -]3|deepseek|qwen|gemini|nvidia|nemotron|instructpix2pix|stable\s*diffusion|flux\.?[1s]|gpt[ -]4|gpt[ -]3|chatgpt|claude|anthropic|mistral)\b[^.\n]*', caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:based\s+on\s+(?:my|the|our)\s+(?:training|web\s+)?(?:data\s+)?search|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)|as\s+per\s+(?:my|the)\s+search|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)|let\s+me\s+(?:search|look\s+up|check|find))\b[^.\n]*', caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:as\s+of\s+my\s+(?:knowledge\s+)?cutoff|knowledge\s+cutoff|last\s+(?:updated|trained|update\s+in)|training\s+data|based\s+on\s+my\s+training)\b[^.\n]*', caseSensitive: false), '')
         .replaceAll(RegExp(r'\bas\s+of\s+(?:my\s+)?(?:last\s+)?(?:knowledge\s+)?(?:cutoff\s+)?(?:in\s+)?\d{4}\b[^.\n]*', caseSensitive: false), '')
-        // Strip "as an AI", "as a language model", "I'm an AI"
         .replaceAll(RegExp(r'\b(?:as\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+language\s+model|assistant))\b[^.\n]*', caseSensitive: false), '')
         .replaceAll(RegExp(r"\b(?:i[']?m\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+assistant))\b[^.\n]*", caseSensitive: false), '')
-        // Strip "I don't have real-time access", "I cannot browse"
         .replaceAll(RegExp(r"\b(?:i\s+(?:don[']?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r"\b(?:i\s+(?:cannot|can[']?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b[^.\n]*', caseSensitive: false), '')

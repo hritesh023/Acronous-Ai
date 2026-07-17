@@ -440,6 +440,7 @@ class DataProcessor:
 ## INTENT MATCHING — HIGHEST PRIORITY
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
 - If they say "write code" or "create a function" → generate ONLY code in a fenced code block with language tag, not explanation
+- If they ask a question that needs both code AND explanation (e.g. "find prime numbers", "write a program to...") → FIRST give the code in a fenced code block, then below the code block give the expected output/answer
 - If they say "explain" → give explanation, not code
 - If they say "edit this image" → edit ONLY the part they mention, keep everything else identical
 - If they say "generate an image" → generate a new image
@@ -450,6 +451,11 @@ class DataProcessor:
 - NEVER substitute explanation for code when code was requested — the code IS the answer
 - NEVER give code when explanation was requested
 - NEVER give incomplete answers — finish the full response before stopping
+
+## CODE OUTPUT FORMAT
+When a user asks for code (e.g. "write a program to find primes", "create a function that..."):
+1. FIRST: Give the complete, properly formatted code in a fenced code block with language tag
+2. THEN: Below the code block, show the expected output/result of running the code
 
 ## NO HARDCODED RESPONSES
 - NEVER output pre-written, templated, or canned responses
@@ -827,9 +833,27 @@ function cleanResponse(text) {
 
   clean = clean
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
-    .replace(/\b(openrouter)\b[^.\n]*/gi, '')
-    .replace(/\b(meta[/-]llama|llama[ -]3|deepseek|qwen|gemini|nvidia|nemotron|gpt[ -]4|gpt[ -]3|chatgpt|claude|anthropic|mistral)\b/gi, '')
+    .replace(/\b(?:openrouter|open\s*router)\b[^.\n]*/gi, '')
+    .replace(/\b(?:meta[/-]llama|llama[ -]3|deepseek|qwen|gemini|nvidia|nemotron|gpt[ -]4|gpt[ -]3|chatgpt|claude|anthropic|mistral|alpaca|vicuna)\b/gi, '')
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
+    .replace(/\b(?:duckduckgo|bing|google\s+search|searxng|mojeek|wikipedia\s+api|hacker\s+news|reddit\s+api|guardian\s+api|cloudflare|workers?\s+ai|hugging\s*face|openrouter|instructpix2pix|stable\s+diffusion|flux[.\s])\b[^.\n]*/gi, '')
+    .replace(/\b(?:i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data))\b[^.\n]*/gi, '')
+    .replace(/\b(?:the\s+(?:web\s+)?search\s+results?\s+(?:show|indicate|reveal|say|confirm|suggest|mention|state|report))\b[^.\n]*/gi, '')
+    .replace(/\b(?:based\s+on\s+(?:my|the)\s+(?:training|knowledge)\s*(?:data)?)\b[^.\n]*/gi, '')
+    .replace(/\b(?:as\s+of\s+my\s+(?:knowledge\s+)?cutoff)\b[^.\n]*/gi, '')
+    .replace(/\b(?:last\s+(?:updated|trained|updated\s+in))\b[^.\n]*/gi, '')
+    .replace(/\bas\s+of\s+(?:my\s+)?(?:last\s+)?(?:knowledge\s+)?(?:cutoff\s+)?(?:in\s+)?\d{4}\b[^.\n]*/gi, '')
+    .replace(/\b(?:i\s+(?:don'?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b[^.\n]*/gi, '')
+    .replace(/\b(?:my\s+(?:training\s+)?(?:data|knowledge)\s+(?:is|was|has)\s+(?:limited|outdated|old|from))\b[^.\n]*/gi, '')
+    .replace(/\b(?:i\s+(?:cannot|can'?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b[^.\n]*/gi, '')
+    .replace(/\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b[^.\n]*/gi, '')
+    .replace(/\b(?:for\s+(?:the\s+)?(?:most|latest|accurate|current|up[- ]to[- ]date))\b[^.\n]*/gi, '')
+    .replace(/\b(?:as\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+language\s+model|assistant))\b[^.\n]*/gi, '')
+    .replace(/\b(?:i'?m\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+assistant))\b[^.\n]*/gi, '')
+    .replace(/\d{1,3}\.\d{1,6}\s*°?\s*[NSns]\s*[,\s]+\d{1,3}\.\d{1,6}\s*°?\s*[EWew]/g, '')
+    .replace(/\b(?:latitude|lat|lng|longitude)\s*[:=]?\s*-?\d{1,3}\.\d{1,6}/gi, '')
+    .replace(/\(\s*-?\d{1,3}\.\d{1,6}\s*,\s*-?\d{1,3}\.\d{1,6}\s*\)/g, '')
+    .replace(/\b\d{1,3}\.\d{4,6}\s*[°]\s*[NSns]\s*,\s*\d{1,3}\.\d{4,6}\s*[°]\s*[EWew]/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/\s{2,}/g, ' ')
     .trim();
