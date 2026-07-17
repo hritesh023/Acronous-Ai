@@ -654,10 +654,16 @@ function reformatCodeBlocks(content) {
     let fixed = code;
     if (language === 'python' || language === 'py') {
       fixed = reformatPython(fixed);
-    } else if (['javascript', 'js', 'typescript', 'ts'].includes(language)) {
+    } else if (['javascript', 'js', 'typescript', 'ts', 'jsx', 'tsx'].includes(language)) {
       fixed = reformatJS(fixed);
-    } else if (['java', 'c', 'cpp', 'csharp', 'cs', 'c#'].includes(language)) {
+    } else if (['java', 'c', 'cpp', 'csharp', 'cs', 'c#', 'go', 'rust', 'ruby', 'php',
+                'swift', 'kotlin', 'scala', 'groovy', 'dart', 'zig', 'nim', 'v',
+                'odin', 'julia', 'haskell', 'lua', 'r', 'matlab', 'perl'].includes(language)) {
       fixed = reformatBraceLanguage(fixed);
+    } else if (!language) {
+      if (/[{}]/.test(code) && code.split('{').length > 1) {
+        fixed = reformatBraceLanguage(fixed);
+      }
     }
     return '```' + lang + '\n' + fixed + '```';
   });
@@ -694,20 +700,40 @@ function reformatPython(code) {
   if (newlineCount > colonCount) return code;
   const stmts = splitPythonStatements(code);
   const INDENT = '    ';
-  let depth = 0;
   const result = [];
+  const scopeStack = [];
   const blockOpeners = /^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/;
   const blockClosers = /^(elif|else|except|finally)\b/;
+  const defLike = /^(def|async\s+def|class)\b/;
+  function kw(stmt) { return stmt.trim().split(/[\s(:]/)[0]; }
   for (const raw of stmts) {
     const trimmed = raw.trim();
     if (!trimmed) continue;
-    if (blockClosers.test(trimmed)) depth = Math.max(0, depth - 1);
-    result.push(INDENT.repeat(depth) + trimmed);
+    const currentKw = kw(trimmed);
+    if (blockClosers.test(trimmed)) {
+      const ck = currentKw;
+      if (ck === 'elif' || ck === 'else') {
+        while (scopeStack.length && !/^(if|elif)$/.test(scopeStack[scopeStack.length - 1])) scopeStack.pop();
+        if (scopeStack.length) scopeStack.pop();
+      } else if (ck === 'finally') {
+        while (scopeStack.length && !/^(except|try)$/.test(scopeStack[scopeStack.length - 1])) scopeStack.pop();
+        if (scopeStack.length) scopeStack.pop();
+      } else {
+        while (scopeStack.length && scopeStack[scopeStack.length - 1] !== 'try') scopeStack.pop();
+        if (scopeStack.length) scopeStack.pop();
+      }
+    }
+    if (blockOpeners.test(trimmed) && !blockClosers.test(trimmed)) {
+      if (defLike.test(currentKw)) {
+        while (scopeStack.length && scopeStack[scopeStack.length - 1] === currentKw) scopeStack.pop();
+      }
+    }
+    result.push(INDENT.repeat(scopeStack.length) + trimmed);
     if (blockOpeners.test(trimmed)) {
       const colonIdx = findBlockColon(trimmed);
       if (colonIdx >= 0) {
         const afterColon = trimmed.slice(colonIdx + 1).trim();
-        if (!afterColon || /^"""/.test(afterColon) || /^'''/.test(afterColon)) depth++;
+        if (!afterColon || /^"""/.test(afterColon) || /^'''/.test(afterColon)) scopeStack.push(currentKw);
       }
     }
   }
@@ -719,6 +745,8 @@ function splitPythonStatements(code) {
   let i = 0;
   const s = code;
   let parenDepth = 0;
+  const blockKw = /^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/;
+  const stmtKw = /^(return|yield|raise|import|from|global|nonlocal|assert|pass|break|continue|del)\b/;
   while (i < s.length) {
     const ch = s[i];
     if ((ch === '"' || ch === "'") && s.slice(i, i + 3) === ch.repeat(3)) {
@@ -751,12 +779,21 @@ function splitPythonStatements(code) {
       if (current.trim()) stmts.push(current.trim());
       current = ''; i++; continue;
     }
+    if (ch === ':' && parenDepth === 0) {
+      const before = current.trim();
+      if (blockKw.test(before)) {
+        current += ch;
+        stmts.push(current.trim());
+        current = '';
+        i++;
+        continue;
+      }
+    }
     if (parenDepth === 0 && /[a-zA-Z]/.test(ch)) {
       const prevCh = i > 0 ? s[i - 1] : '';
       if (!/[a-zA-Z0-9_]/.test(prevCh)) {
         const remaining = s.slice(i);
-        const blockMatch = remaining.match(/^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/);
-        if (blockMatch && current.trim()) {
+        if ((blockKw.test(remaining) || stmtKw.test(remaining)) && current.trim()) {
           stmts.push(current.trim());
           current = '';
           continue;
