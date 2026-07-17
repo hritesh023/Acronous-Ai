@@ -222,14 +222,14 @@ class MarkdownRenderer extends StatelessWidget {
     final headerColor = isDark ? const Color(0xFF1C1C35) : const Color(0xFFE4E1F2);
     final langColor = isDark ? const Color(0xFF505070) : const Color(0xFF6B6890);
     final codeColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9);
-    final scrollbarColor = isDark ? const Color(0xFF3A3A5C) : const Color(0xFFC4C0D6);
+    final borderColor = cs.outlineVariant.withValues(alpha: 0.3);
 
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
         color: bgColor,
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.3)),
+        border: Border.all(color: borderColor),
         borderRadius: BorderRadius.circular(10),
       ),
       clipBehavior: Clip.antiAlias,
@@ -241,8 +241,12 @@ class MarkdownRenderer extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
               color: headerColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(9),
+                topRight: Radius.circular(9),
+              ),
               border: Border(
-                bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.2)),
+                bottom: BorderSide(color: borderColor),
               ),
             ),
             child: Row(
@@ -282,29 +286,23 @@ class MarkdownRenderer extends StatelessWidget {
             ),
           ),
           ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 420),
+            constraints: const BoxConstraints(maxHeight: 400),
             child: Scrollbar(
               thumbVisibility: true,
-              radius: const Radius.circular(6),
-              thickness: 6,
-              child: Scrollbar(
-                thumbVisibility: true,
-                radius: const Radius.circular(6),
-                thickness: 6,
-                notificationPredicate: (notification) => notification.depth == 1,
+              radius: const Radius.circular(5),
+              thickness: 7,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.vertical,
                 child: SingleChildScrollView(
-                  scrollDirection: Axis.vertical,
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.all(14),
-                    child: SelectableText(
-                      node.text,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        color: codeColor,
-                        height: 1.55,
-                      ),
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.all(14),
+                  child: SelectableText(
+                    node.text,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: codeColor,
+                      height: 1.55,
                     ),
                   ),
                 ),
