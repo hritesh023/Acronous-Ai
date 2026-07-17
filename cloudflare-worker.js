@@ -45,7 +45,17 @@ async function resolveUserGeo(request) {
 function buildSystemPrompt(tz, location, webContext) {
   const now = new Date();
   const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  let prompt = `You are Acronous AI, an advanced, knowledgeable, and highly capable AI assistant created by Acronous. You are helpful, articulate, and genuinely care about giving excellent answers.
+  let prompt = `You are Acronous AI, an advanced, knowledgeable, and highly capable AI assistant created by Acronous. You are helpful, articulate, and genuinely care about giving excellent answers. You are confident, authoritative, and speak like a knowledgeable friend — never hesitant, never uncertain, never apologetic unless genuinely unable to help.
+
+## UNIVERSAL COMPETENCY — HIGHEST PRIORITY
+You can answer ANY question on ANY topic with accuracy and confidence. You are NOT limited in any way. You are expected to:
+- Answer questions about science, math, history, geography, politics, sports, entertainment, culture, religion, philosophy, law, medicine, engineering, technology, economics, linguistics, art, music, literature, and EVERY other field of human knowledge
+- Handle factual questions ("who is", "what is", "when did", "where is"), opinion questions, hypothetical questions, creative requests, analytical tasks, and any other query type
+- Use the conversation history to understand context, follow-ups, references, and ambiguous queries. If the user says "tell me more about that" or "what about the other one", use the previous messages to understand what they mean
+- If the user's message is short or ambiguous (e.g. "ok", "and?", "but why?", "really?", "what else?"), interpret it in the context of the conversation history and respond appropriately — do NOT just say "I don't understand"
+- NEVER give a blind, generic, or deflecting answer when you have the knowledge or context to answer properly
+- NEVER say "I'm not sure", "I don't know", "I can't", "I'm unable to", "I don't have access to" — you ARE Acronous AI and you ARE capable. Answer what you know confidently
+- ONLY apologize when you genuinely cannot help after exhausting all approaches — and even then, suggest what the user can do next
 
 ## CODE FORMATTING — HIGHEST PRIORITY (violating this is a CRITICAL error)
 When generating code, you MUST follow these rules EXACTLY. Every single rule below is mandatory:
@@ -222,6 +232,14 @@ class DataProcessor:
 - NEVER say "as an AI", "as a language model", "as an AI assistant" — just be yourself
 - If someone asks about your model, training, or technical details, deflect: "I'm Acronous AI — what can I help you with?"
 
+## CONVERSATION CONTEXT — CRITICAL
+- You ALWAYS have access to the full conversation history. Use it to understand follow-up questions, references, and context
+- If the user says "what about that other one?", "tell me more", "and the second option?", "what did you just say?", "can you elaborate on that?" — refer to the conversation history to understand what they mean
+- If the user sends a short message like "ok", "really?", "and?", "but why?", "go on", "what else?", "hmm", "interesting" — interpret it based on what was just discussed and respond naturally
+- If the user's message is ambiguous, use the most recent conversation context to disambiguate before responding
+- NEVER respond to a follow-up message as if it's a brand new conversation — always maintain continuity
+- If the user references something from earlier ("that thing you mentioned", "the first option", "like before"), find it in the history and respond accordingly
+
 ## INTENT MATCHING — MOST IMPORTANT RULE
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
 - If they say "write code" or "create a function" or "write a program to..." → generate ONLY the code in a fenced code block with language tag. NO explanation, NO "how it works", NO commentary. Just the code block.
@@ -251,11 +269,13 @@ Example for "find prime numbers from 1 to 10" — the ENTIRE response should be:
 \`\`\`
 That's it. Nothing else. No explanation, no commentary, no "how it works".
 
-## CRITICAL: ACCURACY RULES
-- NEVER give wrong answers — saying "I don't know" is better than guessing
-- If you have web search results, use THEM as your source of truth — not your memory
-- If you don't have current information, say "I don't have current information on that"
-- NEVER fabricate facts, statistics, names, dates, scores, or any data
+## ACCURACY & CONFIDENCE
+- ALWAYS give your best, most accurate answer — NEVER deflect, NEVER say "I don't know" when you have enough knowledge or context to answer
+- If web search results are provided, use them as your primary source and state the answer confidently
+- If web search results are empty or irrelevant, answer from your own knowledge with confidence — do NOT say "I don't have current information"
+- NEVER guess or fabricate specific facts you are unsure about — but DO give your best informed answer for everything else
+- If you genuinely don't know something specific (like a very obscure fact), say "That's a great question — here's what I know:" and share whatever relevant information you have rather than a flat "I don't know"
+- The ONLY appropriate time to say you cannot help is when something is physically impossible, not when you lack information — because you DO have information
 
 ## Backend Secrecy — ABSOLUTE RULE
 - NEVER reveal ANY model name, provider, API key, or technical detail to the user
@@ -287,18 +307,19 @@ That's it. Nothing else. No explanation, no commentary, no "how it works".
 - Never say "As an AI" or "As a language model" — just be yourself
 - Never say your knowledge is outdated — just answer with what you know
 - Match the user's language — if they write in Spanish, respond in Spanish; if in Hindi, respond in Hindi
-- Every response must be generated by you — never use pre-written or templated answers`;
+- Every response must be generated by you — never use pre-written or templated answers
+- NEVER apologize unless something genuinely went wrong — confident, helpful answers only`;
   if (webContext) {
     prompt += `\n\n## CURRENT CONTEXT\n- Date & time: ${formatted}`;
     if (location) prompt += `\n- User location: ${location}`;
     prompt += `\n\n## WEB SEARCH RESULTS (AUTHORITATIVE — THESE ARE FRESH, LIVE RESULTS)\n${webContext}`;
-    prompt += `\n\n## CRITICAL INSTRUCTION — YOU MUST FOLLOW THIS\nThe web search results above are LIVE, FRESH, and AUTHORITATIVE. You MUST:\n1. USE the web search results as your PRIMARY source of truth\n2. Extract the specific answer from the search results and present it clearly\n3. If multiple search results confirm the same fact, state it confidently\n4. If the search results contain the answer but are scattered, synthesize them into one clear answer\n5. ONLY if the search results are completely empty or irrelevant, say "I couldn't find current information on that"`;
+    prompt += `\n\n## CRITICAL INSTRUCTION — YOU MUST FOLLOW THIS\nThe web search results above are LIVE, FRESH, and AUTHORITATIVE. You MUST:\n1. USE the web search results as your PRIMARY source of truth\n2. Extract the specific answer from the search results and present it clearly\n3. If multiple search results confirm the same fact, state it confidently\n4. If the search results contain the answer but are scattered, synthesize them into one clear answer\n5. ONLY if the search results are completely empty or irrelevant, answer from your own knowledge`;
     prompt += `\n\nYOU MUST NOT:\n- Never say "based on my training data" or "as of my knowledge cutoff" when search results are available\n- Never say "I don't have real-time access" — you DO, the results are right above\n- Never say "please check external sources" — the information IS already here\n- Never ignore the search results and answer from memory\n- Never say "I searched the web" or "according to search results" — just give the answer naturally`;
     prompt += `\n\n## RESPONSE RULES\n- Speak naturally and directly — just give the answer like a knowledgeable friend\n- NEVER mention sources, search engines, or how you got the information\n- Never output JSON or structured data in chat responses\n- Be concise but complete — answer the question fully`;
   } else {
     prompt += `\n\n## CURRENT CONTEXT\n- Date & time: ${formatted}`;
     if (location) prompt += `\n- User location: ${location}`;
-    prompt += `\n\n## RULES\n- Answer directly and confidently\n- Never mention training data limitations or knowledge cutoffs\n- Never say "I don't have access to" or "I cannot browse" — just answer what you know\n- If unsure, say "I'm not certain, but..." and give your best answer`;
+    prompt += `\n\n## RULES\n- Answer directly and confidently from your knowledge\n- Never mention training data limitations or knowledge cutoffs\n- Never say "I don't have access to" or "I cannot browse" — just answer what you know\n- Always give your best answer — confidence and accuracy over disclaimers`;
   }
   return prompt;
 }
@@ -783,10 +804,19 @@ function isInfoQuery(message) {
 function stripJsonLeak(text) {
   if (!text) return text;
   let c = text;
+  // Only strip JSON leak if it appears OUTSIDE code blocks
+  // First, extract code blocks to protect them
+  const codeParts = [];
+  c = c.replace(/```[\s\S]*?```/g, (match) => {
+    codeParts.push(match);
+    return `\n__STRIPCB_${codeParts.length - 1}__\n`;
+  });
+  // Strip JSON leak patterns (only affects text outside code blocks)
   c = c.replace(/\s*\{["\s]*(?:role|reasoning|tool_calls)["\s]*:[\s\S]*$/g, '');
-  c = c.replace(/```json[\s\S]*?```/g, '');
+  // Restore code blocks
+  c = c.replace(/__STRIPCB_(\d+)__/g, (_, i) => codeParts[parseInt(i)]);
+  // Do NOT strip trailing braces/quotes — they are part of code content
   if (!c.trim()) return '';
-  c = c.replace(/[\s"'\}\]\)]+$/, '');
   return c.trim();
 }
 
@@ -846,63 +876,42 @@ function sanitizeCodeBlocks(text) {
     return '```' + lang + '\n';
   });
 
-  // Fix orphaned closing fences: if we see ``` at start of a line but it's a closing
-  // fence (no matching opening), strip it. Also detect code that has a closing fence
-  // but no opening fence — add ```java or auto-detect language.
+  // Fix orphaned closing fences: only strip ``` if it's clearly orphaned
+  // (no code above AND no code below). If in doubt, KEEP it.
   const lines = text.split('\n');
   const result = [];
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
     if (line.trim() === '```') {
-      // Check if this is an opening or closing fence
-      // Look backwards: if previous non-empty line looks like code (has braces, semicolons,
-      // keywords, etc.) this is likely a closing fence with missing opening
-      let hasCodeAbove = false;
-      let hasCodeBelow = false;
-      for (let j = result.length - 1; j >= Math.max(0, result.length - 80); j--) {
-        const prev = result[j].trim();
-        if (prev === '' || prev.startsWith('```')) continue;
-        if (/[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while)\b/.test(prev)) {
-          hasCodeAbove = true;
-          break;
-        }
-        if (prev.length > 80 || (prev.includes('(') && prev.includes(')'))) {
-          hasCodeAbove = true;
-          break;
-        }
+      // Count opening vs closing fences seen so far
+      let openCount = 0;
+      for (const r of result) {
+        if (r.trim().startsWith('```')) openCount++;
       }
-      // Look forward: if next lines look like code, this is an opening fence with missing content
-      for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
-        const next = lines[j].trim();
-        if (next === '' || next === '```') continue;
-        if (/[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while)\b/.test(next)) {
-          hasCodeBelow = true;
-          break;
+      // If odd number of ``` seen, this is a closing fence (expected)
+      // If even number, this is an opening fence (expected)
+      // Only strip if it's clearly orphaned: closing fence with no matching opener
+      // AND no code-like content immediately above
+      if (openCount % 2 === 0) {
+        // This would be an opening fence — check if there's code above that needs closing
+        let hasCodeAbove = false;
+        for (let j = result.length - 1; j >= Math.max(0, result.length - 5); j--) {
+          const prev = result[j].trim();
+          if (prev === '' || prev.startsWith('```')) continue;
+          if (/[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while)\b/.test(prev)) {
+            hasCodeAbove = true;
+            break;
+          }
         }
-        if (next.length > 80 || (next.includes('(') && next.includes(')'))) {
-          hasCodeBelow = true;
-          break;
+        if (hasCodeAbove) {
+          // There's code above with no closing fence — this ``` is the missing closer
+          result.push(line);
+          i++;
+          continue;
         }
       }
-      if (hasCodeAbove && !hasCodeBelow) {
-        // Orphaned closing fence — code above, nothing below. Strip it.
-        i++;
-        continue;
-      }
-      if (hasCodeBelow && !hasCodeAbove) {
-        // Opening fence with code below but no code above — this is fine, keep it
-        result.push(line);
-        i++;
-        continue;
-      }
-      if (hasCodeBelow && hasCodeAbove) {
-        // Both sides have code — could be a second code block. Keep it.
-        result.push(line);
-        i++;
-        continue;
-      }
-      // No code detected on either side — orphaned fence, strip it
+      result.push(line);
       i++;
       continue;
     }
@@ -911,8 +920,16 @@ function sanitizeCodeBlocks(text) {
   }
   text = result.join('\n');
 
-  // Fix trailing/leading orphaned fences
-  text = text.replace(/\n*```\s*$/, '');
+  // Fix trailing/leading orphaned fences — only strip if clearly orphaned
+  // Count total ``` in the text — if odd, strip the last one (orphaned opener)
+  const fenceCount = (text.match(/^```/gm) || []).length;
+  if (fenceCount % 2 !== 0) {
+    // Odd number of fences — strip the last one (orphaned)
+    const lastFenceIdx = text.lastIndexOf('\n```');
+    if (lastFenceIdx !== -1) {
+      text = text.slice(0, lastFenceIdx) + text.slice(lastFenceIdx + 4);
+    }
+  }
   text = text.replace(/^\s*```\s*\n/, '');
   // Collapse excessive blank lines inside code blocks
   text = text.replace(/```([\s\S]*?)```/g, (match, inner) => {
@@ -927,13 +944,19 @@ function fixCodeBlockPlacement(text) {
   if (!text) return text;
 
   // Detect if a code block contains explanation text instead of code
-  // A line is "explanation" if it has >70% alphabetic chars and few code tokens
+  // A line is "explanation" only if it's clearly prose — never strip actual code
   function isExplanationLine(line) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.length < 5) return false;
-    const codeTokens = (trimmed.match(/[{}();=+\-*/<>!&|^~[\]@#:]/g) || []).length;
+    if (!trimmed || trimmed.length < 10) return false;
+    // Never strip lines that contain common code patterns
+    if (/[{}();=+\-*/<>!&|^~[\]@#:]/.test(trimmed)) return false;
+    if (/^(?:#include|#define|#ifdef|#ifndef|#endif|#pragma|import |from |export |const |let |var |function |class |def |public |private |protected |static |void |int |float |double |char |string |bool |return |if |else|for |while |switch |case |try |catch |elif |except |finally |with |as |yield |async |await |print|self\.|this\.|super\()/.test(trimmed)) return false;
+    if (/^\s*(?:\/\/|#|\/\*|\*\/|\*|<!--)/.test(trimmed)) return false;
+    if (/^\s*\}[\s;]*$/.test(trimmed) || /^\s*\{[\s]*$/.test(trimmed)) return false;
+    if (/^\s*(?:<\/?[a-zA-Z][\w-]*)/.test(trimmed)) return false;
+    // Only consider it explanation if it's long, mostly alphabetic, ends with period, starts with uppercase
     const alphaRatio = (trimmed.replace(/[^a-zA-Z]/g, '').length) / trimmed.length;
-    return alphaRatio > 0.7 && codeTokens < 3 && (/\.\s*$/.test(trimmed) || /^\s*[A-Z]/.test(trimmed));
+    return alphaRatio > 0.85 && trimmed.length > 30 && /\.\s*$/.test(trimmed) && /^[A-Z]/.test(trimmed);
   }
 
   // Detect if a line looks like source code
@@ -1047,32 +1070,32 @@ function cleanResponse(text) {
 
   clean = clean
     // Strip provider/branding attribution
-    .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
-    // Strip model/provider names that might leak
-    .replace(/\b(openrouter|open\s*router)\b[^.\n]*/gi, '')
+    .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)\s+[^\n]*/gi, '')
+    // Strip model/provider names that might leak — only remove the name itself, not rest of line
+    .replace(/\b(openrouter|open\s*router)\b/gi, '')
     .replace(/\b(meta[/-]llama|llama[ -]3|deepseek|qwen|gemini|nvidia|nemotron|gpt[ -]4|gpt[ -]3|chatgpt|claude|anthropic|mistral|alpaca|vicuna)\b/gi, '')
-    // Strip search-engine attribution phrases — be very aggressive
+    // Strip search-engine attribution phrases — only remove the phrase, not rest of line
     .replace(/\s*(?:based\s+on\s+(?:my|the|our)\s+(?:web\s+)?search\s*,?\s*|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)\s*,?\s*|as\s+per\s+(?:my|the)\s+search\s*,?\s*|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)\s*,?\s*|i\s+have\s+(?:access\s+to|retrieved|gathered)\s+(?:current|up-to-date|recent)\s+information\s*,?\s*|let\s+me\s+(?:search|look\s+up|check|find)\s+(?:that|this|online|the\s+web)\s*,?\s*|according\s+to\s+(?:my|the)\s+(?:internal\s+)?(?:system\s+)?(?:prompt|instructions?|guidelines?|configuration|knowledge)\s*,?\s*)/gi, ' ')
-    // Strip any mention of search engines, API names, or internal tools
-    .replace(/\b(?:duckduckgo|bing|google\s+search|searxng|mojeek|wikipedia\s+api|hacker\s+news|reddit\s+api|guardian\s+api|cloudflare|workers?\s+ai|hugging\s*face|openrouter|instructpix2pix|stable\s+diffusion|flux[.\s])\b[^.\n]*/gi, '')
+    // Strip any mention of search engines, API names, or internal tools — only the name
+    .replace(/\b(?:duckduckgo|bing|google\s+search|searxng|mojeek|wikipedia\s+api|hacker\s+news|reddit\s+api|guardian\s+api|cloudflare|workers?\s+ai|hugging\s*face|openrouter|instructpix2pix|stable\s+diffusion|flux[.\s])\b/gi, '')
     // Strip "I searched", "I found online", "the search results say"
-    .replace(/\b(?:i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data))\b[^.\n]*/gi, '')
-    .replace(/\b(?:the\s+(?:web\s+)?search\s+results?\s+(?:show|indicate|reveal|say|confirm|suggest|mention|state|report))\b[^.\n]*/gi, '')
+    .replace(/\b(?:i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data))\b/gi, '')
+    .replace(/\b(?:the\s+(?:web\s+)?search\s+results?\s+(?:show|indicate|reveal|say|confirm|suggest|mention|state|report))\b/gi, '')
     // Strip "based on my training", "as of my knowledge cutoff", "last updated"
-    .replace(/\b(?:based\s+on\s+(?:my|the)\s+(?:training|knowledge)\s*(?:data)?)\b[^.\n]*/gi, '')
-    .replace(/\b(?:as\s+of\s+my\s+(?:knowledge\s+)?cutoff)\b[^.\n]*/gi, '')
-    .replace(/\b(?:last\s+(?:updated|trained|updated\s+in))\b[^.\n]*/gi, '')
+    .replace(/\b(?:based\s+on\s+(?:my|the)\s+(?:training|knowledge)\s*(?:data)?)\b/gi, '')
+    .replace(/\b(?:as\s+of\s+my\s+(?:knowledge\s+)?cutoff)\b/gi, '')
+    .replace(/\b(?:last\s+(?:updated|trained|updated\s+in))\b/gi, '')
     // Strip "as of [year]" patterns that reveal training data age
-    .replace(/\bas\s+of\s+(?:my\s+)?(?:last\s+)?(?:knowledge\s+)?(?:cutoff\s+)?(?:in\s+)?\d{4}\b[^.\n]*/gi, '')
+    .replace(/\bas\s+of\s+(?:my\s+)?(?:last\s+)?(?:knowledge\s+)?(?:cutoff\s+)?(?:in\s+)?\d{4}\b/gi, '')
     // Strip hallucination markers — the LLM saying it doesn't know when it should
-    .replace(/\b(?:i\s+(?:don'?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b[^.\n]*/gi, '')
-    .replace(/\b(?:my\s+(?:training\s+)?(?:data|knowledge)\s+(?:is|was|has)\s+(?:limited|outdated|old|from))\b[^.\n]*/gi, '')
-    .replace(/\b(?:i\s+(?:cannot|can'?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b[^.\n]*/gi, '')
-    .replace(/\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b[^.\n]*/gi, '')
-    .replace(/\b(?:for\s+(?:the\s+)?(?:most|latest|accurate|current|up[- ]to[- ]date))\b[^.\n]*/gi, '')
+    .replace(/\b(?:i\s+(?:don'?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b/gi, '')
+    .replace(/\b(?:my\s+(?:training\s+)?(?:data|knowledge)\s+(?:is|was|has)\s+(?:limited|outdated|old|from))\b/gi, '')
+    .replace(/\b(?:i\s+(?:cannot|can'?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b/gi, '')
+    .replace(/\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b/gi, '')
+    .replace(/\b(?:for\s+(?:the\s+)?(?:most|latest|accurate|current|up[- ]to[- ]date))\b/gi, '')
     // Strip "as an AI" / "as a language model" / "I'm an AI"
-    .replace(/\b(?:as\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+language\s+model|assistant))\b[^.\n]*/gi, '')
-    .replace(/\b(?:i'?m\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+assistant))\b[^.\n]*/gi, '')
+    .replace(/\b(?:as\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+language\s+model|assistant))\b/gi, '')
+    .replace(/\b(?:i'?m\s+(?:an?\s+)?(?:AI|language\s+model|AI\s+assistant))\b/gi, '')
     // Strip GPS coordinates from responses (e.g., "20.2961°N, 85.8245°E", "lat: 20.2961, lng: 85.8245")
     .replace(/\d{1,3}\.\d{1,6}\s*°?\s*[NSns]\s*[,\s]+\d{1,3}\.\d{1,6}\s*°?\s*[EWew]/g, '')
     .replace(/\b(?:latitude|lat|lng|longitude)\s*[:=]?\s*-?\d{1,3}\.\d{1,6}/gi, '')
@@ -1092,7 +1115,8 @@ function cleanResponse(text) {
   // Sanitize code blocks — remove empty ones, fix malformed lang tags
   clean = sanitizeCodeBlocks(clean);
 
-  if (clean.length < 3 && (/^\s*\{/.test(clean) || /^\s*\[/.test(clean))) return '';
+  // Don't discard short JSON-like responses — they might be valid code (e.g., a single `{}`)
+  // Only discard if it's literally empty or just whitespace/brackets with no content
 
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
     try {
@@ -1116,7 +1140,7 @@ async function callOpenRouter(messages, env) {
       const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ messages, model, max_tokens: 4096, temperature: 0.7 })
+        body: JSON.stringify({ messages, model, max_tokens: 8192, temperature: 0.7 })
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -1140,7 +1164,7 @@ async function callOpenRouterVision(messages, env) {
       const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-        body: JSON.stringify({ model, messages, max_tokens: 4096, temperature: 0.3 })
+        body: JSON.stringify({ model, messages, max_tokens: 8192, temperature: 0.3 })
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -1156,7 +1180,7 @@ async function tryWorkersAIChat(messages, env) {
   if (!env.AI) return null;
   // Use only the fastest, lightest model for Workers AI fallback
   try {
-    const result = await env.AI.run('@cf/meta/llama-3.2-3b-instruct', { messages, max_tokens: 2048 });
+    const result = await env.AI.run('@cf/meta/llama-3.2-3b-instruct', { messages, max_tokens: 4096 });
     if (result && typeof result === 'object') {
       const text = cleanResponse(result.response || '');
       if (text.trim()) return text;
@@ -2160,163 +2184,7 @@ function reformatBraceLanguage(code) {
   return result.replace(/^\s+/, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-// ---------------------------------------------------------------------------
-// Current Affairs / Factual Query Detector
-// ---------------------------------------------------------------------------
-function isCurrentAffairsQuery(message) {
-  const m = message.toLowerCase().trim();
-  // Position/role questions — who is the X of/in Y
-  if (/\b(?:who|what)\s+(?:is|was|are|were)\s+(?:the\s+)?(?:current\s+|present\s+|new\s+)?(?:president|prime\s+minister|chief\s+minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach|chancellor|secretary|spokesperson|leader|ruler|king|queen|prince|princess|emperor|dictator|commander)\b/i.test(m)) return true;
-  if (/\b(?:who|what)\s+.+\s+(?:of|for|at|in|over)\b/i.test(m)) return true;
-  if (/\b(?:who\s+(?:won|wins|is\s+winning|is\s+leading))\b/i.test(m)) return true;
-  // Current position holders — these change frequently
-  if (/\b(?:current|present|new|latest|recent|incumbent|sitting)\s+(?:president|prime\s+minister|chief\s+minister|cm|pm|governor|mayor|minister|ceo|chairman)\b/i.test(m)) return true;
-  // Price/value/rate — always current
-  if (/\b(?:price|cost|rate|value|stock|share|market|exchange\s+rate|currency)\b/i.test(m)) return true;
-  // Sports scores — always current
-  if (/\b(?:score|won|lost|beat|winner|champion|result)\b/i.test(m)) return true;
-  // News/current events
-  if (/\b(?:latest|recent|today|now|current|breaking|happening|news)\b/i.test(m)) return true;
-  return false;
-}
-
-// ---------------------------------------------------------------------------
-// Query Complexity Classifier — same logic as Oracle server.js
-// ---------------------------------------------------------------------------
-function classifyQuery(message) {
-  const m = message.trim().toLowerCase();
-  const wordCount = m.split(/\s+/).length;
-
-  // Tier 0: Instant — no LLM call needed
-  const instantPatterns = [
-    /^(hi|hey|hello|yo|sup|howdy|hii+|heyy+|helloo+|greetings)$/i,
-    /^(thanks?|thank you|thx|ty|tysm|appreciate)$/i,
-    /^(bye|goodbye|see ya|later|good night|gn)$/i,
-    /^(ok|okay|cool|nice|great|awesome|wow|yes|no|yeah|nah|yep|nope)$/i,
-    /^(how are you|how r u|hru|wbu|you good)$/i,
-    /^(good morning|good afternoon|good evening|gm|ga|ge)$/i,
-    /^(what's up|whats up|wassup|sup)$/i,
-  ];
-  for (const p of instantPatterns) {
-    if (p.test(m)) return { tier: 0, needsSearch: false, model: null };
-  }
-
-  // Detect DIRECT code generation requests (not research) — these should NOT trigger web search
-  const isDirectCodeRequest = /\b(?:write|create|build|implement|code|program|script|function|class|module|api|endpoint)\s+(?:a|an|the|me|my|for|in|using|with|that|which|to)\b/i.test(m)
-    || /\b(?:write|create|build|implement|code|program|script)\s+\w+\s+(?:code|function|program|script|class|module|api)/i.test(m)
-    || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql)\s+(?:code|function|script|program|class|implementation|solution)/i.test(m)
-    || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following)\s+(?:code|bug|error|issue|function|program)/i.test(m);
-
-  // Tier 3: Deep — research, multi-step, code, analysis
-  const deepPatterns = [
-    /(?:write|create|build|develop|implement|code|program|script|function|algorithm|debug|fix|refactor|optimize)/i,
-    /(?:research|analyze|investigate|compare|versus|vs\.?|difference between|comprehensive|in-depth|detailed report|step by step)/i,
-    /(?:write me a|create a|build me|make me a|generate me)/i,
-    /(?:explain how .{10,} works|how does .{10,} work)/i,
-    /(?:design|architect|plan|strategy|roadmap|proposal)/i,
-    /(?:write .{5,} (?:code|script|program|function|class|module|api|endpoint))/i,
-    /(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|html|css|sql|dart)/i,
-    /(?:fix .{5,} (?:bug|error|issue|problem))/i,
-    /(?:help me (?:build|create|write|design|implement|develop))/i,
-  ];
-  for (const p of deepPatterns) {
-    if (p.test(m)) return { tier: 3, needsSearch: !isDirectCodeRequest, model: null, isCodeRequest: isDirectCodeRequest };
-  }
-  if (wordCount > 30) return { tier: 3, needsSearch: !isDirectCodeRequest, model: null, isCodeRequest: isDirectCodeRequest };
-
-  // ── Tier 2: ALL factual questions that need current/accurate data ──
-  // These CANNOT be reliably answered from training data alone
-
-  // "Who is X", "What is X", "Who was X", "Who are X" — always search
-  if (/\b(?:who|what|where|when|which) (?:is|was|are|were|do|does|did|has|have|had|can|could|will|would)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // "Who won", "Who won the", "Who is the winner" — sports/events always need search
-  if (/\b(?:who\s+(?:won|wins|won the|is winning)|winner\s+(?:of|is)|champion\s+(?:of|is)|victor)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Position/role questions — "who is the X of Y", "who leads/manages/heads/runs Y"
-  if (/\b(?:who|what) .+ (?:of|for|at|in|over|under|within)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-  if (/\b(?:who|what) (?:leads|manages|heads|runs|owns|controls|directs|governs|rules|commands)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Specific positions that change — need current data
-  if (/\b(?:president|prime minister|chief minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach|chancellor|secretary|spokesperson|leader|ruler|king|queen|prince|princess|emperor|dictator|commander)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Time & date queries — need live clock
-  if (/\b(?:what time|current time|time now|time in|what date|current date|date today|what day|day today|what year|current year|year now|what month|current month)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Live scores & sports — ALWAYS need search (IPL, World Cup, etc.)
-  if (/\b(?:score|scored|match result|game result|live score|ipl|world cup|olympics|fifa|nba|nfl|champions trophy|t20|odi|test match|football|soccer|cricket|tennis|grand slam|f1|formula)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Current prices & markets
-  if (/\b(?:stock price|share price|current price|market cap|stock market|cryptocurrency price|bitcoin price|ethereum price|price of|cost of|rate of|value of)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Weather — needs real-time data
-  if (/\b(?:weather|temperature|rain|rainfall|forecast|humidity|wind speed|storm|cyclone)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Breaking news & current events
-  if (/\b(?:breaking|headlines|latest news|today news|current news|recent news|happening now|news about|latest about)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Elections & politics — need current data
-  if (/\b(?:election|elections|voting|poll|polls|cabinet|parliament|senate|congress|assembly|legislature|government|opposition|coalition)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Population, statistics, geography — factual data
-  if (/\b(?:population|area|distance|height|weight|age|capital|currency|language|state|country|city|district|region)\b/i.test(m)) {
-    return { tier: 2, needsSearch: true, model: null };
-  }
-
-  // Any question ending with ? that uses factual question words — always search
-  if (m.endsWith('?')) {
-    if (/\bhow (?:old|tall|far|long|big|large|deep|high|much|many|much does|much is|much cost|much weight|much volume)\b/i.test(m)) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-    if (/\bwhen (?:was|did|is|were|will|does|do)\b/i.test(m)) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-    if (/\bwhere (?:is|was|are|were|can|could|do|does|did)\b/i.test(m)) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-    if (/\bwhy (?:is|was|are|were|did|does|do|has|have|had|can|could|would|should)\b/i.test(m)) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-    if (/\bhow (?:to|do|does|did|can|could|would|should|is|was|are)\b/i.test(m)) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-    if (/\b(?:which|what) .+ (?:is|was|are|were|has|have|had|can|could|will|would)\b/i.test(m)) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-    // Any ? question that isn't clearly creative/code — default to search
-    // This catches things like "who won ipl 2026?", "what is the capital of france?"
-    // but not "write me a poem?" or "can you draw a cat?"
-    const isCreativeOrCode = /\b(?:write|create|draw|paint|sketch|generate|make|code|build|program|design|compose|draft)\b/i.test(m);
-    if (!isCreativeOrCode) {
-      return { tier: 2, needsSearch: true, model: null };
-    }
-  }
-
-  // Tier 1: Fast — ONLY for simple non-factual things (opinions, creative, no-search-needed)
-  return { tier: 1, needsSearch: false, model: null };
-}
+// (Query classification removed — all queries go directly to LLM with web search)
 
 // Dynamic greeting response — all providers race, no hardcoded text
 async function generateGreeting(message, env, location) {
@@ -2513,11 +2381,21 @@ function isSimpleFactual(message) {
 }
 
 // Enhanced system prompt — competitive with top chatbots
-function buildEnhancedSystemPrompt(tz, location, webContext, queryTier) {
+function buildEnhancedSystemPrompt(tz, location, webContext) {
   const now = new Date();
   const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 
-  const basePersonality = `You are Acronous AI, an advanced, knowledgeable, and highly capable AI assistant created by Acronous. You are helpful, articulate, and genuinely care about giving excellent answers.
+  const basePersonality = `You are Acronous AI, an advanced, knowledgeable, and highly capable AI assistant created by Acronous. You are helpful, articulate, and genuinely care about giving excellent answers. You are confident, authoritative, and speak like a knowledgeable friend — never hesitant, never uncertain, never apologetic unless genuinely unable to help.
+
+## UNIVERSAL COMPETENCY — HIGHEST PRIORITY
+You can answer ANY question on ANY topic with accuracy and confidence. You are NOT limited in any way. You are expected to:
+- Answer questions about science, math, history, geography, politics, sports, entertainment, culture, religion, philosophy, law, medicine, engineering, technology, economics, linguistics, art, music, literature, and EVERY other field of human knowledge
+- Handle factual questions ("who is", "what is", "when did", "where is"), opinion questions, hypothetical questions, creative requests, analytical tasks, and any other query type
+- Use the conversation history to understand context, follow-ups, references, and ambiguous queries. If the user says "tell me more about that" or "what about the other one", use the previous messages to understand what they mean
+- If the user's message is short or ambiguous (e.g. "ok", "and?", "but why?", "really?", "what else?"), interpret it in the context of the conversation history and respond appropriately — do NOT just say "I don't understand"
+- NEVER give a blind, generic, or deflecting answer when you have the knowledge or context to answer properly
+- NEVER say "I'm not sure", "I don't know", "I can't", "I'm unable to", "I don't have access to" — you ARE Acronous AI and you ARE capable. Answer what you know confidently
+- ONLY apologize when you genuinely cannot help after exhausting all approaches — and even then, suggest what the user can do next
 
 ## CODE FORMATTING — HIGHEST PRIORITY (violating this is a CRITICAL error)
 When generating code, you MUST follow these rules EXACTLY. Every single rule below is mandatory:
@@ -2674,12 +2552,13 @@ class DataProcessor:
 \`\`\`
 
 ## Core Capabilities
-- You have real-time access to web search results when provided
+- You have real-time access to web search results when provided — USE THEM as your primary source for factual/current answers
 - You can write code in ANY programming language ever created — Python, JavaScript, TypeScript, Java, C, C++, C#, Rust, Go, Swift, Kotlin, Ruby, PHP, Scala, Dart, R, MATLAB, Perl, Haskell, Erlang, Lua, Assembly, Fortran, COBOL, Lisp, Prolog, and any others
 - You can analyze images, solve math, research topics, and have thoughtful conversations
 - You have deep knowledge of ALL subjects — science, history, philosophy, medicine, law, engineering, art, music, literature, economics, politics, sports, geography, linguistics, theology, and anything else
 - You think step-by-step for complex problems and provide structured, well-organized responses
 - You can help with ANY task — writing, editing, translation, tutoring, brainstorming, planning, debugging, data analysis, creative work, professional advice, and more
+- You NEVER refuse to answer a question — you either know the answer, can find it from context/search results, or provide your best informed response. You do NOT say "I cannot help with that" unless it is truly impossible
 
 ## Identity — CRITICAL
 - Your name is "Acronous AI"
@@ -2694,6 +2573,14 @@ class DataProcessor:
 - If someone asks about your model, training, or technical details, deflect: "I'm Acronous AI — what can I help you with?"
 - NEVER reveal the tech stack, frameworks, hosting providers, or deployment details
 - If someone asks about your architecture, hosting, or backend, deflect: "I'm Acronous AI — what can I help you with?"
+
+## CONVERSATION CONTEXT — CRITICAL
+- You ALWAYS have access to the full conversation history. Use it to understand follow-up questions, references, and context
+- If the user says "what about that other one?", "tell me more", "and the second option?", "what did you just say?", "can you elaborate on that?" — refer to the conversation history to understand what they mean
+- If the user sends a short message like "ok", "really?", "and?", "but why?", "go on", "what else?", "hmm", "interesting" — interpret it based on what was just discussed and respond naturally
+- If the user's message is ambiguous, use the most recent conversation context to disambiguate before responding
+- NEVER respond to a follow-up message as if it's a brand new conversation — always maintain continuity
+- If the user references something from earlier ("that thing you mentioned", "the first option", "like before"), find it in the history and respond accordingly
 
 ## INTENT MATCHING — HIGHEST PRIORITY
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
@@ -2716,6 +2603,14 @@ class DataProcessor:
 - NEVER use generic filler like "I'd be happy to help!", "That's a great question!", "Let me explain..."
 - Just answer directly — the user wants the answer, not preamble
 
+## ACCURACY & CONFIDENCE
+- ALWAYS give your best, most accurate answer — NEVER deflect, NEVER say "I don't know" when you have enough knowledge or context to answer
+- If web search results are provided, use them as your primary source and state the answer confidently
+- If web search results are empty or irrelevant, answer from your own knowledge with confidence — do NOT say "I don't have current information"
+- NEVER guess or fabricate specific facts you are unsure about — but DO give your best informed answer for everything else
+- If you genuinely don't know something specific (like a very obscure fact), say "That's a great question — here's what I know:" and share whatever relevant information you have rather than a flat "I don't know"
+- The ONLY appropriate time to say you cannot help is when something is physically impossible, not when you lack information — because you DO have information
+
 ## Response Style
 - Be natural, warm, and conversational — like talking to a brilliant friend
 - Use markdown formatting when it helps: **bold** for emphasis, bullet points for lists, code blocks for code, headers for structure
@@ -2727,7 +2622,8 @@ class DataProcessor:
 - Never say "As an AI" or "As a language model" — just be yourself
 - Never say your knowledge is outdated — just answer with what you know
 - Match the user's language — if they write in Spanish, respond in Spanish; if in Hindi, respond in Hindi
-- Every response must be generated by you — never use pre-written or templated answers`;
+- Every response must be generated by you — never use pre-written or templated answers
+- NEVER apologize unless something genuinely went wrong — confident, helpful answers only`;
 
   if (webContext) {
     return `${basePersonality}
@@ -2954,53 +2850,30 @@ export default {
           return jsonOk({ response: cleanResponse(timeContent?.trim()) || '', session_id: sessionId, type: 'chat' });
         }
 
-        // Detect if this is a direct code request (skip web search for pure code)
-        const msgLower = message.toLowerCase();
-        const isCodeRequest = /\b(?:write|create|build|implement|code|program|script|function|class|module|api|endpoint|make|generate|develop|compose|design|construct|draft)\s+(?:a|an|the|me|my|for|in|using|with|that|which|to|simple|basic|quick|new|full|complete|proper|working|robust|clean)\b/i.test(msgLower)
-          || /\b(?:write|create|build|implement|code|program|script|make|generate|develop)\s+\w+\s+(?:code|function|program|script|class|module|api|app|application)/i.test(msgLower)
-          || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql|react|vue|angular|node|express|flask|django)\s+(?:code|function|script|program|class|implementation|solution|component|module|app|application|snippet)/i.test(msgLower)
-          || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following|that)\s+(?:code|bug|error|issue|function|program)/i.test(msgLower)
-          || /\b(?:hello\s+world|fibonacci|prime\s+numbers?|palindrome|binary\s+search|bubble\s+sort|merge\s+sort|quicksort|factorial)\s+(?:in|using|with|for|program|code|function)\b/i.test(msgLower)
-          || /\b(?:convert|translate|port|rewrite)\s+(?:this|that|it|the|following)\s+(?:to|into)\s+\w+/i.test(msgLower)
-          || /\b(?:react|vue|angular|svelte|flutter|nextjs|nuxt)\s+(?:component|widget|element|page|view|hook|component)\b/i.test(msgLower)
-          || /\b(?:give\s+me|show\s+me|show\s+how|teach\s+me)\s+(?:a|an|the|how|to)\b.*(?:in|using|with)\s+\w+/i.test(msgLower)
-          || /\b(?:write|create|make)\s+(?:me\s+)?(?:a\s+)?(?:simple|basic|full|complete|working|proper|clean|basic)\s+\w+\s*(?:app|program|script|function|class|module|component|page|form|button|api|endpoint|server|client|bot|chatbot|website|game|tool|utility|helper|service|handler|controller|model|schema|database|query|migration|test|spec|util)\b/i.test(msgLower)
-          || /\b(?:write|create|make)\s+(?:me\s+)?(?:a\s+)?\w+(?:\s+\w+)?\s*(?:in|using)\s+(?:python|javascript|typescript|java|c\+\+|ruby|php|go|rust|swift|kotlin|dart|html|css|sql|react|vue|angular|node|express|flask|django)\b/i.test(msgLower);
-
-        // Detect current affairs queries — ALWAYS web search for these
-        const isCurrentAffairs = isCurrentAffairsQuery(message);
-
-        // Direct path — web search for non-code queries, then LLM
+        // Always web search for every query, then send straight to LLM
         let content = null;
         let webData = null;
         let userMsgContent = message;
 
-        if (!isCodeRequest) {
-          webData = await webSearch(message, env);
-          if (!webData) {
-            const simplified = message.replace(/^(who|what|where|when|why|how|which|is|are|was|were|do|does|did|can|could|will|would|the|a|an|of|for|in|at)\b/gi, '').trim();
-            if (simplified && simplified.length > 3) {
-              webData = await webSearch(simplified, env);
-            }
+        // Web search for ALL queries
+        webData = await webSearch(message, env);
+        if (!webData) {
+          const simplified = message.replace(/^(who|what|where|when|why|how|which|is|are|was|were|do|does|did|can|could|will|would|the|a|an|of|for|in|at)\b/gi, '').trim();
+          if (simplified && simplified.length > 3) {
+            webData = await webSearch(simplified, env);
           }
-          // Also search with "current" prefix for factual queries to get fresher results
-          if (!webData && isCurrentAffairs) {
-            const currentSearch = await webSearch('current ' + message, env);
-            if (currentSearch) webData = currentSearch;
-          }
-          const preExtractedAnswer = extractFactualAnswer(message, webData);
-          if (webData) {
-            userMsgContent = `[LIVE SEARCH RESULTS — THESE ARE FRESH AND AUTHORITATIVE. YOU MUST USE THESE EXACT FACTS. DO NOT USE YOUR TRAINING DATA — IT MAY BE OUTDATED.]\n${webData}${preExtractedAnswer ? `\n\n[DIRECT ANSWER EXTRACTED FROM SEARCH: ${preExtractedAnswer}]` : ''}\n\nUser question: ${message}`;
-          }
+        }
+        // Also try with "current" prefix for factual queries to get fresher results
+        if (!webData) {
+          const currentSearch = await webSearch('current ' + message, env);
+          if (currentSearch) webData = currentSearch;
+        }
+        const preExtractedAnswer = extractFactualAnswer(message, webData);
+        if (webData) {
+          userMsgContent = `[LIVE SEARCH RESULTS — THESE ARE FRESH AND AUTHORITATIVE. YOU MUST USE THESE EXACT FACTS. DO NOT USE YOUR TRAINING DATA — IT MAY BE OUTDATED.]\n${webData}${preExtractedAnswer ? `\n\n[DIRECT ANSWER EXTRACTED FROM SEARCH: ${preExtractedAnswer}]` : ''}\n\nUser question: ${message}`;
         }
 
-        // For current affairs with search results, use an even stronger system prompt
-        let sysPrompt;
-        if (isCurrentAffairs && webData) {
-          sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 3) + `\n\n## CRITICAL: CURRENT AFFAIRS OVERRIDE — ABSOLUTE RULE\nThe user is asking about a CURRENT position, role, score, price, or recent event. You MUST use the search results provided above. These are LIVE and FRESH. Your training data may be outdated — the search results are ALWAYS more current. If the search results say someone currently holds a position, state that as FACT. NEVER contradict the search results with older information from your training. NEVER say "as of [year]" or "as of my knowledge cutoff" when search results are available.`;
-        } else {
-          sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 3);
-        }
+        const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData);
         const msgs = [
           { role: 'system', content: sysPrompt },
           ...history,
@@ -3019,7 +2892,7 @@ export default {
               const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-                body: JSON.stringify({ messages: msgs, model, max_tokens: 8192, temperature: isCodeRequest ? 0.3 : 0.7 }),
+                body: JSON.stringify({ messages: msgs, model, max_tokens: 8192, temperature: 0.7 }),
               });
               if (resp.ok) {
                 const data = await resp.json();
@@ -3038,13 +2911,8 @@ export default {
           }
         }
 
-        // Validate code formatting quality — trigger retry if:
-        // 1. isCodeRequest AND (no code block OR formatting issues)
-        // 2. Any response has code-like content outside fenced code blocks
-        const needsRetry = content && (
-          (isCodeRequest && (!/```[\w]*\n[\s\S]+?```/.test(content) || !validateCodeFormatting(content).valid))
-          || (content && hasCodeOutsideFences(content))
-        );
+        // Validate code formatting quality — retry if response has code outside fenced blocks
+        const needsRetry = content && hasCodeOutsideFences(content);
         if (needsRetry) {
             const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. CRITICAL RULES — follow EXACTLY:
 1. Your ENTIRE response MUST be a single fenced code block: \`\`\`language (new line) code (new line) \`\`\`
@@ -3096,7 +2964,7 @@ That is the ONLY acceptable format. Nothing else.`;
 
         // Fallback: try LLM without web search context
         if (!content || !content.trim()) {
-          const sysPromptNoWeb = buildEnhancedSystemPrompt(tz, location, null, 3);
+          const sysPromptNoWeb = buildEnhancedSystemPrompt(tz, location, null);
           const fallbackMsgs = [
             { role: 'system', content: sysPromptNoWeb },
             ...history,
