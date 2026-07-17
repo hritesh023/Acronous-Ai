@@ -9,7 +9,8 @@ class MarkdownRenderer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final nodes = _parseMarkdown(content);
+    final fixed = _preprocessCodeBlocks(content);
+    final nodes = _parseMarkdown(fixed);
     return SizedBox(
       width: double.infinity,
       child: Column(
@@ -17,6 +18,50 @@ class MarkdownRenderer extends StatelessWidget {
         children: nodes.map((node) => _buildNode(node, context, cs)).toList(),
       ),
     );
+  }
+
+  static final _codeIndicator = RegExp(
+    r'[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while|return)\b',
+  );
+
+  String _preprocessCodeBlocks(String text) {
+    final lines = text.split('\n');
+    final result = <String>[];
+    int i = 0;
+    while (i < lines.length) {
+      final line = lines[i];
+      if (line.trim() == '```') {
+        // Check if this is an orphaned closing fence
+        bool hasCodeAbove = false;
+        for (int j = result.length - 1; j >= 0 && j >= result.length - 80; j--) {
+          final prev = result[j].trim();
+          if (prev.isEmpty || prev.startsWith('```')) continue;
+          if (_codeIndicator.hasMatch(prev) || prev.length > 80 ||
+              (prev.contains('(') && prev.contains(')'))) {
+            hasCodeAbove = true;
+            break;
+          }
+        }
+        bool hasCodeBelow = false;
+        for (int j = i + 1; j < lines.length && j < i + 80; j++) {
+          final next = lines[j].trim();
+          if (next.isEmpty || next == '```') continue;
+          if (_codeIndicator.hasMatch(next) || next.length > 80 ||
+              (next.contains('(') && next.contains(')'))) {
+            hasCodeBelow = true;
+            break;
+          }
+        }
+        if (hasCodeAbove && !hasCodeBelow) {
+          // Orphaned closing fence — skip it
+          i++;
+          continue;
+        }
+      }
+      result.add(line);
+      i++;
+    }
+    return result.join('\n');
   }
 
   static const _validLangs = {

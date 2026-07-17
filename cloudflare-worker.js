@@ -65,6 +65,23 @@ When generating code, you MUST follow these rules EXACTLY. Every single rule bel
 12. NEVER output empty code blocks — every \`\`\` block MUST contain actual code
 13. NEVER generate duplicate code blocks — one code block per code snippet
 
+### CRITICAL: Code Block Format (MANDATORY)
+When the user asks for code, your response MUST look EXACTLY like this:
+\`\`\`java
+// code here
+\`\`\`
+
+NOT like this (WRONG — missing opening fence):
+// code here
+\`\`\`
+
+NOT like this (WRONG — explanation in the lang tag):
+\`\`\`Here is the Java code:
+// code here
+\`\`\`
+
+The \`\`\` MUST appear on its own line, followed by ONLY the language name (e.g. java, python, javascript), then the code, then \`\`\` to close.
+
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
 - JavaScript/TypeScript: 2 spaces per indentation level
@@ -744,6 +761,72 @@ function sanitizeCodeBlocks(text) {
   // Fix code blocks where the lang tag is a sentence (>20 chars or contains spaces)
   text = text.replace(/```([^\n]{21,})\n/g, () => '```\n');
   text = text.replace(/```([^\s`]{1,20}\s+[^\n]+)\n/g, () => '```\n');
+
+  // Fix orphaned closing fences: if we see ``` at start of a line but it's a closing
+  // fence (no matching opening), strip it. Also detect code that has a closing fence
+  // but no opening fence — add ```java or auto-detect language.
+  const lines = text.split('\n');
+  const result = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim() === '```') {
+      // Check if this is an opening or closing fence
+      // Look backwards: if previous non-empty line looks like code (has braces, semicolons,
+      // keywords, etc.) this is likely a closing fence with missing opening
+      let hasCodeAbove = false;
+      let hasCodeBelow = false;
+      for (let j = result.length - 1; j >= Math.max(0, result.length - 80); j--) {
+        const prev = result[j].trim();
+        if (prev === '' || prev.startsWith('```')) continue;
+        if (/[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while)\b/.test(prev)) {
+          hasCodeAbove = true;
+          break;
+        }
+        if (prev.length > 80 || (prev.includes('(') && prev.includes(')'))) {
+          hasCodeAbove = true;
+          break;
+        }
+      }
+      // Look forward: if next lines look like code, this is an opening fence with missing content
+      for (let j = i + 1; j < Math.min(lines.length, i + 80); j++) {
+        const next = lines[j].trim();
+        if (next === '' || next === '```') continue;
+        if (/[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while)\b/.test(next)) {
+          hasCodeBelow = true;
+          break;
+        }
+        if (next.length > 80 || (next.includes('(') && next.includes(')'))) {
+          hasCodeBelow = true;
+          break;
+        }
+      }
+      if (hasCodeAbove && !hasCodeBelow) {
+        // Orphaned closing fence — code above, nothing below. Strip it.
+        i++;
+        continue;
+      }
+      if (hasCodeBelow && !hasCodeAbove) {
+        // Opening fence with code below but no code above — this is fine, keep it
+        result.push(line);
+        i++;
+        continue;
+      }
+      if (hasCodeBelow && hasCodeAbove) {
+        // Both sides have code — could be a second code block. Keep it.
+        result.push(line);
+        i++;
+        continue;
+      }
+      // No code detected on either side — orphaned fence, strip it
+      i++;
+      continue;
+    }
+    result.push(line);
+    i++;
+  }
+  text = result.join('\n');
+
   // Fix trailing/leading orphaned fences
   text = text.replace(/\n*```\s*$/, '');
   text = text.replace(/^\s*```\s*\n/, '');
@@ -2110,6 +2193,23 @@ When generating code, you MUST follow these rules EXACTLY. Every single rule bel
 11. NEVER put explanation text after \`\`\` — ONLY a short language identifier goes there (e.g. \`\`\`python, NOT \`\`\`Here is the code:)
 12. NEVER output empty code blocks — every \`\`\` block MUST contain actual code
 13. NEVER generate duplicate code blocks — one code block per code snippet
+
+### CRITICAL: Code Block Format (MANDATORY)
+When the user asks for code, your response MUST look EXACTLY like this:
+\`\`\`java
+// code here
+\`\`\`
+
+NOT like this (WRONG — missing opening fence):
+// code here
+\`\`\`
+
+NOT like this (WRONG — explanation in the lang tag):
+\`\`\`Here is the Java code:
+// code here
+\`\`\`
+
+The \`\`\` MUST appear on its own line, followed by ONLY the language name (e.g. java, python, javascript), then the code, then \`\`\` to close.
 
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
