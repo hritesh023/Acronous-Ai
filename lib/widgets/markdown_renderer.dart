@@ -217,101 +217,7 @@ class MarkdownRenderer extends StatelessWidget {
   }
 
   Widget _buildCodeBlock(_MdNode node, BuildContext context, ColorScheme cs) {
-    final isDark = cs.brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF12122A) : const Color(0xFFF0EEF8);
-    final headerColor = isDark ? const Color(0xFF1C1C35) : const Color(0xFFE4E1F2);
-    final langColor = isDark ? const Color(0xFF505070) : const Color(0xFF6B6890);
-    final codeColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9);
-    final borderColor = cs.outlineVariant.withValues(alpha: 0.3);
-
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 10),
-      decoration: BoxDecoration(
-        color: bgColor,
-        border: Border.all(color: borderColor),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            decoration: BoxDecoration(
-              color: headerColor,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(9),
-                topRight: Radius.circular(9),
-              ),
-              border: Border(
-                bottom: BorderSide(color: borderColor),
-              ),
-            ),
-            child: Row(
-              children: [
-                Text(
-                  node.lang.isNotEmpty ? node.lang : 'code',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: langColor,
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const Spacer(),
-                GestureDetector(
-                  onTap: () {
-                    Clipboard.setData(ClipboardData(text: node.text));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: const Text('Code copied'),
-                        behavior: SnackBarBehavior.floating,
-                        duration: const Duration(seconds: 1),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                    );
-                  },
-                  child: Icon(
-                    Icons.content_copy_rounded,
-                    size: 14,
-                    color: langColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 400),
-            child: Scrollbar(
-              thumbVisibility: true,
-              radius: const Radius.circular(5),
-              thickness: 7,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.vertical,
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.all(14),
-                  child: SelectableText(
-                    node.text,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      color: codeColor,
-                      height: 1.55,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    return _CodeBlockWidget(node: node, cs: cs);
   }
 
   Widget _buildListItems(String text, BuildContext context, ColorScheme cs) {
@@ -501,6 +407,140 @@ class MarkdownRenderer extends StatelessWidget {
     }
 
     return spans;
+  }
+}
+
+class _CodeBlockWidget extends StatefulWidget {
+  final _MdNode node;
+  final ColorScheme cs;
+
+  const _CodeBlockWidget({required this.node, required this.cs});
+
+  @override
+  State<_CodeBlockWidget> createState() => _CodeBlockWidgetState();
+}
+
+class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
+  late final ScrollController _horizontalScrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _horizontalScrollController = ScrollController();
+  }
+
+  @override
+  void dispose() {
+    _horizontalScrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final node = widget.node;
+    final cs = widget.cs;
+    final isDark = cs.brightness == Brightness.dark;
+    final bgColor = isDark ? const Color(0xFF12122A) : const Color(0xFFF0EEF8);
+    final headerColor = isDark ? const Color(0xFF1C1C35) : const Color(0xFFE4E1F2);
+    final langColor = isDark ? const Color(0xFF505070) : const Color(0xFF6B6890);
+    final codeColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9);
+    final borderColor = cs.outlineVariant.withValues(alpha: 0.3);
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: bgColor,
+        border: Border.all(color: borderColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: headerColor,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(9),
+                topRight: Radius.circular(9),
+              ),
+              border: Border(
+                bottom: BorderSide(color: borderColor),
+              ),
+            ),
+            child: Row(
+              children: [
+                Text(
+                  node.lang.isNotEmpty ? node.lang : 'code',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: langColor,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const Spacer(),
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: node.text));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: const Text('Code copied'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: const Duration(seconds: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                    );
+                  },
+                  child: Icon(
+                    Icons.content_copy_rounded,
+                    size: 14,
+                    color: langColor,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 400),
+            child: Scrollbar(
+              thumbVisibility: true,
+              radius: const Radius.circular(5),
+              thickness: 7,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.vertical,
+                child: Scrollbar(
+                  controller: _horizontalScrollController,
+                  thumbVisibility: true,
+                  radius: const Radius.circular(5),
+                  thickness: 7,
+                  child: SingleChildScrollView(
+                    controller: _horizontalScrollController,
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.all(14),
+                    child: SelectableText(
+                      node.text,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        color: codeColor,
+                        height: 1.55,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

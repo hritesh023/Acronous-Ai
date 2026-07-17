@@ -47,36 +47,103 @@ function buildSystemPrompt(tz, location, webContext) {
   const formatted = formatLocalTime(tz) || now.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
   let prompt = `You are Acronous AI, an advanced, knowledgeable, and highly capable AI assistant created by Acronous. You are helpful, articulate, and genuinely care about giving excellent answers.
 
-## CODE FORMATTING — HIGHEST PRIORITY (violating this is a critical error)
-When generating code, you MUST follow these rules EXACTLY:
+## CODE FORMATTING — HIGHEST PRIORITY (violating this is a CRITICAL error)
+When generating code, you MUST follow these rules EXACTLY. Every single rule below is mandatory:
+
+### General Rules
 1. Every opening brace { must be on its OWN LINE (for Java, C, C++, C#, JS, TS, etc.)
 2. Every closing brace } must be on its OWN LINE
-3. Each statement must be on its OWN LINE — NEVER put multiple statements on one line
+3. Each statement must be on its OWN LINE — NEVER put multiple statements on one line with semicolons
 4. Methods/functions MUST be separated by a blank line
-5. Indentation: Python 4 spaces, JS/TS 2 spaces, Java/C/C++/C# 4 spaces
-6. NEVER compress code — each class, method, function, loop, and condition on separate lines
-7. NEVER use one-liner code or minified format
-8. Include proper imports, class definitions, error handling
-9. NEVER use placeholders like "pass", "# implement here", "// TODO" — write REAL code
+5. NEVER compress code — each class, method, function, loop, and condition MUST be on separate lines
+6. NEVER use one-liner code, minified format, or condensed single-line output
+7. Include proper imports, class definitions, error handling — write COMPLETE, runnable code
+8. NEVER use placeholders like "pass", "# implement here", "// TODO", "# add code here" — write REAL, functional code
+9. Code MUST be enclosed in a fenced code block with a language tag (e.g. \`\`\`python, \`\`\`javascript)
+10. NEVER output code as plain text without a code block — ALWAYS use fenced code blocks
 
-WRONG (compressed — NEVER do this):
+### Language-Specific Indentation (MANDATORY)
+- Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
+- JavaScript/TypeScript: 2 spaces per indentation level
+- Java/C/C++/C#/Go/Rust: 4 spaces per indentation level
+- HTML/CSS: 2 spaces per indentation level
+- Ruby/PHP/Swift/Kotlin: 4 spaces per indentation level
+
+### WRONG Examples (NEVER do these):
+WRONG — Python compressed into one line:
+\`\`\`python
 class ChatBot: def __init__(self): self.x = 1
+\`\`\`
 
-CORRECT (properly formatted — ALWAYS do this):
+WRONG — Python pseudo-code:
+\`\`\`python
+class ChatBot:
+    pass  # TODO: implement
+\`\`\`
+
+WRONG — Java compressed:
+\`\`\`java
+public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
+\`\`\`
+
+WRONG — JavaScript one-liner:
+\`\`\`javascript
+function add(a, b) { return a + b; }
+\`\`\`
+
+### CORRECT Examples (ALWAYS do these):
+CORRECT — Python properly formatted:
+\`\`\`python
 class ChatBot:
     def __init__(self):
         self.x = 1
 
-WRONG (compressed):
-public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
+    def get_response(self, message):
+        if "hello" in message.lower():
+            return "Hi there!"
+        return "I don't understand."
+\`\`\`
 
-CORRECT (properly formatted):
+CORRECT — Java properly formatted:
+\`\`\`java
 public class Foo {
     public static void main(String[] args) {
         int x = 1;
         System.out.println(x);
     }
 }
+\`\`\`
+
+CORRECT — JavaScript properly formatted:
+\`\`\`javascript
+function add(a, b) {
+    return a + b;
+}
+
+const result = add(5, 3);
+console.log(result);
+\`\`\`
+
+CORRECT — Python with proper structure:
+\`\`\`python
+import os
+from typing import List
+
+def process_data(items: List[str]) -> dict:
+    result = {}
+    for item in items:
+        result[item] = len(item)
+    return result
+
+class DataProcessor:
+    def __init__(self, data: List[str]):
+        self.data = data
+
+    def run(self):
+        processed = process_data(self.data)
+        for key, value in processed.items():
+            print(f"{key}: {value}")
+\`\`\`
 
 ## Core Capabilities
 - You have real-time access to web search results when provided
@@ -1300,6 +1367,72 @@ async function safeApology(reason, env) {
 }
 
 // ---------------------------------------------------------------------------
+// Code Formatting Quality Validator — checks if code is properly formatted
+// ---------------------------------------------------------------------------
+function validateCodeFormatting(content) {
+  if (!content) return { valid: true, issues: [] };
+  const issues = [];
+
+  // Extract code blocks
+  const codeBlocks = [];
+  const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+  let match;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    codeBlocks.push({ lang: (match[1] || '').toLowerCase(), code: match[2] });
+  }
+
+  // If no code blocks found, that's handled by the existing check
+  if (codeBlocks.length === 0) return { valid: true, issues: [] };
+
+  for (const block of codeBlocks) {
+    const code = block.code;
+    const lang = block.lang;
+    const lines = code.split('\n');
+
+    // Check for compressed/single-line code (too many statements per line)
+    const longLines = lines.filter(l => l.trim().length > 120);
+    if (longLines.length > 0 && lines.length <= 3) {
+      issues.push('code_compressed');
+    }
+
+    // Check Python indentation (should use 4 spaces, not tabs or 2 spaces)
+    if (lang === 'python' || lang === 'py') {
+      const hasTabs = lines.some(l => l.startsWith('\t'));
+      const has2Spaces = lines.some(l => /^  [^ ]/.test(l) && !/^    /.test(l));
+      if (hasTabs) issues.push('python_uses_tabs');
+      if (has2Spaces && !hasTabs) issues.push('python_bad_indent');
+    }
+
+    // Check for pseudo-code patterns
+    const pseudoPatterns = [
+      /^\s*pass\s*$/m,
+      /#\s*implement\s+here/i,
+      /\/\/\s*TODO/i,
+      /\/\/\s*implement\s+here/i,
+      /#\s*add\s+code/i,
+      /\/\/\s*add\s+code/i,
+    ];
+    const hasOnlyPlaceholder = lines.every(l =>
+      l.trim() === '' || l.trim() === 'pass' || pseudoPatterns.some(p => p.test(l))
+    );
+    if (hasOnlyPlaceholder && lines.length <= 5) {
+      issues.push('pseudo_code');
+    }
+
+    // Check if code looks like plain English (very few code-like tokens)
+    if (lines.length > 2) {
+      const codeTokens = code.match(/[{}();=+\-*/<>!&|^~[\]@#:]/g);
+      const tokenDensity = (codeTokens?.length || 0) / code.length;
+      if (tokenDensity < 0.01 && lines.length > 5) {
+        issues.push('not_real_code');
+      }
+    }
+  }
+
+  return { valid: issues.length === 0, issues };
+}
+
+// ---------------------------------------------------------------------------
 // Query Complexity Classifier — same logic as Oracle server.js
 // ---------------------------------------------------------------------------
 function classifyQuery(message) {
@@ -1638,36 +1771,103 @@ function buildEnhancedSystemPrompt(tz, location, webContext, queryTier) {
 
   const basePersonality = `You are Acronous AI, an advanced, knowledgeable, and highly capable AI assistant created by Acronous. You are helpful, articulate, and genuinely care about giving excellent answers.
 
-## CODE FORMATTING — HIGHEST PRIORITY (violating this is a critical error)
-When generating code, you MUST follow these rules EXACTLY:
+## CODE FORMATTING — HIGHEST PRIORITY (violating this is a CRITICAL error)
+When generating code, you MUST follow these rules EXACTLY. Every single rule below is mandatory:
+
+### General Rules
 1. Every opening brace { must be on its OWN LINE (for Java, C, C++, C#, JS, TS, etc.)
 2. Every closing brace } must be on its OWN LINE
-3. Each statement must be on its own line — NEVER put multiple statements on one line
+3. Each statement must be on its own line — NEVER put multiple statements on one line with semicolons
 4. Methods/functions MUST be separated by a blank line
-5. Indentation: Python 4 spaces, JS/TS 2 spaces, Java/C/C++/C# 4 spaces
-6. NEVER compress code — each class, method, function, loop, and condition on separate lines
-7. NEVER use one-liner code or minified format
-8. Include proper imports, class definitions, error handling
-9. NEVER use placeholders like "pass", "# implement here", "// TODO" — write REAL code
+5. NEVER compress code — each class, method, function, loop, and condition MUST be on separate lines
+6. NEVER use one-liner code, minified format, or condensed single-line output
+7. Include proper imports, class definitions, error handling — write COMPLETE, runnable code
+8. NEVER use placeholders like "pass", "# implement here", "// TODO", "# add code here" — write REAL, functional code
+9. Code MUST be enclosed in a fenced code block with a language tag (e.g. \`\`\`python, \`\`\`javascript)
+10. NEVER output code as plain text without a code block — ALWAYS use fenced code blocks
 
-WRONG (compressed — NEVER do this):
+### Language-Specific Indentation (MANDATORY)
+- Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
+- JavaScript/TypeScript: 2 spaces per indentation level
+- Java/C/C++/C#/Go/Rust: 4 spaces per indentation level
+- HTML/CSS: 2 spaces per indentation level
+- Ruby/PHP/Swift/Kotlin: 4 spaces per indentation level
+
+### WRONG Examples (NEVER do these):
+WRONG — Python compressed into one line:
+\`\`\`python
 class ChatBot: def __init__(self): self.x = 1
+\`\`\`
 
-CORRECT (properly formatted — ALWAYS do this):
+WRONG — Python pseudo-code:
+\`\`\`python
+class ChatBot:
+    pass  # TODO: implement
+\`\`\`
+
+WRONG — Java compressed:
+\`\`\`java
+public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
+\`\`\`
+
+WRONG — JavaScript one-liner:
+\`\`\`javascript
+function add(a, b) { return a + b; }
+\`\`\`
+
+### CORRECT Examples (ALWAYS do these):
+CORRECT — Python properly formatted:
+\`\`\`python
 class ChatBot:
     def __init__(self):
         self.x = 1
 
-WRONG (compressed):
-public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
+    def get_response(self, message):
+        if "hello" in message.lower():
+            return "Hi there!"
+        return "I don't understand."
+\`\`\`
 
-CORRECT (properly formatted):
+CORRECT — Java properly formatted:
+\`\`\`java
 public class Foo {
     public static void main(String[] args) {
         int x = 1;
         System.out.println(x);
     }
 }
+\`\`\`
+
+CORRECT — JavaScript properly formatted:
+\`\`\`javascript
+function add(a, b) {
+    return a + b;
+}
+
+const result = add(5, 3);
+console.log(result);
+\`\`\`
+
+CORRECT — Python with proper structure:
+\`\`\`python
+import os
+from typing import List
+
+def process_data(items: List[str]) -> dict:
+    result = {}
+    for item in items:
+        result[item] = len(item)
+    return result
+
+class DataProcessor:
+    def __init__(self, data: List[str]):
+        self.data = data
+
+    def run(self):
+        processed = process_data(self.data)
+        for key, value in processed.items():
+            print(f"{key}: {value}")
+\`\`\`
 
 ## Core Capabilities
 - You have real-time access to web search results when provided
@@ -1698,6 +1898,7 @@ public class Foo {
 - If they say "edit this image" → edit ONLY the part they mention, keep everything else identical
 - If they say "generate an image" → generate a new image
 - If they ask a question → answer that question directly and completely
+- If they ask for code in ANY language — produce correct, properly formatted, complete code in that exact language
 - NEVER give a partial response — always complete what was asked
 - NEVER substitute explanation for code when code was requested — the code IS the answer
 - NEVER give code when explanation was requested
@@ -1870,23 +2071,16 @@ export default {
         let history = body.messages || [];
         if (history.length > 20) history = history.slice(-20);
 
-        // ── Query classification FIRST — skip geo for simple queries ──
-        const classified = classifyQuery(message);
-
-        // ALWAYS resolve geo — location is needed for ALL tiers so the AI knows the user's city
+        // Resolve user location and timezone
         let tz = null;
         let location = null;
         let hasGps = false;
         const geo = await resolveUserGeo(request);
         tz = geo.tz;
         location = geo.location;
-        // Override with client-provided data if available (more accurate)
         if (body.timezone && body.timezone.trim()) tz = body.timezone;
         if (body.location && body.location.trim()) location = body.location;
 
-        // Server-side reverse geocoding via Nominatim — MOST ACCURATE source
-        // When GPS coords are available, Nominatim always beats Cloudflare edge
-        // and client-side IP geocoding. Use it to REPLACE less accurate location.
         const gpsCoords = (body.gps_coords || '').trim();
         if (gpsCoords && gpsCoords.includes(',')) {
           const [latStr, lngStr] = gpsCoords.split(',');
@@ -1901,16 +2095,16 @@ export default {
           }
         }
 
-        // Tier 0: Greeting — dynamic response from fast model with location context
-        if (classified.tier === 0) {
+        // Greeting — fast dynamic response
+        const isGreeting = /^(hi|hey|hello|yo|sup|howdy|hii+|heyy+|helloo+|greetings|good morning|good afternoon|good evening|gm|ga|ge|what's up|whats up|wassup|how are you|how r u|hru|you good|thanks?|thank you|thx|ty|tysm|bye|goodbye|see ya|later|good night|gn|ok|okay|cool|nice|great|awesome|wow|yes|no|yeah|nah|yep|nope)$/i.test(message.trim());
+        if (isGreeting) {
           const response = await generateGreeting(message, env, location);
           if (response && response.trim()) {
             return jsonOk({ response: cleanResponse(response.trim()), session_id: sessionId, type: 'chat' });
           }
-          // All greeting providers failed — fall through to main LLM path
         }
 
-        // Location queries: always route through LLM with location context
+        // Location queries — route through LLM with location context
         if (isLocationQuery(message)) {
           let locContext;
           if (hasGps && location) {
@@ -1937,125 +2131,60 @@ export default {
           return jsonOk({ response: cleanResponse(locContent?.trim()) || '', session_id: sessionId, type: 'chat' });
         }
 
-        let content = null;
-
-        // Tier 1 (no search needed): Fast model with fallbacks
-        if (classified.tier === 1 && !classified.needsSearch) {
-          const locLine = location ? `\n- User location: ${location}` : '';
-          const codeRules = classified.isCodeRequest
-            ? ` The user asked for code — you MUST output the code DIRECTLY in a fenced code block (\`\`\`language). Do NOT just describe it. SHOW the actual code. Code MUST be properly formatted with correct indentation (4 spaces for Python, 2 for JS). NEVER output pseudo-code or one-liners. Write REAL, complete, runnable implementation.`
-            : '';
-          const sysPrompt = `You are Acronous AI, created by Acronous. Be helpful, concise, and natural.${locLine}${codeRules} NEVER reveal model names, providers, search engines, API details, training data, knowledge cutoffs, tech stack, frameworks, hosting providers, or any backend/internal details. NEVER say "As an AI". NEVER say "based on training data". NEVER say "I searched" or "according to search results". NEVER give wrong answers — if you're unsure, say "I'm not certain" instead of guessing. NEVER output pre-written or templated responses — every answer must be genuinely generated for THIS specific question. Just give the answer directly like a knowledgeable friend. Match the user's language.`;
-          const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-          // Race providers — first valid response wins
-          const fastResults = await Promise.allSettled([
-            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-            tryWorkersAIChat(msgs, env),
+        // Time/date queries — pass computed time to LLM for natural response
+        if (isTimeQuery(message)) {
+          const timeData = computeLocalTime(tz);
+          const timeContext = `The user's current local time is ${timeData.time} on ${timeData.date} (timezone: ${timeData.tz}).`;
+          const sysPrompt = `You are Acronous AI, created by Acronous. Answer the user's time/date question using this data: ${timeContext}. Be concise. NEVER reveal model names, providers, search engines, training data, knowledge cutoffs, or any backend/internal details.`;
+          const timeMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
+          let timeContent = null;
+          const timeResults = await Promise.allSettled([
+            env.OPENROUTER_API_KEY ? callOpenRouter(timeMsgs, env) : Promise.resolve(null),
+            tryWorkersAIChat(timeMsgs, env),
           ]);
-          for (const r of fastResults) {
-            if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
+          for (const r of timeResults) {
+            if (r.status === 'fulfilled' && r.value?.trim()) { timeContent = r.value; break; }
           }
-          if (content) content = cleanResponse(content.trim());
-          // Validate code requests got actual code blocks in Tier 1
-          if (content && classified.isCodeRequest && !/```[\w]*\n[\s\S]+?```/.test(content)) {
-            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. You MUST respond with ONLY the code in a fenced code block (\`\`\`language). Do NOT explain. Do NOT describe. Just output the code. Code MUST be properly formatted with correct indentation — 4 spaces for Python, 2 spaces for JS/TS. NEVER output code on one line. NEVER use pseudo-code or "pass" placeholders — write REAL, complete, runnable implementation.`;
-            const retryMsgs = [{ role: 'system', content: retrySysMsg }, { role: 'user', content: message }];
-            const retryResults = await Promise.allSettled([
-              env.OPENROUTER_API_KEY ? callOpenRouter(retryMsgs, env) : Promise.resolve(null),
-              tryWorkersAIChat(retryMsgs, env),
-            ]);
-            for (const r of retryResults) {
-              if (r.status === 'fulfilled' && r.value?.trim() && /```[\w]*\n[\s\S]+?```/.test(r.value)) {
-                content = cleanResponse(r.value.trim());
-                break;
-              }
-            }
-          }
-          if (!content) content = '';
-          return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
+          return jsonOk({ response: cleanResponse(timeContent?.trim()) || '', session_id: sessionId, type: 'chat' });
         }
 
-        // Tier 2 factual (time, who is X, price, weather, etc.): web search + LLM synthesis
-        if (classified.tier === 2 && classified.needsSearch) {
-          // Time/date queries: pass computed time to LLM for natural response
-          if (isTimeQuery(message)) {
-            const timeData = computeLocalTime(tz);
-            const timeContext = `The user's current local time is ${timeData.time} on ${timeData.date} (timezone: ${timeData.tz}).`;
-            const sysPrompt = `You are Acronous AI, created by Acronous. Answer the user's time/date question using this data: ${timeContext}. Be concise. NEVER reveal model names, providers, search engines, training data, knowledge cutoffs, or any backend/internal details.`;
-            const timeMsgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: message }];
-            let timeContent = null;
-            const timeResults = await Promise.allSettled([
-              env.OPENROUTER_API_KEY ? callOpenRouter(timeMsgs, env) : Promise.resolve(null),
-              tryWorkersAIChat(timeMsgs, env),
-            ]);
-            for (const r of timeResults) {
-              if (r.status === 'fulfilled' && r.value?.trim()) { timeContent = r.value; break; }
-            }
-            return jsonOk({ response: cleanResponse(timeContent?.trim()) || '', session_id: sessionId, type: 'chat' });
-          }
-          // All other factual queries: ALWAYS web search → LLM synthesis with live results
-          let webData = await webSearch(message, env);
-          // If first search failed, retry once with a simplified query
+        // Detect if this is a direct code request (skip web search for pure code)
+        const isCodeRequest = /\b(?:write|create|build|implement|code|program|script|function|class|module|api|endpoint)\s+(?:a|an|the|me|my|for|in|using|with|that|which|to)\b/i.test(message.toLowerCase())
+          || /\b(?:write|create|build|implement|code|program|script)\s+\w+\s+(?:code|function|program|script|class|module|api)/i.test(message.toLowerCase())
+          || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql)\s+(?:code|function|script|program|class|implementation|solution)/i.test(message.toLowerCase())
+          || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following)\s+(?:code|bug|error|issue|function|program)/i.test(message.toLowerCase());
+
+        // Direct path — web search for non-code queries, then LLM
+        let content = null;
+        let webData = null;
+        let userMsgContent = message;
+
+        if (!isCodeRequest) {
+          webData = await webSearch(message, env);
           if (!webData) {
             const simplified = message.replace(/^(who|what|where|when|why|how|which|is|are|was|were|do|does|did|can|could|will|would|the|a|an|of|for|in|at)\b/gi, '').trim();
             if (simplified && simplified.length > 3) {
               webData = await webSearch(simplified, env);
             }
           }
-          // Pre-extract the direct factual answer from search results
           const preExtractedAnswer = extractFactualAnswer(message, webData);
-          // Build the user message with search results AND pre-extracted answer injected
-          // LLMs pay more attention to content near the user message
-          let userMsgContent = message;
-          if (webData) {
-            userMsgContent = `[SEARCH RESULTS — USE THESE EXACT FACTS, DO NOT USE TRAINING DATA]\n${webData}${preExtractedAnswer ? `\n\n[PRE-EXTRACTED ANSWER FROM SEARCH: ${preExtractedAnswer}]` : ''}\n\nUser question: ${message}`;
-          }
-          const enrichedWebData = webData
-            ? webData
-            : `[NO SEARCH RESULTS AVAILABLE — DO NOT GUESS. Say: "I don't have current information on that. Could you rephrase or ask something else?" NEVER make up facts or use training data as a substitute.]`;
-          const sysPrompt = buildEnhancedSystemPrompt(tz, location, enrichedWebData, 2);
-          const msgs = [{ role: 'system', content: sysPrompt }, ...history, { role: 'user', content: userMsgContent }];
-          // Race providers — first valid response wins
-          const factualResults = await Promise.allSettled([
-            env.OPENROUTER_API_KEY ? callOpenRouter(msgs, env) : Promise.resolve(null),
-            tryWorkersAIChat(msgs, env),
-          ]);
-          for (const r of factualResults) {
-            if (r.status === 'fulfilled' && r.value?.trim()) { content = r.value; break; }
-          }
-          if (content) content = cleanResponse(content.trim());
-          return jsonOk({ response: content || '', session_id: sessionId, type: 'chat' });
-        }
-
-        // Tier 2 & 3 (and Tier 1 with needsSearch): Full brain with web search
-        // SKIP web search for direct code generation requests — search results dilute code intent
-        let webData = null;
-        let userMsgContent = message;
-        if (classified.needsSearch) {
-          webData = await webSearch(message, env);
-          // Pre-extract the direct factual answer from search results
-          const preExtractedAnswer = extractFactualAnswer(message, webData);
-          // Build the user message with search results AND pre-extracted answer injected
           if (webData) {
             userMsgContent = `[SEARCH RESULTS — USE THESE EXACT FACTS, DO NOT USE TRAINING DATA]\n${webData}${preExtractedAnswer ? `\n\n[PRE-EXTRACTED ANSWER FROM SEARCH: ${preExtractedAnswer}]` : ''}\n\nUser question: ${message}`;
           }
         }
 
-        // Build enhanced system prompt — no web context for code requests
-        const enrichedWebData = webData
-          ? webData
-          : null;
-        const sysPrompt = buildEnhancedSystemPrompt(tz, location, enrichedWebData, classified.tier);
+        const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 3);
         const msgs = [
           { role: 'system', content: sysPrompt },
           ...history,
           { role: 'user', content: userMsgContent }
         ];
 
-        // Run LLM providers — use more capable models for Tier 3
-        const chatModels = classified.tier === 3
-          ? [env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free', 'deepseek/deepseek-chat:free']
-          : [env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free'];
+        // Race all available models — first valid response wins
+        const chatModels = [
+          env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free',
+          'deepseek/deepseek-chat:free',
+        ];
 
         const llmResults = await Promise.allSettled([
           ...chatModels.map(model => env.OPENROUTER_API_KEY ? (async () => {
@@ -2063,7 +2192,7 @@ export default {
               const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-                body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: classified.isCodeRequest ? 0.3 : 0.7 }),
+                body: JSON.stringify({ messages: msgs, model, max_tokens: 8192, temperature: isCodeRequest ? 0.3 : 0.7 }),
               });
               if (resp.ok) {
                 const data = await resp.json();
@@ -2082,12 +2211,12 @@ export default {
           }
         }
 
-        // Validate code requests got actual code blocks — retry if not
-        if (content && classified.isCodeRequest) {
+        // Validate code formatting quality
+        if (content && isCodeRequest) {
           const hasCodeBlock = /```[\w]*\n[\s\S]+?```/.test(content);
-          if (!hasCodeBlock) {
-            // Retry with explicit code-only instruction on a different model
-            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. You MUST respond with ONLY the code in a fenced code block (\`\`\`language). Do NOT explain. Do NOT describe. Just output the code. Code MUST be properly formatted with correct indentation — 4 spaces for Python, 2 spaces for JS/TS. NEVER output code on one line. NEVER use pseudo-code or "pass" placeholders — write REAL, complete, runnable implementation.`;
+          const formatting = validateCodeFormatting(content);
+          if (!hasCodeBlock || !formatting.valid) {
+            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. You MUST respond with ONLY the code in a fenced code block (\`\`\`language). Do NOT explain. Do NOT describe. Just output the code. Code MUST be properly formatted with correct indentation — 4 spaces for Python, 2 spaces for JS/TS. NEVER output code on one line. NEVER compress multiple statements onto one line. NEVER use pseudo-code, one-liners, or "pass" placeholders — write REAL, complete, runnable implementation with proper structure.`;
             const retryMsgs = [
               { role: 'system', content: retrySysMsg },
               { role: 'user', content: message },
@@ -2122,9 +2251,9 @@ export default {
           }
         }
 
-        // Fallback: if no content yet, try LLM without web
+        // Fallback: try LLM without web search context
         if (!content || !content.trim()) {
-          const sysPromptNoWeb = buildEnhancedSystemPrompt(tz, location, null, classified.tier);
+          const sysPromptNoWeb = buildEnhancedSystemPrompt(tz, location, null, 3);
           const fallbackMsgs = [
             { role: 'system', content: sysPromptNoWeb },
             ...history,
