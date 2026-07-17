@@ -553,6 +553,144 @@ function stripJsonLeak(text) {
   return c.trim();
 }
 
+// ---------------------------------------------------------------------------
+// Code Block Reformatter — server-side post-processing to fix LLM formatting
+// ---------------------------------------------------------------------------
+function reformatCodeBlocks(content) {
+  if (!content) return content;
+  return content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    const language = (lang || '').toLowerCase();
+    let fixed = code;
+    if (language === 'python' || language === 'py') {
+      fixed = reformatPython(fixed);
+    } else if (['javascript', 'js', 'typescript', 'ts'].includes(language)) {
+      fixed = reformatJS(fixed);
+    } else if (['java', 'c', 'cpp', 'csharp', 'cs', 'c#'].includes(language)) {
+      fixed = reformatBraceLanguage(fixed);
+    }
+    return '```' + lang + '\n' + fixed + '```';
+  });
+}
+function reformatPython(code) {
+  let lines = code.split('\n');
+  const result = [];
+  for (let line of lines) {
+    if (line.trim() === '') { result.push(''); continue; }
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+    const trimmed = line.trim();
+    if (/^class\s+\w+.*:\s*(?:def|async\s+def)\s+/.test(trimmed)) {
+      const classMatch = trimmed.match(/^(class\s+\w+[^:]*):\s*((?:def|async\s+def).*)/);
+      if (classMatch) {
+        result.push(indent + classMatch[1] + ':');
+        const innerIndent = indent + '    ';
+        const remaining = classMatch[2];
+        if (remaining.includes(';')) {
+          for (const b of remaining.split(/\s*;\s*/)) result.push(innerIndent + b.trim());
+        } else { result.push(innerIndent + remaining.trim()); }
+        continue;
+      }
+    }
+    if (/^(async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?:\s*\S/.test(trimmed)) {
+      const defMatch = trimmed.match(/^((?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?):\s*(.+)/);
+      if (defMatch && !defMatch[2].trim().startsWith('"""') && !defMatch[2].trim().startsWith("'''")) {
+        result.push(indent + defMatch[1] + ':');
+        const bodyIndent = indent + '    ';
+        for (const b of defMatch[2].split(/\s*;\s*/)) result.push(bodyIndent + b.trim());
+        continue;
+      }
+    }
+    if (/^(if|elif|else|for|while|with|try|except|finally)\b/.test(trimmed)) {
+      const blockMatch = trimmed.match(/^((?:if|elif|else|for|while|with|try|except|finally)\s*.+?):\s*(.+)/);
+      if (blockMatch) {
+        result.push(indent + blockMatch[1] + ':');
+        const bodyIndent = indent + '    ';
+        for (const b of blockMatch[2].split(/\s*;\s*/)) result.push(bodyIndent + b.trim());
+        continue;
+      }
+    }
+    if (trimmed.includes(';') && !trimmed.startsWith('#') && !trimmed.startsWith('"""') && !trimmed.startsWith("'''")) {
+      const parts = trimmed.split(/\s*;\s*/).filter(p => p.trim());
+      if (parts.length > 1) { for (const part of parts) result.push(indent + part.trim()); continue; }
+    }
+    if (line.startsWith('\t')) line = '    ' + line.slice(1);
+    result.push(line);
+  }
+  return result.join('\n');
+}
+function reformatJS(code) {
+  let lines = code.split('\n');
+  const result = [];
+  for (let line of lines) {
+    if (line.trim() === '') { result.push(''); continue; }
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+    const trimmed = line.trim();
+    if (/^function\s+\w+.*\{.*\}/.test(trimmed) && !trimmed.includes('\n')) {
+      const fnMatch = trimmed.match(/^(function\s+\w+\s*\([^)]*\))\s*\{(.+)\}/);
+      if (fnMatch) {
+        result.push(indent + fnMatch[1] + ' {');
+        for (const b of fnMatch[2].split(/\s*;\s*/).filter(s => s.trim())) {
+          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+    if (/\)\s*\{/.test(trimmed) && /\}\s*$/.test(trimmed) && trimmed.includes(';')) {
+      const fnMatch = trimmed.match(/^(.*\)\s*\{)\s*(.+)\}$/);
+      if (fnMatch) {
+        result.push(indent + fnMatch[1]);
+        for (const b of fnMatch[2].split(/\s*;\s*/).filter(s => s.trim())) {
+          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+    result.push(line);
+  }
+  return result.join('\n');
+}
+function reformatBraceLanguage(code) {
+  let lines = code.split('\n');
+  const result = [];
+  for (let line of lines) {
+    if (line.trim() === '') { result.push(''); continue; }
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+    const trimmed = line.trim();
+    if (/\)\s*\{/.test(trimmed) && /\}\s*$/.test(trimmed) && trimmed.includes(';')) {
+      const fnMatch = trimmed.match(/^(.*\)\s*\{)\s*(.+)\}$/);
+      if (fnMatch) {
+        result.push(indent + fnMatch[1]);
+        for (const b of fnMatch[2].split(/\s*;\s*/).filter(s => s.trim())) {
+          result.push(indent + '    ' + b.trim() + ';');
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+    result.push(line);
+  }
+  return result.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Current Affairs / Factual Query Detector
+// ---------------------------------------------------------------------------
+function isCurrentAffairsQuery(message) {
+  const m = message.toLowerCase().trim();
+  if (/\b(?:who|what)\s+(?:is|was|are|were)\s+(?:the\s+)?(?:current\s+|present\s+|new\s+)?(?:president|prime\s+minister|chief\s+minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach|chancellor|secretary|spokesperson|leader|ruler|king|queen|prince|princess|emperor|dictator|commander)\b/i.test(m)) return true;
+  if (/\b(?:who|what)\s+.+\s+(?:of|for|at|in|over)\b/i.test(m)) return true;
+  if (/\b(?:who\s+(?:won|wins|is\s+winning|is\s+leading))\b/i.test(m)) return true;
+  if (/\b(?:current|present|new|latest|recent|incumbent|sitting)\s+(?:president|prime\s+minister|chief\s+minister|cm|pm|governor|mayor|minister|ceo|chairman)\b/i.test(m)) return true;
+  if (/\b(?:price|cost|rate|value|stock|share|market|exchange\s+rate|currency)\b/i.test(m)) return true;
+  if (/\b(?:score|won|lost|beat|winner|champion|result)\b/i.test(m)) return true;
+  if (/\b(?:latest|recent|today|now|current|breaking|happening|news)\b/i.test(m)) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Clean response text — strip leaked model/provider names, formatting artifacts
+// ---------------------------------------------------------------------------
 function cleanResponse(text) {
   if (!text) return '';
   let clean = stripJsonLeak(text);
@@ -579,9 +717,9 @@ function cleanResponse(text) {
 
   if (clean.length < 3 && (/^\s*\{/.test(clean) || /^\s*\[/.test(clean))) return '';
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
-    try { const parsed = JSON.parse(clean); if (parsed.content) return parsed.content; if (parsed.answer) return parsed.answer; } catch {}
+    try { const parsed = JSON.parse(clean); if (parsed.content) return reformatCodeBlocks(parsed.content); if (parsed.answer) return reformatCodeBlocks(parsed.answer); } catch {}
   }
-  return clean;
+  return reformatCodeBlocks(clean);
 }
 
 function arrayBufferToBase64(buf) {
@@ -1382,6 +1520,9 @@ app.post('/v1/chat', async (req, res) => {
       || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql)\s+(?:code|function|script|program|class|implementation|solution)/i.test(message.toLowerCase())
       || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following)\s+(?:code|bug|error|issue|function|program)/i.test(message.toLowerCase());
 
+    // Detect current affairs queries — ALWAYS web search for these
+    const isCurrentAffairs = isCurrentAffairsQuery(message);
+
     // Direct path — web search for non-code queries, then LLM
     let content = null;
     let webData = null;
@@ -1394,9 +1535,20 @@ app.post('/v1/chat', async (req, res) => {
           webData = await webSearch(simplified);
         }
       }
+      // Also search with "current" prefix for factual queries to get fresher results
+      if (!webData && isCurrentAffairs) {
+        const currentSearch = await webSearch('current ' + message);
+        if (currentSearch) webData = currentSearch;
+      }
     }
 
-    const sysPrompt = buildEnhancedSystemPrompt(timezone || null, location || null, webData, 3);
+    // For current affairs with search results, use an even stronger system prompt
+    let sysPrompt;
+    if (isCurrentAffairs && webData) {
+      sysPrompt = buildEnhancedSystemPrompt(timezone || null, location || null, webData, 3) + `\n\n## CRITICAL: CURRENT AFFAIRS OVERRIDE — ABSOLUTE RULE\nThe user is asking about a CURRENT position, role, score, price, or recent event. You MUST use the search results provided above. These are LIVE and FRESH. Your training data may be outdated — the search results are ALWAYS more current. If the search results say someone currently holds a position, state that as FACT. NEVER contradict the search results with older information from your training. NEVER say "as of [year]" or "as of my knowledge cutoff" when search results are available.`;
+    } else {
+      sysPrompt = buildEnhancedSystemPrompt(timezone || null, location || null, webData, 3);
+    }
     const msgs = [{ role: 'system', content: sysPrompt }, ...history.slice(-20), { role: 'user', content: message }];
 
     // Race all available models — first valid response wins

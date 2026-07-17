@@ -778,11 +778,11 @@ function cleanResponse(text) {
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
     try {
       const parsed = JSON.parse(clean);
-      if (parsed.content) return parsed.content;
-      if (parsed.answer) return parsed.answer;
+      if (parsed.content) return reformatCodeBlocks(parsed.content);
+      if (parsed.answer) return reformatCodeBlocks(parsed.answer);
     } catch {}
   }
-  return clean;
+  return reformatCodeBlocks(clean);
 }
 
 async function callOpenRouter(messages, env) {
@@ -1430,6 +1430,261 @@ function validateCodeFormatting(content) {
   }
 
   return { valid: issues.length === 0, issues };
+}
+
+// ---------------------------------------------------------------------------
+// Code Block Reformatter — server-side post-processing to fix LLM formatting
+// ---------------------------------------------------------------------------
+function reformatCodeBlocks(content) {
+  if (!content) return content;
+
+  return content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    const language = (lang || '').toLowerCase();
+    let fixed = code;
+
+    // Fix Python: expand compressed one-liners into proper multi-line
+    if (language === 'python' || language === 'py') {
+      fixed = reformatPython(fixed);
+    }
+    // Fix JavaScript/TypeScript: expand compressed one-liners
+    else if (['javascript', 'js', 'typescript', 'ts'].includes(language)) {
+      fixed = reformatJS(fixed);
+    }
+    // Fix Java/C/C++/C#: expand compressed one-liners
+    else if (['java', 'c', 'cpp', 'csharp', 'cs', 'c#'].includes(language)) {
+      fixed = reformatBraceLanguage(fixed);
+    }
+
+    return '```' + lang + '\n' + fixed + '```';
+  });
+}
+
+// Reformat Python code — fix indentation and expand compressed lines
+function reformatPython(code) {
+  let lines = code.split('\n');
+  const result = [];
+
+  for (let line of lines) {
+    // Skip empty lines
+    if (line.trim() === '') {
+      result.push('');
+      continue;
+    }
+
+    // Detect if line has multiple Python statements compressed together
+    // Pattern: "stmt1; stmt2" or "stmt1: stmt2" (class/def on same line as body)
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+    const trimmed = line.trim();
+
+    // Fix: "class X: def __init__..." → expand to multiple lines
+    if (/^class\s+\w+.*:\s*(?:def|async\s+def)\s+/.test(trimmed)) {
+      const classMatch = trimmed.match(/^(class\s+\w+[^:]*):\s*((?:def|async\s+def).*)/);
+      if (classMatch) {
+        result.push(indent + classMatch[1] + ':');
+        // The remaining part becomes indented under the class
+        const remaining = classMatch[2];
+        const innerIndent = indent + '    ';
+        // Further expand the def line if needed
+        const defExpanded = expandPythonDef(remaining, innerIndent);
+        result.push(...defExpanded);
+        continue;
+      }
+    }
+
+    // Fix: "def X(...): stmt" → expand to multi-line
+    if (/^(async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?:\s*\S/.test(trimmed)) {
+      const defMatch = trimmed.match(/^((?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?):\s*(.+)/);
+      if (defMatch && !defMatch[2].trim().startsWith('"""') && !defMatch[2].trim().startsWith("'''")) {
+        result.push(indent + defMatch[1] + ':');
+        const bodyIndent = indent + '    ';
+        const bodyLines = defMatch[2].split(/\s*;\s*/);
+        for (const b of bodyLines) {
+          result.push(bodyIndent + b.trim());
+        }
+        continue;
+      }
+    }
+
+    // Fix: "if X: stmt" or "else: stmt" etc — expand single-line blocks
+    if (/^(if|elif|else|for|while|with|try|except|finally)\b/.test(trimmed)) {
+      const blockMatch = trimmed.match(/^((?:if|elif|else|for|while|with|try|except|finally)\s*.+?):\s*(.+)/);
+      if (blockMatch) {
+        result.push(indent + blockMatch[1] + ':');
+        const bodyIndent = indent + '    ';
+        const bodyLines = blockMatch[2].split(/\s*;\s*/);
+        for (const b of bodyLines) {
+          result.push(bodyIndent + b.trim());
+        }
+        continue;
+      }
+    }
+
+    // Fix: multiple statements separated by semicolons
+    if (trimmed.includes(';') && !trimmed.startsWith('#') && !trimmed.startsWith('"""') && !trimmed.startsWith("'''")) {
+      const parts = trimmed.split(/\s*;\s*/).filter(p => p.trim());
+      if (parts.length > 1) {
+        for (const part of parts) {
+          result.push(indent + part.trim());
+        }
+        continue;
+      }
+    }
+
+    // Fix tabs to 4 spaces
+    if (line.startsWith('\t')) {
+      line = '    ' + line.slice(1);
+    }
+
+    result.push(line);
+  }
+
+  return result.join('\n');
+}
+
+// Expand a def line that might have body on same line
+function expandPythonDef(defLine, indent) {
+  const result = [];
+  // Check if it has multiple statements
+  if (defLine.includes(';')) {
+    const parts = defLine.split(/\s*;\s*/);
+    for (const part of parts) {
+      result.push(indent + part.trim());
+    }
+  } else {
+    result.push(indent + defLine.trim());
+  }
+  return result;
+}
+
+// Reformat JavaScript/TypeScript code
+function reformatJS(code) {
+  let lines = code.split('\n');
+  const result = [];
+
+  for (let line of lines) {
+    if (line.trim() === '') {
+      result.push('');
+      continue;
+    }
+
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+    const trimmed = line.trim();
+
+    // Fix: "function X(...) { stmt }" → expand
+    if (/^function\s+\w+.*\{.*\}/.test(trimmed) && !trimmed.includes('\n')) {
+      const fnMatch = trimmed.match(/^(function\s+\w+\s*\([^)]*\))\s*\{(.+)\}/);
+      if (fnMatch) {
+        result.push(indent + fnMatch[1] + ' {');
+        const body = fnMatch[2].split(/\s*;\s*/).filter(s => s.trim());
+        for (const b of body) {
+          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+
+    // Fix: "const X = (...) => { stmt }" → expand arrow functions
+    if (/^(?:const|let|var)\s+\w+\s*=\s*\(?.*\)?\s*=>\s*\{.*\}/.test(trimmed)) {
+      const arrowMatch = trimmed.match(/^((?:const|let|var)\s+\w+\s*=\s*(?:\(?.*\)?\s*=>))\s*\{(.+)\}/);
+      if (arrowMatch) {
+        result.push(indent + arrowMatch[1] + ' {');
+        const body = arrowMatch[2].split(/\s*;\s*/).filter(s => s.trim());
+        for (const b of body) {
+          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+
+    // Fix multiple statements on one line separated by semicolons (only if braces present)
+    if (trimmed.includes('{') && trimmed.includes('}') && trimmed.includes(';')) {
+      // This is likely a compressed block — try to expand
+      const braceMatch = trimmed.match(/^(\w.*\{)(.+)\}$/);
+      if (braceMatch && braceMatch[2].split(';').filter(s => s.trim()).length > 1) {
+        result.push(indent + braceMatch[1]);
+        const body = braceMatch[2].split(/\s*;\s*/).filter(s => s.trim());
+        for (const b of body) {
+          result.push(indent + '  ' + b.trim() + (b.trim().endsWith(';') ? '' : ';'));
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+
+    result.push(line);
+  }
+
+  return result.join('\n');
+}
+
+// Reformat brace-based languages (Java, C, C++, C#)
+function reformatBraceLanguage(code) {
+  let lines = code.split('\n');
+  const result = [];
+
+  for (let line of lines) {
+    if (line.trim() === '') {
+      result.push('');
+      continue;
+    }
+
+    const indent = line.match(/^(\s*)/)?.[1] || '';
+    const trimmed = line.trim();
+
+    // Fix: "public class X { public static void main..." → expand
+    if (/\bclass\s+\w+.*\{/.test(trimmed) && /\b(?:public|private|static|void|int|String)\b/.test(trimmed) && trimmed.includes('{')) {
+      // Try to split at the first { that starts a method
+      const methodMatch = trimmed.match(/^(\w[\w\s]*\w+\s*\{)\s*(\w[\w\s]*\(.*?\)\s*\{?.*)/);
+      if (methodMatch) {
+        result.push(indent + methodMatch[1]);
+        // Process remaining
+        const remaining = methodMatch[2];
+        const innerResult = reformatBraceLanguage(indent + '    ' + remaining);
+        result.push(innerResult);
+        continue;
+      }
+    }
+
+    // Fix: "public static void main(String[] args) { stmt; }" → expand
+    if (/\)\s*\{/.test(trimmed) && /\}\s*$/.test(trimmed) && trimmed.includes(';')) {
+      const fnMatch = trimmed.match(/^(.*\)\s*\{)\s*(.+)\}$/);
+      if (fnMatch) {
+        result.push(indent + fnMatch[1]);
+        const body = fnMatch[2].split(/\s*;\s*/).filter(s => s.trim());
+        for (const b of body) {
+          result.push(indent + '    ' + b.trim() + ';');
+        }
+        result.push(indent + '}');
+        continue;
+      }
+    }
+
+    result.push(line);
+  }
+
+  return result.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Current Affairs / Factual Query Detector
+// ---------------------------------------------------------------------------
+function isCurrentAffairsQuery(message) {
+  const m = message.toLowerCase().trim();
+  // Position/role questions — who is the X of/in Y
+  if (/\b(?:who|what)\s+(?:is|was|are|were)\s+(?:the\s+)?(?:current\s+|present\s+|new\s+)?(?:president|prime\s+minister|chief\s+minister|cm|pm|governor|mayor|minister|ceo|chairman|head|director|captain|coach|chancellor|secretary|spokesperson|leader|ruler|king|queen|prince|princess|emperor|dictator|commander)\b/i.test(m)) return true;
+  if (/\b(?:who|what)\s+.+\s+(?:of|for|at|in|over)\b/i.test(m)) return true;
+  if (/\b(?:who\s+(?:won|wins|is\s+winning|is\s+leading))\b/i.test(m)) return true;
+  // Current position holders — these change frequently
+  if (/\b(?:current|present|new|latest|recent|incumbent|sitting)\s+(?:president|prime\s+minister|chief\s+minister|cm|pm|governor|mayor|minister|ceo|chairman)\b/i.test(m)) return true;
+  // Price/value/rate — always current
+  if (/\b(?:price|cost|rate|value|stock|share|market|exchange\s+rate|currency)\b/i.test(m)) return true;
+  // Sports scores — always current
+  if (/\b(?:score|won|lost|beat|winner|champion|result)\b/i.test(m)) return true;
+  // News/current events
+  if (/\b(?:latest|recent|today|now|current|breaking|happening|news)\b/i.test(m)) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -2154,6 +2409,9 @@ export default {
           || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql)\s+(?:code|function|script|program|class|implementation|solution)/i.test(message.toLowerCase())
           || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following)\s+(?:code|bug|error|issue|function|program)/i.test(message.toLowerCase());
 
+        // Detect current affairs queries — ALWAYS web search for these
+        const isCurrentAffairs = isCurrentAffairsQuery(message);
+
         // Direct path — web search for non-code queries, then LLM
         let content = null;
         let webData = null;
@@ -2167,13 +2425,24 @@ export default {
               webData = await webSearch(simplified, env);
             }
           }
+          // Also search with "current" prefix for factual queries to get fresher results
+          if (!webData && isCurrentAffairs) {
+            const currentSearch = await webSearch('current ' + message, env);
+            if (currentSearch) webData = currentSearch;
+          }
           const preExtractedAnswer = extractFactualAnswer(message, webData);
           if (webData) {
-            userMsgContent = `[SEARCH RESULTS — USE THESE EXACT FACTS, DO NOT USE TRAINING DATA]\n${webData}${preExtractedAnswer ? `\n\n[PRE-EXTRACTED ANSWER FROM SEARCH: ${preExtractedAnswer}]` : ''}\n\nUser question: ${message}`;
+            userMsgContent = `[LIVE SEARCH RESULTS — THESE ARE FRESH AND AUTHORITATIVE. YOU MUST USE THESE EXACT FACTS. DO NOT USE YOUR TRAINING DATA — IT MAY BE OUTDATED.]\n${webData}${preExtractedAnswer ? `\n\n[DIRECT ANSWER EXTRACTED FROM SEARCH: ${preExtractedAnswer}]` : ''}\n\nUser question: ${message}`;
           }
         }
 
-        const sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 3);
+        // For current affairs with search results, use an even stronger system prompt
+        let sysPrompt;
+        if (isCurrentAffairs && webData) {
+          sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 3) + `\n\n## CRITICAL: CURRENT AFFAIRS OVERRIDE — ABSOLUTE RULE\nThe user is asking about a CURRENT position, role, score, price, or recent event. You MUST use the search results provided above. These are LIVE and FRESH. Your training data may be outdated — the search results are ALWAYS more current. If the search results say someone currently holds a position, state that as FACT. NEVER contradict the search results with older information from your training. NEVER say "as of [year]" or "as of my knowledge cutoff" when search results are available.`;
+        } else {
+          sysPrompt = buildEnhancedSystemPrompt(tz, location, webData, 3);
+        }
         const msgs = [
           { role: 'system', content: sysPrompt },
           ...history,
