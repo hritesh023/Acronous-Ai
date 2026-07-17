@@ -222,6 +222,7 @@ class MarkdownRenderer extends StatelessWidget {
     final headerColor = isDark ? const Color(0xFF1C1C35) : const Color(0xFFE4E1F2);
     final langColor = isDark ? const Color(0xFF505070) : const Color(0xFF6B6890);
     final codeColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9);
+    final scrollbarColor = isDark ? const Color(0xFF3A3A5C) : const Color(0xFFC4C0D6);
 
     return Container(
       width: double.infinity,
@@ -231,6 +232,7 @@ class MarkdownRenderer extends StatelessWidget {
         border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.3)),
         borderRadius: BorderRadius.circular(10),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -284,18 +286,25 @@ class MarkdownRenderer extends StatelessWidget {
             child: Scrollbar(
               thumbVisibility: true,
               radius: const Radius.circular(6),
-              child: SingleChildScrollView(
-                scrollDirection: Axis.vertical,
-                padding: const EdgeInsets.all(14),
+              thickness: 6,
+              child: Scrollbar(
+                thumbVisibility: true,
+                radius: const Radius.circular(6),
+                thickness: 6,
+                notificationPredicate: (notification) => notification.depth == 1,
                 child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SelectableText(
-                    node.text,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      color: codeColor,
-                      height: 1.55,
+                  scrollDirection: Axis.vertical,
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.all(14),
+                    child: SelectableText(
+                      node.text,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                        color: codeColor,
+                        height: 1.55,
+                      ),
                     ),
                   ),
                 ),
