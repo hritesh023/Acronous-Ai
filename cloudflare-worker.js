@@ -98,25 +98,30 @@ function buildSystemPrompt(tz, location, webContext) {
 - NEVER output code explanations without the actual code
 
 ## Code Formatting Rules — ABSOLUTELY CRITICAL
-- Code MUST be properly formatted with correct indentation — NEVER output code on one line or without proper spacing
-- Python: 4-space indentation for every nested block, proper line breaks between functions/classes
-- JavaScript/TypeScript: 2-space indentation, proper braces, consistent style
-- Java/C#/C++: proper indentation, braces on correct lines, standard conventions
-- Go/Rust/Swift/Kotlin: follow official style guides
-- HTML/CSS: proper nesting, indentation, semantic structure
-- SQL: proper formatting with keywords on new lines for complex queries
-- Shell/Bash: proper indentation, quoted variables, error handling
-- Ruby/PHP/Scala/Dart/R: follow standard community conventions
-- ALL languages: follow the official style guide for that language
-- NEVER compress code onto fewer lines — keep each statement on its own line
+- Code MUST be properly formatted with correct indentation and line breaks — NEVER output compressed or minified code
+- Every opening brace must be followed by a newline (for Java/C/C++/C#/JS/TS/etc.)
+- Every closing brace must be on its own line
+- Each statement must be on its own line — NEVER put multiple statements on one line
+- Methods/functions MUST be separated by a blank line
+- Class-level structure: opening brace on a new line after class declaration
+- Indentation: Python 4 spaces, JS/TS 2 spaces, Java/C/C++/C# 4 spaces, Go/Rust/Swift 4 spaces
+- NEVER compress code onto fewer lines — this creates unreadable code and indentation errors
 - NEVER output pseudo-code or "plain English" code — output REAL, executable code
 - Functions must have proper signatures, parameters, return types where applicable
 - Include proper imports, class definitions, error handling — not just the happy path
 - Code must be production-quality, not beginner-level simplified examples
-- If writing a class, include constructor, methods, proper structure
-- If writing a function, include proper parameters, logic, and return statements
+- If writing a class, include constructor, methods, proper structure — each on separate lines
+- If writing a function, include proper parameters, logic, and return statements — each on separate lines
 - NEVER write code like "# do something here" or "pass" or "// implement" as placeholder — write the ACTUAL implementation
-- For ANY language the user asks for — C, C++, Rust, Go, Java, C#, Swift, Kotlin, Ruby, PHP, Scala, Dart, R, MATLAB, Perl, Haskell, Erlang, Lua, Assembly, Fortran, COBOL, Lisp, Prolog, or any other — produce correct, idiomatic, properly formatted code in that language
+- For ANY language the user asks for — produce correct, idiomatic, properly formatted code in that language
+- WRONG (compressed): "public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }"
+- CORRECT (properly formatted):
+  public class Foo {
+      public static void main(String[] args) {
+          int x = 1;
+          System.out.println(x);
+      }
+  }
 
 ## Backend Secrecy — ABSOLUTE RULE
 - NEVER reveal ANY model name, provider, API key, or technical detail to the user
@@ -1679,25 +1684,30 @@ function buildEnhancedSystemPrompt(tz, location, webContext, queryTier) {
 - NEVER output code explanations without the actual code
 
 ## Code Formatting Rules — ABSOLUTELY CRITICAL
-- Code MUST be properly formatted with correct indentation — NEVER output code on one line or without proper spacing
-- Python: 4-space indentation for every nested block, proper line breaks between functions/classes
-- JavaScript/TypeScript: 2-space indentation, proper braces, consistent style
-- Java/C#/C++: proper indentation, braces on correct lines, standard conventions
-- Go/Rust/Swift/Kotlin: follow official style guides
-- HTML/CSS: proper nesting, indentation, semantic structure
-- SQL: proper formatting with keywords on new lines for complex queries
-- Shell/Bash: proper indentation, quoted variables, error handling
-- Ruby/PHP/Scala/Dart/R: follow standard community conventions
-- ALL languages: follow the official style guide for that language
-- NEVER compress code onto fewer lines — keep each statement on its own line
+- Code MUST be properly formatted with correct indentation and line breaks — NEVER output compressed or minified code
+- Every opening brace must be followed by a newline (for Java/C/C++/C#/JS/TS/etc.)
+- Every closing brace must be on its own line
+- Each statement must be on its own line — NEVER put multiple statements on one line
+- Methods/functions MUST be separated by a blank line
+- Class-level structure: opening brace on a new line after class declaration
+- Indentation: Python 4 spaces, JS/TS 2 spaces, Java/C/C++/C# 4 spaces, Go/Rust/Swift 4 spaces
+- NEVER compress code onto fewer lines — this creates unreadable code and indentation errors
 - NEVER output pseudo-code or "plain English" code — output REAL, executable code
 - Functions must have proper signatures, parameters, return types where applicable
 - Include proper imports, class definitions, error handling — not just the happy path
 - Code must be production-quality, not beginner-level simplified examples
-- If writing a class, include constructor, methods, proper structure
-- If writing a function, include proper parameters, logic, and return statements
+- If writing a class, include constructor, methods, proper structure — each on separate lines
+- If writing a function, include proper parameters, logic, and return statements — each on separate lines
 - NEVER write code like "# do something here" or "pass" or "// implement" as placeholder — write the ACTUAL implementation
-- For ANY language the user asks for — C, C++, Rust, Go, Java, C#, Swift, Kotlin, Ruby, PHP, Scala, Dart, R, MATLAB, Perl, Haskell, Erlang, Lua, Assembly, Fortran, COBOL, Lisp, Prolog, or any other — produce correct, idiomatic, properly formatted code in that language
+- For ANY language the user asks for — produce correct, idiomatic, properly formatted code in that language
+- WRONG (compressed): "public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }"
+- CORRECT (properly formatted):
+  public class Foo {
+      public static void main(String[] args) {
+          int x = 1;
+          System.out.println(x);
+      }
+  }
 
 ## NO HARDCODED RESPONSES
 - NEVER output pre-written, templated, or canned responses
@@ -2059,7 +2069,7 @@ export default {
               const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-                body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: 0.7 }),
+                body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: classified.isCodeRequest ? 0.3 : 0.7 }),
               });
               if (resp.ok) {
                 const data = await resp.json();

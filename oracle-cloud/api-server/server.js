@@ -1306,7 +1306,7 @@ app.post('/v1/chat', async (req, res) => {
               const resp = await fetch(`${ENV.OPENROUTER_BASE_URL}/chat/completions`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ENV.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-                body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: 0.7 }),
+                body: JSON.stringify({ messages: msgs, model, max_tokens: classified.tier === 3 ? 8192 : 4096, temperature: classified.isCodeRequest ? 0.3 : 0.7 }),
               });
               if (resp.ok) {
                 const data = await resp.json();

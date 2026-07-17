@@ -279,16 +279,26 @@ class MarkdownRenderer extends StatelessWidget {
               ],
             ),
           ),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.all(14),
-            child: SelectableText(
-              node.text,
-              style: TextStyle(
-                fontFamily: 'monospace',
-                fontSize: 13,
-                color: codeColor,
-                height: 1.55,
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 420),
+            child: Scrollbar(
+              thumbVisibility: true,
+              radius: const Radius.circular(6),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.vertical,
+                padding: const EdgeInsets.all(14),
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SelectableText(
+                    node.text,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: codeColor,
+                      height: 1.55,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
