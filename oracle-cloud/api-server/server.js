@@ -662,51 +662,112 @@ function reformatCodeBlocks(content) {
     return '```' + lang + '\n' + fixed + '```';
   });
 }
+function findBlockColon(stmt) {
+  let depth = 0;
+  let i = 0;
+  while (i < stmt.length) {
+    const ch = stmt[i];
+    if ((ch === '"' || ch === "'") && stmt.slice(i, i + 3) === ch.repeat(3)) {
+      i += 3;
+      while (i < stmt.length) {
+        if (stmt[i] === ch && stmt.slice(i, i + 3) === ch.repeat(3)) { i += 3; break; }
+        i++;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const q = ch; i++;
+      while (i < stmt.length && stmt[i] !== q) { if (stmt[i] === '\\') i++; i++; }
+      if (i < stmt.length) i++;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; i++; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') { depth = Math.max(0, depth - 1); i++; continue; }
+    if (ch === ':' && depth === 0) return i;
+    i++;
+  }
+  return -1;
+}
 function reformatPython(code) {
-  let lines = code.split('\n');
+  const newlineCount = (code.match(/\n/g) || []).length;
+  const colonCount = (code.match(/:/g) || []).length;
+  if (newlineCount > colonCount) return code;
+  const stmts = splitPythonStatements(code);
+  const INDENT = '    ';
+  let depth = 0;
   const result = [];
-  for (let line of lines) {
-    if (line.trim() === '') { result.push(''); continue; }
-    const indent = line.match(/^(\s*)/)?.[1] || '';
-    const trimmed = line.trim();
-    if (/^class\s+\w+.*:\s*(?:def|async\s+def)\s+/.test(trimmed)) {
-      const classMatch = trimmed.match(/^(class\s+\w+[^:]*):\s*((?:def|async\s+def).*)/);
-      if (classMatch) {
-        result.push(indent + classMatch[1] + ':');
-        const innerIndent = indent + '    ';
-        const remaining = classMatch[2];
-        if (remaining.includes(';')) {
-          for (const b of remaining.split(/\s*;\s*/)) result.push(innerIndent + b.trim());
-        } else { result.push(innerIndent + remaining.trim()); }
-        continue;
+  const blockOpeners = /^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/;
+  const blockClosers = /^(elif|else|except|finally)\b/;
+  for (const raw of stmts) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    if (blockClosers.test(trimmed)) depth = Math.max(0, depth - 1);
+    result.push(INDENT.repeat(depth) + trimmed);
+    if (blockOpeners.test(trimmed)) {
+      const colonIdx = findBlockColon(trimmed);
+      if (colonIdx >= 0) {
+        const afterColon = trimmed.slice(colonIdx + 1).trim();
+        if (!afterColon || /^"""/.test(afterColon) || /^'''/.test(afterColon)) depth++;
       }
     }
-    if (/^(async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?:\s*\S/.test(trimmed)) {
-      const defMatch = trimmed.match(/^((?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?):\s*(.+)/);
-      if (defMatch && !defMatch[2].trim().startsWith('"""') && !defMatch[2].trim().startsWith("'''")) {
-        result.push(indent + defMatch[1] + ':');
-        const bodyIndent = indent + '    ';
-        for (const b of defMatch[2].split(/\s*;\s*/)) result.push(bodyIndent + b.trim());
-        continue;
-      }
-    }
-    if (/^(if|elif|else|for|while|with|try|except|finally)\b/.test(trimmed)) {
-      const blockMatch = trimmed.match(/^((?:if|elif|else|for|while|with|try|except|finally)\s*.+?):\s*(.+)/);
-      if (blockMatch) {
-        result.push(indent + blockMatch[1] + ':');
-        const bodyIndent = indent + '    ';
-        for (const b of blockMatch[2].split(/\s*;\s*/)) result.push(bodyIndent + b.trim());
-        continue;
-      }
-    }
-    if (trimmed.includes(';') && !trimmed.startsWith('#') && !trimmed.startsWith('"""') && !trimmed.startsWith("'''")) {
-      const parts = trimmed.split(/\s*;\s*/).filter(p => p.trim());
-      if (parts.length > 1) { for (const part of parts) result.push(indent + part.trim()); continue; }
-    }
-    if (line.startsWith('\t')) line = '    ' + line.slice(1);
-    result.push(line);
   }
   return result.join('\n');
+}
+function splitPythonStatements(code) {
+  const stmts = [];
+  let current = '';
+  let i = 0;
+  const s = code;
+  let parenDepth = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if ((ch === '"' || ch === "'") && s.slice(i, i + 3) === ch.repeat(3)) {
+      current += s[i]; i++; current += s[i]; i++; current += s[i]; i++;
+      while (i < s.length) {
+        if (s[i] === ch && s.slice(i, i + 3) === ch.repeat(3)) {
+          current += s[i]; i++; current += s[i]; i++; current += s[i]; i++;
+          break;
+        }
+        current += s[i]; i++;
+      }
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      current += ch; i++;
+      while (i < s.length && s[i] !== ch) {
+        if (s[i] === '\\') { current += s[i]; i++; }
+        current += s[i]; i++;
+      }
+      if (i < s.length) { current += s[i]; i++; }
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') { parenDepth++; current += ch; i++; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') { parenDepth = Math.max(0, parenDepth - 1); current += ch; i++; continue; }
+    if (ch === ';') {
+      if (current.trim()) stmts.push(current.trim());
+      current = ''; i++; continue;
+    }
+    if (ch === '\n') {
+      if (current.trim()) stmts.push(current.trim());
+      current = ''; i++; continue;
+    }
+    if (parenDepth === 0 && /[a-zA-Z]/.test(ch)) {
+      const prevCh = i > 0 ? s[i - 1] : '';
+      if (!/[a-zA-Z0-9_]/.test(prevCh)) {
+        const remaining = s.slice(i);
+        const blockMatch = remaining.match(/^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/);
+        if (blockMatch && current.trim()) {
+          stmts.push(current.trim());
+          current = '';
+          continue;
+        }
+      }
+    }
+    current += ch;
+    i++;
+  }
+  if (current.trim()) stmts.push(current.trim());
+  return stmts;
 }
 function reformatJS(code) {
   const braceCount = (code.match(/[{}]/g) || []).length;

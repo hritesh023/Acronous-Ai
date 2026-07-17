@@ -1601,101 +1601,156 @@ function reformatCodeBlocks(content) {
   });
 }
 
-// Reformat Python code — fix indentation and expand compressed lines
-function reformatPython(code) {
-  let lines = code.split('\n');
-  const result = [];
-
-  for (let line of lines) {
-    // Skip empty lines
-    if (line.trim() === '') {
-      result.push('');
+// Find the colon separating a Python block header from its body,
+// skipping colons inside parentheses, brackets, and strings
+function findBlockColon(stmt) {
+  let depth = 0;
+  let i = 0;
+  while (i < stmt.length) {
+    const ch = stmt[i];
+    // Triple-quoted strings
+    if ((ch === '"' || ch === "'") && stmt.slice(i, i + 3) === ch.repeat(3)) {
+      i += 3;
+      while (i < stmt.length) {
+        if (stmt[i] === ch && stmt.slice(i, i + 3) === ch.repeat(3)) { i += 3; break; }
+        i++;
+      }
       continue;
     }
+    // Regular strings
+    if (ch === '"' || ch === "'") {
+      const q = ch; i++;
+      while (i < stmt.length && stmt[i] !== q) { if (stmt[i] === '\\') i++; i++; }
+      if (i < stmt.length) i++;
+      continue;
+    }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; i++; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') { depth = Math.max(0, depth - 1); i++; continue; }
+    if (ch === ':' && depth === 0) return i;
+    i++;
+  }
+  return -1;
+}
 
-    // Detect if line has multiple Python statements compressed together
-    // Pattern: "stmt1; stmt2" or "stmt1: stmt2" (class/def on same line as body)
-    const indent = line.match(/^(\s*)/)?.[1] || '';
-    const trimmed = line.trim();
+// Reformat Python code — fix indentation and expand compressed one-liners
+function reformatPython(code) {
+  // If already well-formatted (has many newlines), skip
+  const newlineCount = (code.match(/\n/g) || []).length;
+  const colonCount = (code.match(/:/g) || []).length;
+  if (newlineCount > colonCount) return code;
 
-    // Fix: "class X: def __init__..." → expand to multiple lines
-    if (/^class\s+\w+.*:\s*(?:def|async\s+def)\s+/.test(trimmed)) {
-      const classMatch = trimmed.match(/^(class\s+\w+[^:]*):\s*((?:def|async\s+def).*)/);
-      if (classMatch) {
-        result.push(indent + classMatch[1] + ':');
-        // The remaining part becomes indented under the class
-        const remaining = classMatch[2];
-        const innerIndent = indent + '    ';
-        // Further expand the def line if needed
-        const defExpanded = expandPythonDef(remaining, innerIndent);
-        result.push(...defExpanded);
-        continue;
-      }
+  // Split into logical statements, respecting strings and parens
+  const stmts = splitPythonStatements(code);
+  const INDENT = '    ';
+  let depth = 0;
+  const result = [];
+
+  const blockOpeners = /^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/;
+  const blockClosers = /^(elif|else|except|finally)\b/;
+
+  for (const raw of stmts) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+
+    // Decrease depth for else/elif/except/finally BEFORE printing
+    if (blockClosers.test(trimmed)) {
+      depth = Math.max(0, depth - 1);
     }
 
-    // Fix: "def X(...): stmt" → expand to multi-line
-    if (/^(async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?:\s*\S/.test(trimmed)) {
-      const defMatch = trimmed.match(/^((?:async\s+)?def\s+\w+\s*\([^)]*\)\s*(?:->\s*\w+\s*)?):\s*(.+)/);
-      if (defMatch && !defMatch[2].trim().startsWith('"""') && !defMatch[2].trim().startsWith("'''")) {
-        result.push(indent + defMatch[1] + ':');
-        const bodyIndent = indent + '    ';
-        const bodyLines = defMatch[2].split(/\s*;\s*/);
-        for (const b of bodyLines) {
-          result.push(bodyIndent + b.trim());
+    result.push(INDENT.repeat(depth) + trimmed);
+
+    // Increase depth AFTER printing if this is a block opener
+    // whose body is NOT inline (i.e. content after block colon is empty or a docstring)
+    if (blockOpeners.test(trimmed)) {
+      const colonIdx = findBlockColon(trimmed);
+      if (colonIdx >= 0) {
+        const afterColon = trimmed.slice(colonIdx + 1).trim();
+        if (!afterColon || /^"""/.test(afterColon) || /^'''/.test(afterColon)) {
+          depth++;
         }
-        continue;
       }
     }
-
-    // Fix: "if X: stmt" or "else: stmt" etc — expand single-line blocks
-    if (/^(if|elif|else|for|while|with|try|except|finally)\b/.test(trimmed)) {
-      const blockMatch = trimmed.match(/^((?:if|elif|else|for|while|with|try|except|finally)\s*.+?):\s*(.+)/);
-      if (blockMatch) {
-        result.push(indent + blockMatch[1] + ':');
-        const bodyIndent = indent + '    ';
-        const bodyLines = blockMatch[2].split(/\s*;\s*/);
-        for (const b of bodyLines) {
-          result.push(bodyIndent + b.trim());
-        }
-        continue;
-      }
-    }
-
-    // Fix: multiple statements separated by semicolons
-    if (trimmed.includes(';') && !trimmed.startsWith('#') && !trimmed.startsWith('"""') && !trimmed.startsWith("'''")) {
-      const parts = trimmed.split(/\s*;\s*/).filter(p => p.trim());
-      if (parts.length > 1) {
-        for (const part of parts) {
-          result.push(indent + part.trim());
-        }
-        continue;
-      }
-    }
-
-    // Fix tabs to 4 spaces
-    if (line.startsWith('\t')) {
-      line = '    ' + line.slice(1);
-    }
-
-    result.push(line);
   }
 
   return result.join('\n');
 }
 
-// Expand a def line that might have body on same line
-function expandPythonDef(defLine, indent) {
-  const result = [];
-  // Check if it has multiple statements
-  if (defLine.includes(';')) {
-    const parts = defLine.split(/\s*;\s*/);
-    for (const part of parts) {
-      result.push(indent + part.trim());
+// Split compressed Python code into individual statements
+function splitPythonStatements(code) {
+  const stmts = [];
+  let current = '';
+  let i = 0;
+  const s = code;
+  let parenDepth = 0;
+
+  while (i < s.length) {
+    const ch = s[i];
+
+    // Handle triple-quoted strings
+    if ((ch === '"' || ch === "'") && s.slice(i, i + 3) === ch.repeat(3)) {
+      current += s[i]; i++; current += s[i]; i++; current += s[i]; i++;
+      while (i < s.length) {
+        if (s[i] === ch && s.slice(i, i + 3) === ch.repeat(3)) {
+          current += s[i]; i++; current += s[i]; i++; current += s[i]; i++;
+          break;
+        }
+        current += s[i]; i++;
+      }
+      continue;
     }
-  } else {
-    result.push(indent + defLine.trim());
+
+    // Handle single-quoted strings
+    if (ch === '"' || ch === "'") {
+      current += ch; i++;
+      while (i < s.length && s[i] !== ch) {
+        if (s[i] === '\\') { current += s[i]; i++; }
+        current += s[i]; i++;
+      }
+      if (i < s.length) { current += s[i]; i++; }
+      continue;
+    }
+
+    // Track parentheses/brackets
+    if (ch === '(' || ch === '[' || ch === '{') { parenDepth++; current += ch; i++; continue; }
+    if (ch === ')' || ch === ']' || ch === '}') { parenDepth = Math.max(0, parenDepth - 1); current += ch; i++; continue; }
+
+    // Semicolon = statement separator
+    if (ch === ';') {
+      if (current.trim()) stmts.push(current.trim());
+      current = '';
+      i++;
+      continue;
+    }
+
+    // Newline = statement separator
+    if (ch === '\n') {
+      if (current.trim()) stmts.push(current.trim());
+      current = '';
+      i++;
+      continue;
+    }
+
+    // Block keyword at depth 0 = new statement boundary (for compressed code)
+    if (parenDepth === 0 && /[a-zA-Z]/.test(ch)) {
+      // Only check for block keywords at word boundaries (prev char is not word char)
+      const prevCh = i > 0 ? s[i - 1] : '';
+      if (!/[a-zA-Z0-9_]/.test(prevCh)) {
+        const remaining = s.slice(i);
+        const blockMatch = remaining.match(/^(def|async\s+def|class|if|elif|else|for|while|with|try|except|finally)\b/);
+        if (blockMatch && current.trim()) {
+          stmts.push(current.trim());
+          current = '';
+          continue;
+        }
+      }
+    }
+
+    current += ch;
+    i++;
   }
-  return result;
+
+  if (current.trim()) stmts.push(current.trim());
+  return stmts;
 }
 
 // Reformat JavaScript/TypeScript code — uses same brace-based approach as C/Java
