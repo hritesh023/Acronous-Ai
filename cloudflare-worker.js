@@ -82,6 +82,38 @@ NOT like this (WRONG — explanation in the lang tag):
 
 The \`\`\` MUST appear on its own line, followed by ONLY the language name (e.g. java, python, javascript), then the code, then \`\`\` to close.
 
+### ABSOLUTE CRITICAL: What Goes Where (NEVER violate this)
+- INSIDE the \`\`\` code block: ONLY executable source code (imports, classes, functions, variables, statements)
+- OUTSIDE the code block: ONLY explanation text, headers, bullet points
+- NEVER put explanation text, descriptions, "This program...", "The function...", or "How it works" sections INSIDE a code block — code blocks contain ONLY code
+- NEVER put actual code outside a code block as plain text — ALL code MUST be inside \`\`\` fences
+- NEVER output code as unformatted plain text lines — wrap it in \`\`\`language fences
+
+### WRONG Examples (NEVER do these):
+WRONG — explanation INSIDE the code block, code as plain text outside:
+\`\`\`c
+This program checks if a number is a palindrome.
+The is_palindrome function reverses the number and compares it with the original.
+\`\`\`
+#include <stdio.h>
+int is_palindrome(int num) { int rev = 0, orig = num; while (num != 0) { rev = rev * 10 + num % 10; num /= 10; } return (orig == rev); }
+
+WRONG — code as plain unformatted text outside code block:
+Here is the palindrome program in C:
+#include <stdio.h>
+int main() { printf("hello"); return 0; }
+
+WRONG — compressed code on one line:
+\`\`\`java
+public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
+\`\`\`
+
+WRONG — pseudo-code:
+\`\`\`python
+class ChatBot:
+    pass  # TODO: implement
+\`\`\`
+
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
 - JavaScript/TypeScript: 2 spaces per indentation level
@@ -89,29 +121,33 @@ The \`\`\` MUST appear on its own line, followed by ONLY the language name (e.g.
 - HTML/CSS: 2 spaces per indentation level
 - Ruby/PHP/Swift/Kotlin: 4 spaces per indentation level
 
-### WRONG Examples (NEVER do these):
-WRONG — Python compressed into one line:
-\`\`\`python
-class ChatBot: def __init__(self): self.x = 1
-\`\`\`
-
-WRONG — Python pseudo-code:
-\`\`\`python
-class ChatBot:
-    pass  # TODO: implement
-\`\`\`
-
-WRONG — Java compressed:
-\`\`\`java
-public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
-\`\`\`
-
-WRONG — JavaScript one-liner:
-\`\`\`javascript
-function add(a, b) { return a + b; }
-\`\`\`
-
 ### CORRECT Examples (ALWAYS do these):
+CORRECT — For "write a C program to check palindrome", the ENTIRE response is just this code block:
+\`\`\`c
+#include <stdio.h>
+
+int is_palindrome(int num) {
+    int rev = 0, orig = num;
+    while (num != 0) {
+        rev = rev * 10 + num % 10;
+        num /= 10;
+    }
+    return (orig == rev);
+}
+
+int main() {
+    int num;
+    printf("Enter a number: ");
+    scanf("%d", &num);
+    if (is_palindrome(num)) {
+        printf("%d is a palindrome number.", num);
+    } else {
+        printf("%d is not a palindrome number.", num);
+    }
+    return 0;
+}
+\`\`\`
+
 CORRECT — Python properly formatted:
 \`\`\`python
 class ChatBot:
@@ -188,37 +224,32 @@ class DataProcessor:
 
 ## INTENT MATCHING — MOST IMPORTANT RULE
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
-- If they say "write code" or "create a function" → generate ONLY code in a fenced code block with language tag, not explanation
-- If they ask a question that needs both code AND explanation (e.g. "find prime numbers", "write a program to...") → FIRST give the code in a fenced code block, then below the code block give the expected output/answer
-- If they say "explain" → give explanation, not code
+- If they say "write code" or "create a function" or "write a program to..." → generate ONLY the code in a fenced code block with language tag. NO explanation, NO "how it works", NO commentary. Just the code block.
+- If they ask a question that needs code (e.g. "find prime numbers", "write a program to find palindrome") → give ONLY the code in a fenced code block. The code IS the complete answer. Do NOT add explanation, output examples, or commentary unless the user explicitly asks (e.g. "explain the code", "how does this work").
+- If they say "explain" or "explain the code" or "how does this work" → give explanation alongside code
 - If they say "edit this image" → edit ONLY the part they mention, keep everything else identical
 - If they say "generate an image" → generate a new image
 - If they ask a question → answer that question directly and completely
 - If they ask for help with ANY subject — math, science, history, law, medicine, engineering, philosophy, art, music, or anything else — give a thorough, accurate, complete answer
-- If they ask for code in ANY language — produce correct, properly formatted, complete code in that exact language
+- If they ask for code in ANY language — produce correct, properly formatted, complete code in that exact language. Code only. No explanation unless explicitly asked.
 - NEVER give a partial response — always complete what was asked
 - NEVER substitute explanation for code when code was requested — the code IS the answer
 - NEVER give code when explanation was requested
 - NEVER give incomplete answers — finish the full response before stopping
 - NEVER give a response that only partially addresses the user's query
+- NEVER add "Here's the code:", "Here is your program:", "Below is the code:" or any text before the code block — start DIRECTLY with the fenced code block
+- NEVER add "How it works:", "Explanation:", "Output:", or post-code commentary unless the user explicitly asks for explanation
 
 ## CODE OUTPUT FORMAT
 When a user asks for code (e.g. "write a program to find primes", "create a function that..."):
-1. FIRST: Give the complete, properly formatted code in a fenced code block with language tag — code block comes FIRST, always
-2. THEN: After the code block, explain what the code does and how it works
-3. THEN: Show the expected output/result of running the code (if applicable)
-Example for "find prime numbers from 1 to 10":
+1. Give ONLY the complete, properly formatted code in a fenced code block with language tag
+2. NO explanation after the code unless the user explicitly asks (e.g. "explain the code")
+3. NO output examples unless the user asks for expected output
+Example for "find prime numbers from 1 to 10" — the ENTIRE response should be:
 \`\`\`c
-// code here
+// properly formatted complete code
 \`\`\`
-**How it works:**
-- Brief explanation of the approach
-- Key points about the implementation
-Output:
-\`\`\`
-Prime numbers from 1 to 10:
-2 3 5 7
-\`\`\`
+That's it. Nothing else. No explanation, no commentary, no "how it works".
 
 ## CRITICAL: ACCURACY RULES
 - NEVER give wrong answers — saying "I don't know" is better than guessing
@@ -248,11 +279,11 @@ Prime numbers from 1 to 10:
 ## Response Style
 - Be natural, warm, and conversational — like talking to a brilliant friend
 - Use markdown formatting when it helps: **bold** for emphasis, bullet points for lists, code blocks for code, headers for structure
-- For code: always include language tag, code block FIRST then brief explanation AFTER, key notes after explanation
+- For code: start DIRECTLY with the fenced code block. NO preamble text. NO explanation after the code unless user specifically asks. The code block IS the entire response for code queries.
 - For math: show your work step-by-step with clear notation
 - For research: synthesize multiple sources, cite key facts, give a clear summary
 - Be concise by default, but go deep when the question deserves it
-- Never start with "Sure!" or "Of course!" or "Great question!" — just answer directly
+- Never start with "Sure!" or "Of course!" or "Great question!" or "Here's the code:" — just output the code block directly
 - Never say "As an AI" or "As a language model" — just be yourself
 - Never say your knowledge is outdated — just answer with what you know
 - Match the user's language — if they write in Spanish, respond in Spanish; if in Hindi, respond in Hindi
@@ -778,8 +809,42 @@ function sanitizeCodeBlocks(text) {
   text = text.replace(/```\w*\s*\n\s*\n?\s*```/g, '');
   text = text.replace(/```\w*\n\s*```/g, '');
   // Fix code blocks where the lang tag is a sentence (>20 chars or contains spaces)
-  text = text.replace(/```([^\n]{21,})\n/g, () => '```\n');
-  text = text.replace(/```([^\s`]{1,20}\s+[^\n]+)\n/g, () => '```\n');
+  // Try to auto-detect the language from the code content when stripping the bad tag
+  text = text.replace(/```([^\n]{21,})\n([\s\S]*?)```/g, (match, badTag, code) => {
+    let lang = '';
+    if (/\b#include\s*[<"]/.test(code)) lang = 'c';
+    else if (/\bimport\s+(?:java|javax)\b/.test(code)) lang = 'java';
+    else if (/\bimport\s+.*from\s+/.test(code) || /\brequire\s*\(/.test(code) || /\bfunction\s+\w+/.test(code) || /\bconst\s+\w+\s*=/.test(code)) lang = 'javascript';
+    else if (/\bdef\s+\w+\s*\(/.test(code) || /\bself\./.test(code)) lang = 'python';
+    else if (/\bfunc\s+\w+/.test(code)) lang = 'go';
+    else if (/\bfn\s+\w+/.test(code)) lang = 'rust';
+    else if (/<\?php/.test(code)) lang = 'php';
+    else if (/\bprintf\s*\(/.test(code) || /\bscanf\s*\(/.test(code)) lang = 'c';
+    else if (/\bSystem\.out\./.test(code)) lang = 'java';
+    else if (/\bconsole\.log\s*\(/.test(code)) lang = 'javascript';
+    else if (/\bSELECT\b.*\bFROM\b/i.test(code)) lang = 'sql';
+    return '```' + lang + '\n' + code + '```';
+  });
+  text = text.replace(/```([^\s`]{1,20}\s+[^\n]+)\n/g, (match, badTag, offset, str) => {
+    // Find the matching closing fence to get code content
+    const codeStart = match.length;
+    const closingIdx = str.indexOf('```', codeStart);
+    if (closingIdx === -1) return '```\n';
+    const code = str.slice(codeStart, closingIdx);
+    let lang = '';
+    if (/\b#include\s*[<"]/.test(code)) lang = 'c';
+    else if (/\bimport\s+(?:java|javax)\b/.test(code)) lang = 'java';
+    else if (/\bimport\s+.*from\s+/.test(code) || /\brequire\s*\(/.test(code) || /\bfunction\s+\w+/.test(code)) lang = 'javascript';
+    else if (/\bdef\s+\w+\s*\(/.test(code) || /\bself\./.test(code)) lang = 'python';
+    else if (/\bfunc\s+\w+/.test(code)) lang = 'go';
+    else if (/\bfn\s+\w+/.test(code)) lang = 'rust';
+    else if (/<\?php/.test(code)) lang = 'php';
+    else if (/\bprintf\s*\(/.test(code) || /\bscanf\s*\(/.test(code)) lang = 'c';
+    else if (/\bSystem\.out\./.test(code)) lang = 'java';
+    else if (/\bconsole\.log\s*\(/.test(code)) lang = 'javascript';
+    else if (/\bSELECT\b.*\bFROM\b/i.test(code)) lang = 'sql';
+    return '```' + lang + '\n';
+  });
 
   // Fix orphaned closing fences: if we see ``` at start of a line but it's a closing
   // fence (no matching opening), strip it. Also detect code that has a closing fence
@@ -858,6 +923,116 @@ function sanitizeCodeBlocks(text) {
   return text.trim();
 }
 
+function fixCodeBlockPlacement(text) {
+  if (!text) return text;
+
+  // Detect if a code block contains explanation text instead of code
+  // A line is "explanation" if it has >70% alphabetic chars and few code tokens
+  function isExplanationLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.length < 5) return false;
+    const codeTokens = (trimmed.match(/[{}();=+\-*/<>!&|^~[\]@#:]/g) || []).length;
+    const alphaRatio = (trimmed.replace(/[^a-zA-Z]/g, '').length) / trimmed.length;
+    return alphaRatio > 0.7 && codeTokens < 3 && (/\.\s*$/.test(trimmed) || /^\s*[A-Z]/.test(trimmed));
+  }
+
+  // Detect if a line looks like source code
+  function isCodeLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    const codeTokens = (trimmed.match(/[{}();=+\-*/<>!&|^~[\]@#:]/g) || []).length;
+    if (codeTokens >= 2) return true;
+    if (/^(?:#include|#define|#ifdef|#ifndef|#endif|#pragma|import |from |export |const |let |var |function |class |def |public |private |protected |static |void |int |float |double |char |string |bool |return |if |else|for |while |switch |case |try |catch |elif |except |finally |with |as |yield |async |await |print|self\.|this\.|super\()/.test(trimmed)) return true;
+    if (/^(?:\s*(?:\/\/|#|\/\*|\*\/|\*|<!--))/.test(trimmed)) return true;
+    if (/^\s*\}[\s;]*$/.test(trimmed) || /^\s*\{[\s]*$/.test(trimmed)) return true;
+    if (/^\s*(?:<\/?[a-zA-Z][\w-]*)/.test(trimmed)) return true;
+    return false;
+  }
+
+  // Detect language from code content
+  function detectLang(codeSection) {
+    if (/\b#include\s*[<"]/.test(codeSection)) return 'c';
+    if (/\bimport\s+(?:java|javax)\b/.test(codeSection)) return 'java';
+    if (/\bimport\s+.*from\s+/.test(codeSection) || /\brequire\s*\(/.test(codeSection) || /\bconst\s+\w+\s*=/.test(codeSection) || /\blet\s+\w+\s*=/.test(codeSection) || /\bfunction\s+\w+/.test(codeSection)) return 'javascript';
+    if (/\bdef\s+\w+\s*\(/.test(codeSection) || /\bimport\s+(?!java|javax)/.test(codeSection) || /\bclass\s+\w+(\(.*\))?\s*:/.test(codeSection) || /\bself\./.test(codeSection)) return 'python';
+    if (/\bfunc\s+\w+/.test(codeSection) || /\bpackage\s+\w+/.test(codeSection)) return 'go';
+    if (/\bfn\s+\w+/.test(codeSection) || /\blet\s+mut\b/.test(codeSection)) return 'rust';
+    if (/<\?php/.test(codeSection)) return 'php';
+    if (/\bprintf\s*\(/.test(codeSection) || /\bscanf\s*\(/.test(codeSection)) return 'c';
+    if (/\bSystem\.out\./.test(codeSection) || /\bpublic\s+class\b/.test(codeSection)) return 'java';
+    if (/\bconsole\.log\s*\(/.test(codeSection)) return 'javascript';
+    if (/\bprint\s*\(/.test(codeSection) || /\binput\s*\(/.test(codeSection)) return 'python';
+    if (/\bSELECT\b.*\bFROM\b/i.test(codeSection)) return 'sql';
+    if (/<html/i.test(codeSection) || /<div/i.test(codeSection)) return 'html';
+    if (/\bmargin\b|\bpadding\b|\bcolor\b|\bfont-size\b/.test(codeSection)) return 'css';
+    if (/\breact\b|\buseState\b|\buseEffect\b|\bJSX\b/.test(codeSection)) return 'jsx';
+    if (/<\/?[A-Z][a-zA-Z]*(?:\s|\/>)/.test(codeSection) && /\bclassName\b/.test(codeSection)) return 'jsx';
+    return '';
+  }
+
+  // Step 1: Find code blocks that contain explanation text — strip explanation lines from them
+  text = text.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+    const lines = code.split('\n');
+    const codeLines = lines.filter(l => !isExplanationLine(l));
+    if (codeLines.length < lines.length && codeLines.length > 0) {
+      const cleaned = codeLines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+      if (cleaned) return '```' + lang + '\n' + cleaned + '\n```';
+      return '';
+    }
+    return match;
+  });
+
+  // Step 2: Find code-like text outside code blocks and wrap it in a code block
+  // Now handles BOTH cases: no code block at all AND mixed content with some blocks + orphaned code
+  const lines = text.split('\n');
+  const newLines = [];
+  let i = 0;
+  let inCodeBlock = false;
+
+  while (i < lines.length) {
+    const trimmed = lines[i].trim();
+    if (trimmed.startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      newLines.push(lines[i]);
+      i++;
+      continue;
+    }
+    if (inCodeBlock) {
+      newLines.push(lines[i]);
+      i++;
+      continue;
+    }
+    // Collect contiguous code lines outside any code block
+    if (isCodeLine(trimmed)) {
+      const codeStart = i;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        const t = lines[i].trim();
+        if (t && !isCodeLine(t) && !/^\s*$/.test(lines[i])) break;
+        i++;
+      }
+      const codeEnd = i - 1;
+      // Only wrap if we have at least 1 real code line (skip single comment lines)
+      const codeSlice = lines.slice(codeStart, codeEnd + 1).join('\n');
+      const codeLineCount = lines.slice(codeStart, codeEnd + 1).filter(l => isCodeLine(l.trim())).length;
+      if (codeLineCount >= 1) {
+        const detectedLang = detectLang(codeSlice);
+        newLines.push('```' + detectedLang + '\n' + codeSlice.trim() + '\n```');
+      } else {
+        newLines.push(codeSlice);
+      }
+    } else {
+      newLines.push(lines[i]);
+      i++;
+    }
+  }
+  text = newLines.join('\n');
+
+  // Step 3: Remove empty code blocks left behind
+  text = text.replace(/```[\w]*\n\s*\n?\s*```/g, '');
+
+  return text.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function cleanResponse(text) {
   if (!text) return '';
   let clean = stripJsonLeak(text);
@@ -910,6 +1085,9 @@ function cleanResponse(text) {
 
   // Restore protected code blocks
   clean = clean.replace(/__CODE_BLOCK_(\d+)__/g, (_, i) => codeBlocks[parseInt(i)]);
+
+  // Fix code block placement — move code into blocks, strip explanation from blocks
+  clean = fixCodeBlockPlacement(clean);
 
   // Sanitize code blocks — remove empty ones, fix malformed lang tags
   clean = sanitizeCodeBlocks(clean);
@@ -1508,6 +1686,38 @@ async function safeApology(reason, env) {
 }
 
 // ---------------------------------------------------------------------------
+// Detect code content outside fenced code blocks
+// ---------------------------------------------------------------------------
+function hasCodeOutsideFences(text) {
+  if (!text) return false;
+  const lines = text.split('\n');
+  let inCodeBlock = false;
+  let consecutiveCodeLines = 0;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('```')) {
+      inCodeBlock = !inCodeBlock;
+      consecutiveCodeLines = 0;
+      continue;
+    }
+    if (inCodeBlock) { consecutiveCodeLines = 0; continue; }
+    if (!trimmed) { consecutiveCodeLines = 0; continue; }
+    const codeTokens = (trimmed.match(/[{}();=+\-*/<>!&|^~[\]@#:]/g) || []).length;
+    const isCode = codeTokens >= 2
+      || /^(?:#include|#define|#ifdef|#ifndef|#endif|#pragma|import |from |export |const |let |var |function |class |def |public |private |protected |static |void |int |float |double |char |string |bool |return |if |else|for |while |switch |case |try |catch |elif |except |finally |with |as |yield |async |await |print|self\.|this\.|super\()/.test(trimmed)
+      || /^\s*(?:\/\/|#|\/\*|\*\/|\*|<!--)/.test(trimmed)
+      || /^\s*\}[\s;]*$/.test(trimmed) || /^\s*\{[\s]*$/.test(trimmed)
+      || /^\s*(?:<\/?[a-zA-Z][\w-]*)/.test(trimmed)
+      || /\bprintf\s*\(/.test(trimmed) || /\bconsole\.log\s*\(/.test(trimmed) || /\bSystem\.out\./.test(trimmed);
+    if (isCode) {
+      consecutiveCodeLines++;
+      if (consecutiveCodeLines >= 2) return true;
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Code Formatting Quality Validator — checks if code is properly formatted
 // ---------------------------------------------------------------------------
 function validateCodeFormatting(content) {
@@ -1534,6 +1744,18 @@ function validateCodeFormatting(content) {
     const code = block.code;
     const lang = block.lang;
     const lines = code.split('\n');
+
+    // Check for explanation text inside code block — most lines look like English sentences
+    const explanationLines = lines.filter(l => {
+      const trimmed = l.trim();
+      if (!trimmed || trimmed.length < 8) return false;
+      const codeTokens = (trimmed.match(/[{}();=+\-*/<>!&|^~[\]@#:]/g) || []).length;
+      const alphaRatio = (trimmed.replace(/[^a-zA-Z]/g, '').length) / trimmed.length;
+      return alphaRatio > 0.75 && codeTokens < 2 && (/\.\s*$/.test(trimmed) || /^\s*[A-Z]/.test(trimmed));
+    });
+    if (explanationLines.length > lines.length * 0.3 && lines.length > 2) {
+      issues.push('explanation_in_code_block');
+    }
 
     // Check for compressed/single-line code (too many statements per line)
     const longLines = lines.filter(l => l.trim().length > 120);
@@ -2332,6 +2554,38 @@ NOT like this (WRONG — explanation in the lang tag):
 
 The \`\`\` MUST appear on its own line, followed by ONLY the language name (e.g. java, python, javascript), then the code, then \`\`\` to close.
 
+### ABSOLUTE CRITICAL: What Goes Where (NEVER violate this)
+- INSIDE the \`\`\` code block: ONLY executable source code (imports, classes, functions, variables, statements)
+- OUTSIDE the code block: ONLY explanation text, headers, bullet points
+- NEVER put explanation text, descriptions, "This program...", "The function...", or "How it works" sections INSIDE a code block — code blocks contain ONLY code
+- NEVER put actual code outside a code block as plain text — ALL code MUST be inside \`\`\` fences
+- NEVER output code as unformatted plain text lines — wrap it in \`\`\`language fences
+
+### WRONG Examples (NEVER do these):
+WRONG — explanation INSIDE the code block, code as plain text outside:
+\`\`\`c
+This program checks if a number is a palindrome.
+The is_palindrome function reverses the number and compares it with the original.
+\`\`\`
+#include <stdio.h>
+int is_palindrome(int num) { int rev = 0, orig = num; while (num != 0) { rev = rev * 10 + num % 10; num /= 10; } return (orig == rev); }
+
+WRONG — code as plain unformatted text outside code block:
+Here is the palindrome program in C:
+#include <stdio.h>
+int main() { printf("hello"); return 0; }
+
+WRONG — compressed code on one line:
+\`\`\`java
+public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
+\`\`\`
+
+WRONG — pseudo-code:
+\`\`\`python
+class ChatBot:
+    pass  # TODO: implement
+\`\`\`
+
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
 - JavaScript/TypeScript: 2 spaces per indentation level
@@ -2339,29 +2593,33 @@ The \`\`\` MUST appear on its own line, followed by ONLY the language name (e.g.
 - HTML/CSS: 2 spaces per indentation level
 - Ruby/PHP/Swift/Kotlin: 4 spaces per indentation level
 
-### WRONG Examples (NEVER do these):
-WRONG — Python compressed into one line:
-\`\`\`python
-class ChatBot: def __init__(self): self.x = 1
-\`\`\`
-
-WRONG — Python pseudo-code:
-\`\`\`python
-class ChatBot:
-    pass  # TODO: implement
-\`\`\`
-
-WRONG — Java compressed:
-\`\`\`java
-public class Foo { public static void main(String[] args) { int x = 1; System.out.println(x); } }
-\`\`\`
-
-WRONG — JavaScript one-liner:
-\`\`\`javascript
-function add(a, b) { return a + b; }
-\`\`\`
-
 ### CORRECT Examples (ALWAYS do these):
+CORRECT — For "write a C program to check palindrome", the ENTIRE response is just this code block:
+\`\`\`c
+#include <stdio.h>
+
+int is_palindrome(int num) {
+    int rev = 0, orig = num;
+    while (num != 0) {
+        rev = rev * 10 + num % 10;
+        num /= 10;
+    }
+    return (orig == rev);
+}
+
+int main() {
+    int num;
+    printf("Enter a number: ");
+    scanf("%d", &num);
+    if (is_palindrome(num)) {
+        printf("%d is a palindrome number.", num);
+    } else {
+        printf("%d is not a palindrome number.", num);
+    }
+    return 0;
+}
+\`\`\`
+
 CORRECT — Python properly formatted:
 \`\`\`python
 class ChatBot:
@@ -2439,16 +2697,18 @@ class DataProcessor:
 
 ## INTENT MATCHING — HIGHEST PRIORITY
 - READ the user's request carefully and do EXACTLY what they ask — nothing more, nothing less
-- If they say "write code" or "create a function" → generate ONLY code in a fenced code block with language tag, not explanation
-- If they say "explain" → give explanation, not code
+- If they say "write code" or "create a function" or "write a program to..." → generate ONLY the code in a fenced code block with language tag. NO explanation, NO "how it works", NO commentary. Just the code block.
+- If they say "explain" or "explain the code" or "how does this work" → give explanation alongside code
 - If they say "edit this image" → edit ONLY the part they mention, keep everything else identical
 - If they say "generate an image" → generate a new image
 - If they ask a question → answer that question directly and completely
-- If they ask for code in ANY language — produce correct, properly formatted, complete code in that exact language
+- If they ask for code in ANY language — produce correct, properly formatted, complete code in that exact language. Code only. No explanation unless explicitly asked.
 - NEVER give a partial response — always complete what was asked
 - NEVER substitute explanation for code when code was requested — the code IS the answer
 - NEVER give code when explanation was requested
 - NEVER give incomplete answers — finish the full response before stopping
+- NEVER add "Here's the code:", "Here is your program:", "Below is the code:" or any text before the code block — start DIRECTLY with the fenced code block
+- NEVER add "How it works:", "Explanation:", "Output:", or post-code commentary unless the user explicitly asks for explanation
 
 ## NO HARDCODED RESPONSES
 - NEVER output pre-written, templated, or canned responses
@@ -2459,11 +2719,11 @@ class DataProcessor:
 ## Response Style
 - Be natural, warm, and conversational — like talking to a brilliant friend
 - Use markdown formatting when it helps: **bold** for emphasis, bullet points for lists, code blocks for code, headers for structure
-- For code: always include language tag, code block FIRST then brief explanation AFTER, key notes after explanation
+- For code: start DIRECTLY with the fenced code block. NO preamble text. NO explanation after the code unless user specifically asks. The code block IS the entire response for code queries.
 - For math: show your work step-by-step with clear notation
 - For research: synthesize multiple sources, cite key facts, give a clear summary
 - Be concise by default, but go deep when the question deserves it
-- Never start with "Sure!" or "Of course!" or "Great question!" — just answer directly
+- Never start with "Sure!" or "Of course!" or "Great question!" or "Here's the code:" — just output the code block directly
 - Never say "As an AI" or "As a language model" — just be yourself
 - Never say your knowledge is outdated — just answer with what you know
 - Match the user's language — if they write in Spanish, respond in Spanish; if in Hindi, respond in Hindi
@@ -2520,7 +2780,7 @@ The web search results above are LIVE, CURRENT, and FRESH. They are your PRIMARY
 - Never output JSON or structured data in chat responses
 - Be concise but complete — answer the question fully
 - For time-sensitive questions (who is X, current price, latest news), prioritize the MOST RECENT information from search results
-- For code requests: generate clean, working code in a code block with language tag — never describe code, always show it`;
+- For code requests: output ONLY the code block. NO explanation, NO preamble, NO commentary — just the fenced code block with language tag directly.`;
   }
 
   return `${basePersonality}
@@ -2532,7 +2792,7 @@ The web search results above are LIVE, CURRENT, and FRESH. They are your PRIMARY
 - If the user asks "where am I", "my location", "what city am I in", "what country am I in", or any location question — use the User location field above
 - The User location contains the FULL precise address from device GPS including street, area, city, state, postal code, country, and GPS coordinates
 - Present the FULL address exactly as provided. Example: "You are in Jaydev Vihar, Nayapalli, Bhubaneswar, Odisha, 751012, India. Your GPS coordinates are 20.2961, 85.8245."
-- State it as a FACT — the data is from device GPS and is exact
+- State it as a FACT — the data from device GPS and is exact
 - NEVER say "You appear to be" or "You seem to be" or "approximately" or "near" — GPS data is precise
 - NEVER say "I don't know where you are" if the User location field has data
 - If User location is not available, say "I couldn't determine your exact location, but I can help with location-related questions."
@@ -2542,7 +2802,7 @@ The web search results above are LIVE, CURRENT, and FRESH. They are your PRIMARY
 - Never mention training data limitations or knowledge cutoffs
 - Never say "I don't have access to" or "I cannot browse" — just answer what you know
 - If unsure, say "I'm not certain, but..." and give your best answer
-- For code requests: generate clean, working code in a code block with language tag — never describe code, always show it`;
+- For code requests: output ONLY the code block. NO explanation, NO preamble, NO commentary — just the fenced code block with language tag directly.`;
 }
 
 async function handleMultipartVision(request, env, systemPrompt) {
@@ -2695,10 +2955,17 @@ export default {
         }
 
         // Detect if this is a direct code request (skip web search for pure code)
-        const isCodeRequest = /\b(?:write|create|build|implement|code|program|script|function|class|module|api|endpoint)\s+(?:a|an|the|me|my|for|in|using|with|that|which|to)\b/i.test(message.toLowerCase())
-          || /\b(?:write|create|build|implement|code|program|script)\s+\w+\s+(?:code|function|program|script|class|module|api)/i.test(message.toLowerCase())
-          || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql)\s+(?:code|function|script|program|class|implementation|solution)/i.test(message.toLowerCase())
-          || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following)\s+(?:code|bug|error|issue|function|program)/i.test(message.toLowerCase());
+        const msgLower = message.toLowerCase();
+        const isCodeRequest = /\b(?:write|create|build|implement|code|program|script|function|class|module|api|endpoint|make|generate|develop|compose|design|construct|draft)\s+(?:a|an|the|me|my|for|in|using|with|that|which|to|simple|basic|quick|new|full|complete|proper|working|robust|clean)\b/i.test(msgLower)
+          || /\b(?:write|create|build|implement|code|program|script|make|generate|develop)\s+\w+\s+(?:code|function|program|script|class|module|api|app|application)/i.test(msgLower)
+          || /\b(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|dart|html|css|sql|react|vue|angular|node|express|flask|django)\s+(?:code|function|script|program|class|implementation|solution|component|module|app|application|snippet)/i.test(msgLower)
+          || /\b(?:fix|debug|refactor|optimize)\s+(?:this|my|the|following|that)\s+(?:code|bug|error|issue|function|program)/i.test(msgLower)
+          || /\b(?:hello\s+world|fibonacci|prime\s+numbers?|palindrome|binary\s+search|bubble\s+sort|merge\s+sort|quicksort|factorial)\s+(?:in|using|with|for|program|code|function)\b/i.test(msgLower)
+          || /\b(?:convert|translate|port|rewrite)\s+(?:this|that|it|the|following)\s+(?:to|into)\s+\w+/i.test(msgLower)
+          || /\b(?:react|vue|angular|svelte|flutter|nextjs|nuxt)\s+(?:component|widget|element|page|view|hook|component)\b/i.test(msgLower)
+          || /\b(?:give\s+me|show\s+me|show\s+how|teach\s+me)\s+(?:a|an|the|how|to)\b.*(?:in|using|with)\s+\w+/i.test(msgLower)
+          || /\b(?:write|create|make)\s+(?:me\s+)?(?:a\s+)?(?:simple|basic|full|complete|working|proper|clean|basic)\s+\w+\s*(?:app|program|script|function|class|module|component|page|form|button|api|endpoint|server|client|bot|chatbot|website|game|tool|utility|helper|service|handler|controller|model|schema|database|query|migration|test|spec|util)\b/i.test(msgLower)
+          || /\b(?:write|create|make)\s+(?:me\s+)?(?:a\s+)?\w+(?:\s+\w+)?\s*(?:in|using)\s+(?:python|javascript|typescript|java|c\+\+|ruby|php|go|rust|swift|kotlin|dart|html|css|sql|react|vue|angular|node|express|flask|django)\b/i.test(msgLower);
 
         // Detect current affairs queries — ALWAYS web search for these
         const isCurrentAffairs = isCurrentAffairsQuery(message);
@@ -2771,12 +3038,28 @@ export default {
           }
         }
 
-        // Validate code formatting quality
-        if (content && isCodeRequest) {
-          const hasCodeBlock = /```[\w]*\n[\s\S]+?```/.test(content);
-          const formatting = validateCodeFormatting(content);
-          if (!hasCodeBlock || !formatting.valid) {
-            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. You MUST respond with the code FIRST in a fenced code block (\`\`\`language), then a brief explanation AFTER. Code MUST be properly formatted with correct indentation — 4 spaces for Python, 2 spaces for JS/TS. NEVER output code on one line. NEVER compress multiple statements onto one line. NEVER use pseudo-code, one-liners, or "pass" placeholders — write REAL, complete, runnable implementation with proper structure. NEVER output empty code blocks. NEVER put explanation text after \`\`\` — only the language name goes there. One code block per snippet. After the code block, explain what the code does.`;
+        // Validate code formatting quality — trigger retry if:
+        // 1. isCodeRequest AND (no code block OR formatting issues)
+        // 2. Any response has code-like content outside fenced code blocks
+        const needsRetry = content && (
+          (isCodeRequest && (!/```[\w]*\n[\s\S]+?```/.test(content) || !validateCodeFormatting(content).valid))
+          || (content && hasCodeOutsideFences(content))
+        );
+        if (needsRetry) {
+            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. CRITICAL RULES — follow EXACTLY:
+1. Your ENTIRE response MUST be a single fenced code block: \`\`\`language (new line) code (new line) \`\`\`
+2. Start DIRECTLY with \`\`\` — NO text, explanation, or preamble before the opening fence
+3. The ONLY thing after \`\`\` on the first line is the language name (python, javascript, java, c, etc.)
+4. ALL code goes INSIDE the fence — every import, class, function, variable, statement
+5. Each statement on its OWN line — NEVER compress multiple statements onto one line
+6. Every opening brace { on its OWN line, every closing brace } on its OWN line
+7. 4-space indentation for Python/Java/C/C++/Go/Rust/Kotlin/Swift/Ruby/PHP
+8. 2-space indentation for JavaScript/TypeScript/HTML/CSS
+9. Write REAL, COMPLETE, runnable code — NO placeholders, NO "pass", NO "TODO", NO comments saying "implement here"
+10. NEVER put explanation text INSIDE the code block — only executable code
+11. NO explanation, commentary, "how it works", or "output:" sections AFTER the code block
+12. Response format: \`\`\`python (or appropriate language) (newline) full code here (newline) \`\`\`
+That is the ONLY acceptable format. Nothing else.`;
             const retryMsgs = [
               { role: 'system', content: retrySysMsg },
               { role: 'user', content: message },
@@ -2787,7 +3070,7 @@ export default {
                   const resp = await fetch(`${env.OPENROUTER_BASE_URL}/chat/completions`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`, 'HTTP-Referer': 'https://ai.acronous.com', 'X-Title': 'Acronous AI' },
-                    body: JSON.stringify({ messages: retryMsgs, model: 'deepseek/deepseek-chat:free', max_tokens: 8192, temperature: 0.3 }),
+                    body: JSON.stringify({ messages: retryMsgs, model: 'deepseek/deepseek-chat:free', max_tokens: 8192, temperature: 0.2 }),
                   });
                   if (resp.ok) {
                     const data = await resp.json();
@@ -2802,13 +3085,13 @@ export default {
             for (const r of retryResults) {
               if (r.status === 'fulfilled' && r.value && r.value.trim()) {
                 const retryContent = r.value;
-                if (/```[\w]*\n[\s\S]+?```/.test(retryContent)) {
+                // Accept if retry has code blocks OR if original had no code blocks (retry improved it)
+                if (/```[\w]*\n[\s\S]+?```/.test(retryContent) || !hasCodeOutsideFences(retryContent)) {
                   content = retryContent;
                   break;
                 }
               }
             }
-          }
         }
 
         // Fallback: try LLM without web search context
@@ -2834,6 +3117,11 @@ export default {
 
         if (content) content = content.trim();
         if (!content) content = await safeApology('the message was empty or unclear', env);
+
+        // Final pass: if content still has code outside fenced blocks, wrap it
+        if (content && hasCodeOutsideFences(content)) {
+          content = fixCodeBlockPlacement(content);
+        }
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
@@ -2889,6 +3177,11 @@ export default {
         }
         if (content) content = cleanResponse(content);
         if (!content || !content.trim()) content = await safeApology('the image content was unclear', env);
+
+        // Final pass: wrap any orphaned code in fenced blocks
+        if (content && hasCodeOutsideFences(content)) {
+          content = fixCodeBlockPlacement(content);
+        }
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
@@ -2956,6 +3249,11 @@ export default {
         }
         if (content) content = cleanResponse(content);
         if (!content || !content.trim()) content = await safeApology('the file content was unclear', env);
+
+        // Final pass: wrap any orphaned code in fenced blocks
+        if (content && hasCodeOutsideFences(content)) {
+          content = fixCodeBlockPlacement(content);
+        }
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
