@@ -19,6 +19,30 @@ class MarkdownRenderer extends StatelessWidget {
     );
   }
 
+  static const _validLangs = {
+    'python', 'py', 'javascript', 'js', 'typescript', 'ts', 'java', 'c', 'cpp',
+    'csharp', 'cs', 'c#', 'go', 'rust', 'ruby', 'php', 'swift', 'kotlin',
+    'dart', 'r', 'matlab', 'perl', 'haskell', 'lua', 'html', 'css', 'scss',
+    'sql', 'bash', 'sh', 'shell', 'zsh', 'powershell', 'ps1', 'batch',
+    'yaml', 'yml', 'json', 'xml', 'toml', 'ini', 'cfg', 'conf',
+    'markdown', 'md', 'latex', 'tex', 'dockerfile', 'makefile', 'cmake',
+    'graphql', 'gql', 'protobuf', 'proto', 'thrift',
+    'scala', 'groovy', 'clojure', 'elixir', 'erlang', 'ocaml', 'fsharp',
+    'fortran', 'cobol', 'assembly', 'asm', 'nasm', 'x86',
+    'jsx', 'tsx', 'vue', 'svelte', 'astro',
+    'zig', 'nim', 'v', 'odin', 'jang', 'julia',
+  };
+
+  String _sanitizeCodeLang(String raw) {
+    final cleaned = raw.replaceAll('```', '').trim();
+    if (cleaned.isEmpty) return '';
+    if (cleaned.length > 30) return '';
+    if (cleaned.contains(' ')) return '';
+    final lower = cleaned.toLowerCase();
+    if (_validLangs.contains(lower)) return lower;
+    return '';
+  }
+
   List<_MdNode> _parseMarkdown(String text) {
     final nodes = <_MdNode>[];
     final lines = text.split('\n');
@@ -31,11 +55,14 @@ class MarkdownRenderer extends StatelessWidget {
       if (inCodeBlock) {
         if (line.startsWith('```')) {
           inCodeBlock = false;
-          nodes.add(_MdNode(
-            type: 'code_block',
-            text: codeLines.join('\n'),
-            lang: codeLang,
-          ));
+          final codeContent = codeLines.join('\n').trim();
+          if (codeContent.isNotEmpty) {
+            nodes.add(_MdNode(
+              type: 'code_block',
+              text: codeContent,
+              lang: _sanitizeCodeLang(codeLang),
+            ));
+          }
           codeLines.clear();
           codeLang = '';
         } else {
@@ -120,11 +147,14 @@ class MarkdownRenderer extends StatelessWidget {
     }
 
     if (inCodeBlock) {
-      nodes.add(_MdNode(
-        type: 'code_block',
-        text: codeLines.join('\n'),
-        lang: codeLang,
-      ));
+      final codeContent = codeLines.join('\n').trim();
+      if (codeContent.isNotEmpty) {
+        nodes.add(_MdNode(
+          type: 'code_block',
+          text: codeContent,
+          lang: _sanitizeCodeLang(codeLang),
+        ));
+      }
     }
     if (current != null) nodes.add(current);
 

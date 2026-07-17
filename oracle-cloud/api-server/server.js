@@ -311,6 +311,9 @@ When generating code, you MUST follow these rules EXACTLY. Every single rule bel
 8. NEVER use placeholders like "pass", "# implement here", "// TODO", "# add code here" — write REAL, functional code
 9. Code MUST be enclosed in a fenced code block with a language tag (e.g. \`\`\`python, \`\`\`javascript)
 10. NEVER output code as plain text without a code block — ALWAYS use fenced code blocks
+11. NEVER put explanation text after \`\`\` — ONLY a short language identifier goes there (e.g. \`\`\`python, NOT \`\`\`Here is the code:)
+12. NEVER output empty code blocks — every \`\`\` block MUST contain actual code
+13. NEVER generate duplicate code blocks — one code block per code snippet
 
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
@@ -553,6 +556,21 @@ function stripJsonLeak(text) {
   return c.trim();
 }
 
+function sanitizeCodeBlocks(text) {
+  if (!text) return text;
+  text = text.replace(/```\w*\s*\n\s*\n?\s*```/g, '');
+  text = text.replace(/```\w*\n\s*```/g, '');
+  text = text.replace(/```([^\n]{21,})\n/g, () => '```\n');
+  text = text.replace(/```([^\s`]{1,20}\s+[^\n]+)\n/g, () => '```\n');
+  text = text.replace(/\n*```\s*$/, '');
+  text = text.replace(/^\s*```\s*\n/, '');
+  text = text.replace(/```([\s\S]*?)```/g, (match, inner) => {
+    return '```' + inner.replace(/\n{3,}/g, '\n\n') + '```';
+  });
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
 // ---------------------------------------------------------------------------
 // Code Block Reformatter — server-side post-processing to fix LLM formatting
 // ---------------------------------------------------------------------------
@@ -734,9 +752,12 @@ function cleanResponse(text) {
   // Restore protected code blocks
   clean = clean.replace(/\n__CODE_BLOCK_(\d+)__\n/g, (_, i) => codeBlocks[parseInt(i)] || '');
 
+  // Sanitize code blocks — remove empty ones, fix malformed lang tags
+  clean = sanitizeCodeBlocks(clean);
+
   if (clean.length < 3 && (/^\s*\{/.test(clean) || /^\s*\[/.test(clean))) return '';
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
-    try { const parsed = JSON.parse(clean); if (parsed.content) return reformatCodeBlocks(parsed.content); if (parsed.answer) return reformatCodeBlocks(parsed.answer); } catch {}
+    try { const parsed = JSON.parse(clean); if (parsed.content) return reformatCodeBlocks(sanitizeCodeBlocks(parsed.content)); if (parsed.answer) return reformatCodeBlocks(sanitizeCodeBlocks(parsed.answer)); } catch {}
   }
   return reformatCodeBlocks(clean);
 }
@@ -958,6 +979,9 @@ When generating code, you MUST follow these rules EXACTLY. Every single rule bel
 8. NEVER use placeholders like "pass", "# implement here", "// TODO", "# add code here" — write REAL, functional code
 9. Code MUST be enclosed in a fenced code block with a language tag (e.g. \`\`\`python, \`\`\`javascript)
 10. NEVER output code as plain text without a code block — ALWAYS use fenced code blocks
+11. NEVER put explanation text after \`\`\` — ONLY a short language identifier goes there (e.g. \`\`\`python, NOT \`\`\`Here is the code:)
+12. NEVER output empty code blocks — every \`\`\` block MUST contain actual code
+13. NEVER generate duplicate code blocks — one code block per code snippet
 
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
@@ -1453,13 +1477,16 @@ async function runEditPipeline(fileBytes, editPrompt, mimeType) {
 function validateCodeFormatting(content) {
   if (!content) return { valid: true, issues: [] };
   const issues = [];
+  if (/```\w*\s*\n\s*\n?\s*```/.test(content) || /```\w*\n\s*```/.test(content)) {
+    issues.push('empty_code_block');
+  }
   const codeBlocks = [];
   const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
   let match;
   while ((match = codeBlockRegex.exec(content)) !== null) {
     codeBlocks.push({ lang: (match[1] || '').toLowerCase(), code: match[2] });
   }
-  if (codeBlocks.length === 0) return { valid: true, issues: [] };
+  if (codeBlocks.length === 0) return { valid: issues.length === 0, issues };
   for (const block of codeBlocks) {
     const code = block.code;
     const lang = block.lang;

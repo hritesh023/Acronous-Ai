@@ -61,6 +61,9 @@ When generating code, you MUST follow these rules EXACTLY. Every single rule bel
 8. NEVER use placeholders like "pass", "# implement here", "// TODO", "# add code here" — write REAL, functional code
 9. Code MUST be enclosed in a fenced code block with a language tag (e.g. \`\`\`python, \`\`\`javascript)
 10. NEVER output code as plain text without a code block — ALWAYS use fenced code blocks
+11. NEVER put explanation text after \`\`\` — ONLY a short language identifier goes there (e.g. \`\`\`python, NOT \`\`\`Here is the code:)
+12. NEVER output empty code blocks — every \`\`\` block MUST contain actual code
+13. NEVER generate duplicate code blocks — one code block per code snippet
 
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
@@ -720,6 +723,39 @@ function stripJsonLeak(text) {
   return c.trim();
 }
 
+const VALID_CODE_LANGS = new Set([
+  'python','py','javascript','js','typescript','ts','java','c','cpp',
+  'csharp','cs','c#','go','rust','ruby','php','swift','kotlin',
+  'dart','r','matlab','perl','haskell','lua','html','css','scss',
+  'sql','bash','sh','shell','zsh','powershell','ps1','batch',
+  'yaml','yml','json','xml','toml','ini','cfg','conf',
+  'markdown','md','latex','tex','dockerfile','makefile','cmake',
+  'graphql','gql','protobuf','proto','thrift',
+  'scala','groovy','clojure','elixir','erlang','ocaml','fsharp',
+  'fortran','cobol','assembly','asm','nasm','x86',
+  'jsx','tsx','vue','svelte','astro','zig','nim','v','odin','julia',
+]);
+
+function sanitizeCodeBlocks(text) {
+  if (!text) return text;
+  // Remove empty code blocks (any amount of whitespace/newlines between fences)
+  text = text.replace(/```\w*\s*\n\s*\n?\s*```/g, '');
+  text = text.replace(/```\w*\n\s*```/g, '');
+  // Fix code blocks where the lang tag is a sentence (>20 chars or contains spaces)
+  text = text.replace(/```([^\n]{21,})\n/g, () => '```\n');
+  text = text.replace(/```([^\s`]{1,20}\s+[^\n]+)\n/g, () => '```\n');
+  // Fix trailing/leading orphaned fences
+  text = text.replace(/\n*```\s*$/, '');
+  text = text.replace(/^\s*```\s*\n/, '');
+  // Collapse excessive blank lines inside code blocks
+  text = text.replace(/```([\s\S]*?)```/g, (match, inner) => {
+    return '```' + inner.replace(/\n{3,}/g, '\n\n') + '```';
+  });
+  // Final cleanup: remove double newlines that may have been left by empty block removal
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
 function cleanResponse(text) {
   if (!text) return '';
   let clean = stripJsonLeak(text);
@@ -773,13 +809,16 @@ function cleanResponse(text) {
   // Restore protected code blocks
   clean = clean.replace(/__CODE_BLOCK_(\d+)__/g, (_, i) => codeBlocks[parseInt(i)]);
 
+  // Sanitize code blocks — remove empty ones, fix malformed lang tags
+  clean = sanitizeCodeBlocks(clean);
+
   if (clean.length < 3 && (/^\s*\{/.test(clean) || /^\s*\[/.test(clean))) return '';
 
   if (/^\s*\{/.test(clean) && /"\w+"\s*:/.test(clean)) {
     try {
       const parsed = JSON.parse(clean);
-      if (parsed.content) return reformatCodeBlocks(parsed.content);
-      if (parsed.answer) return reformatCodeBlocks(parsed.answer);
+      if (parsed.content) return reformatCodeBlocks(sanitizeCodeBlocks(parsed.content));
+      if (parsed.answer) return reformatCodeBlocks(sanitizeCodeBlocks(parsed.answer));
     } catch {}
   }
   return reformatCodeBlocks(clean);
@@ -1373,6 +1412,11 @@ function validateCodeFormatting(content) {
   if (!content) return { valid: true, issues: [] };
   const issues = [];
 
+  // Check for empty code blocks
+  if (/```\w*\s*\n\s*\n?\s*```/.test(content) || /```\w*\n\s*```/.test(content)) {
+    issues.push('empty_code_block');
+  }
+
   // Extract code blocks
   const codeBlocks = [];
   const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
@@ -1382,7 +1426,7 @@ function validateCodeFormatting(content) {
   }
 
   // If no code blocks found, that's handled by the existing check
-  if (codeBlocks.length === 0) return { valid: true, issues: [] };
+  if (codeBlocks.length === 0) return { valid: issues.length === 0, issues };
 
   for (const block of codeBlocks) {
     const code = block.code;
@@ -2063,6 +2107,9 @@ When generating code, you MUST follow these rules EXACTLY. Every single rule bel
 8. NEVER use placeholders like "pass", "# implement here", "// TODO", "# add code here" — write REAL, functional code
 9. Code MUST be enclosed in a fenced code block with a language tag (e.g. \`\`\`python, \`\`\`javascript)
 10. NEVER output code as plain text without a code block — ALWAYS use fenced code blocks
+11. NEVER put explanation text after \`\`\` — ONLY a short language identifier goes there (e.g. \`\`\`python, NOT \`\`\`Here is the code:)
+12. NEVER output empty code blocks — every \`\`\` block MUST contain actual code
+13. NEVER generate duplicate code blocks — one code block per code snippet
 
 ### Language-Specific Indentation (MANDATORY)
 - Python: 4 spaces per indentation level (NEVER use tabs, NEVER use 2 spaces)
@@ -2508,7 +2555,7 @@ export default {
           const hasCodeBlock = /```[\w]*\n[\s\S]+?```/.test(content);
           const formatting = validateCodeFormatting(content);
           if (!hasCodeBlock || !formatting.valid) {
-            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. You MUST respond with ONLY the code in a fenced code block (\`\`\`language). Do NOT explain. Do NOT describe. Just output the code. Code MUST be properly formatted with correct indentation — 4 spaces for Python, 2 spaces for JS/TS. NEVER output code on one line. NEVER compress multiple statements onto one line. NEVER use pseudo-code, one-liners, or "pass" placeholders — write REAL, complete, runnable implementation with proper structure.`;
+            const retrySysMsg = `You are Acronous AI, created by Acronous. The user asked for code. You MUST respond with ONLY the code in a fenced code block (\`\`\`language). Do NOT explain. Do NOT describe. Just output the code. Code MUST be properly formatted with correct indentation — 4 spaces for Python, 2 spaces for JS/TS. NEVER output code on one line. NEVER compress multiple statements onto one line. NEVER use pseudo-code, one-liners, or "pass" placeholders — write REAL, complete, runnable implementation with proper structure. NEVER output empty code blocks. NEVER put explanation text after \`\`\` — only the language name goes there. One code block per snippet.`;
             const retryMsgs = [
               { role: 'system', content: retrySysMsg },
               { role: 'user', content: message },
