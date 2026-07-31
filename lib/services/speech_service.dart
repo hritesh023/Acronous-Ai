@@ -5,6 +5,9 @@ class SpeechService {
   final stt.SpeechToText _speech;
   bool _isInitialized = false;
 
+  void Function(String status)? onStatus;
+  void Function(dynamic error)? onError;
+
   SpeechService({stt.SpeechToText? speech})
       : _speech = speech ?? stt.SpeechToText();
 
@@ -12,16 +15,21 @@ class SpeechService {
   bool get isListening => _speech.isListening;
 
   Future<bool> initialize({
-    void Function(String status)? onStatus,
-    void Function(dynamic error)? onError,
+    void Function(String status)? onStatusCallback,
+    void Function(dynamic error)? onErrorCallback,
   }) async {
-    if (_isInitialized) return true;
-    final available = await _speech.initialize(
-      onStatus: onStatus,
-      onError: onError,
-    );
-    _isInitialized = available;
-    return available;
+    if (onStatusCallback != null) onStatus = onStatusCallback;
+    if (onErrorCallback != null) onError = onErrorCallback;
+
+    if (!_isInitialized) {
+      final available = await _speech.initialize(
+        onStatus: (status) => onStatus?.call(status),
+        onError: (error) => onError?.call(error),
+      );
+      _isInitialized = available;
+      return available;
+    }
+    return true;
   }
 
   Future<void> startListening({

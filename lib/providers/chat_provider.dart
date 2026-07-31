@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:js_util' as js_util;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -16,6 +18,7 @@ import '../services/preferences_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../services/overlay_service.dart';
+import '../services/continuous_voice_service.dart';
 import '../widgets/camera_screen.dart';
 
 class ChatProvider extends ChangeNotifier {
@@ -24,6 +27,7 @@ class ChatProvider extends ChangeNotifier {
   final FileService _fileService;
   final SpeechService _speech;
   final TtsService _tts;
+  final ContinuousVoiceService _continuousVoiceService;
 
   bool _isServerConnected = false;
   bool _serverCheckDone = false;
@@ -41,7 +45,7 @@ class ChatProvider extends ChangeNotifier {
   static String _sanitizeAssistantText(String text) {
     if (text.trim().isEmpty) return '';
     var cleaned = text
-        .replaceAll(RegExp(r'\[Internal[^\]]*\]'), '')
+        .replaceAll(RegExp(r'\[[^\]]*\]'), '') // Strip ALL bracket tags (internal markers, search context, etc.)
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
     if (cleaned.isEmpty) return text.trim();
@@ -56,6 +60,8 @@ class ChatProvider extends ChangeNotifier {
         .replaceAll(RegExp(r"\b(?:i\s+(?:don[']?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r"\b(?:i\s+(?:cannot|can[']?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b[^.\n]*', caseSensitive: false), '')
+        // Strip backend/service names
+        .replaceAll(RegExp(r'\b(?:openrouter|cloudflare|workers\s+ai|searxng|duckduckgo|ollama|llama|qwen|deepseek|gemini|stable\s+diffusion|flux|instructpix2pix)\b', caseSensitive: false), '')
         // Strip GPS coordinates from responses
         .replaceAll(RegExp(r'\d{1,3}\.\d{2,6}\s*°?\s*[NSns]\s*[,;]?\s*\d{1,3}\.\d{2,6}\s*°?\s*[EWew]'), '')
         .replaceAll(RegExp(r'\b(?:latitude|lat|lng|longitude)\s*[:=]?\s*-?\d{1,3}\.\d{1,6}', caseSensitive: false), '')
@@ -93,7 +99,7 @@ class ChatProvider extends ChangeNotifier {
   double _ttsSpeed = 1.0;
   double _ttsPitch = 1.0;
   bool _autoSendVoice = false;
-  bool _continuousVoiceEnabled = true;
+  bool _continuousVoiceEnabled = false;
   bool _backgroundAssistantEnabled = false;
 
   ChatProvider({
@@ -106,7 +112,8 @@ class ChatProvider extends ChangeNotifier {
        _prefs = prefs ?? PreferencesService(),
        _fileService = fileService ?? FileService(),
        _speech = speech ?? SpeechService(),
-       _tts = tts ?? TtsService() {
+       _tts = tts ?? TtsService(),
+       _continuousVoiceService = ContinuousVoiceService(speech: speech ?? SpeechService()) {
     _init();
   }
 
@@ -200,6 +207,7 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _continuousVoiceService.stop();
     super.dispose();
   }
 
@@ -327,6 +335,21 @@ class ChatProvider extends ChangeNotifier {
 
   Future<bool> _fetchFromGps() async {
     try {
+      // On web, call browser's native navigator.geolocation directly via JS interop.
+      // The Flutter Geolocator plugin is unreliable on web — the native API works.
+      if (kIsWeb) {
+        try {
+          final result = await _getBrowserGps();
+          if (result != null) {
+            _cachedGpsCoords = '${result[0]},${result[1]}';
+            if (_cachedTimezoneName.isEmpty) _cachedTimezoneName = _deviceTimezoneIana;
+            return true;
+          }
+        } catch (_) {}
+        return false;
+      }
+
+      // Mobile path — use Flutter Geolocator plugin
       bool serviceEnabled = await geo.Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return false;
 
@@ -338,7 +361,7 @@ class ChatProvider extends ChangeNotifier {
       if (permission == geo.LocationPermission.deniedForever) return false;
 
       final position = await geo.Geolocator.getCurrentPosition(
-        locationSettings: const geo.LocationSettings(
+        locationSettings: geo.LocationSettings(
           accuracy: geo.LocationAccuracy.high,
           timeLimit: Duration(seconds: 10),
         ),
@@ -348,45 +371,40 @@ class ChatProvider extends ChangeNotifier {
       final lng = position.longitude;
       _cachedGpsCoords = '$lat,$lng';
 
-      // On web, the Flutter geocoding package returns inaccurate city names
-      // (e.g. Bhubaneswar instead of Brahmapur). Skip it on web and let the
-      // server use Nominatim reverse geocoding with the raw GPS coords instead.
-      if (!kIsWeb) {
-        try {
-          final placemarks = await geocoding.placemarkFromCoordinates(lat, lng);
-          if (placemarks.isNotEmpty) {
-            final place = placemarks.first;
-            final parts = <String>[];
-            final street = place.street ?? '';
-            final subLocality = place.subLocality ?? '';
-            final locality = place.locality ?? '';
-            final subAdmin = place.subAdministrativeArea ?? '';
-            final admin = place.administrativeArea ?? '';
-            final postalCode = place.postalCode ?? '';
-            final country = place.country ?? '';
-            if (street.isNotEmpty && street != locality && street != subAdmin) {
-              parts.add(street);
-            }
-            if (subLocality.isNotEmpty && subLocality != locality && subLocality != subAdmin) {
-              parts.add(subLocality);
-            }
-            if (locality.isNotEmpty && locality != subAdmin) {
-              parts.add(locality);
-            } else if (subAdmin.isNotEmpty) {
-              parts.add(subAdmin);
-            }
-            if (admin.isNotEmpty && admin != locality) {
-              parts.add(admin);
-            }
-            if (postalCode.isNotEmpty) parts.add(postalCode);
-            if (country.isNotEmpty) parts.add(country);
-            final address = parts.join(', ');
-            if (address.isNotEmpty) {
-              _cachedLocation = address;
-            }
+      try {
+        final placemarks = await geocoding.placemarkFromCoordinates(lat, lng);
+        if (placemarks.isNotEmpty) {
+          final place = placemarks.first;
+          final parts = <String>[];
+          final street = place.street ?? '';
+          final subLocality = place.subLocality ?? '';
+          final locality = place.locality ?? '';
+          final subAdmin = place.subAdministrativeArea ?? '';
+          final admin = place.administrativeArea ?? '';
+          final postalCode = place.postalCode ?? '';
+          final country = place.country ?? '';
+          if (street.isNotEmpty && street != locality && street != subAdmin) {
+            parts.add(street);
           }
-        } catch (_) {}
-      }
+          if (subLocality.isNotEmpty && subLocality != locality && subLocality != subAdmin) {
+            parts.add(subLocality);
+          }
+          if (locality.isNotEmpty && locality != subAdmin) {
+            parts.add(locality);
+          } else if (subAdmin.isNotEmpty) {
+            parts.add(subAdmin);
+          }
+          if (admin.isNotEmpty && admin != locality) {
+            parts.add(admin);
+          }
+          if (postalCode.isNotEmpty) parts.add(postalCode);
+          if (country.isNotEmpty) parts.add(country);
+          final address = parts.join(', ');
+          if (address.isNotEmpty) {
+            _cachedLocation = address;
+          }
+        }
+      } catch (_) {}
 
       if (_cachedTimezoneName.isEmpty) {
         _cachedTimezoneName = _deviceTimezoneIana;
@@ -395,6 +413,29 @@ class ChatProvider extends ChangeNotifier {
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  Future<List<double>?> _getBrowserGps() async {
+    final completer = Completer<List<double>?>();
+    try {
+      final geoObj = web.window.navigator.geolocation;
+      js_util.callMethod(geoObj, 'getCurrentPosition', [
+        js_util.allowInterop((dynamic pos) {
+          if (!completer.isCompleted && pos != null) {
+            final coords = js_util.getProperty(pos, 'coords');
+            final lat = js_util.getProperty(coords, 'latitude') as double;
+            final lng = js_util.getProperty(coords, 'longitude') as double;
+            completer.complete([lat, lng]);
+          }
+        }),
+        js_util.allowInterop((dynamic err) {
+          if (!completer.isCompleted) completer.complete(null);
+        }),
+      ]);
+      return completer.future.timeout(Duration(seconds: 15));
+    } catch (_) {
+      return null;
     }
   }
 
@@ -553,12 +594,48 @@ class ChatProvider extends ChangeNotifier {
     if (attachments == null) _pendingAttachments.clear();
     notifyListeners();
 
+    // Determine if this is a simple text-only chat eligible for streaming
+    final hasAttachments = userMsg.attachments.isNotEmpty;
+    final isImageGen = !hasAttachments && _isImageGenRequest(text);
+    final isFileGen = !hasAttachments && !isImageGen && _detectFileGenFormat(text) != null;
+    final canStream = !hasAttachments && !isImageGen && !isFileGen;
+
     for (var attempt = 0; attempt < 3; attempt++) {
       if (!_isServerConnected && attempt > 0) {
         await _discoverServer(retries: 1);
       }
       try {
-        final resp = await _callApi(userMsg, text);
+        Map<String, dynamic> resp;
+        if (canStream && attempt == 0) {
+          // Try streaming for text-only chat — add placeholder message
+          final streamingMsg = ChatMessage(
+            role: 'assistant',
+            content: '',
+            isStreaming: true,
+          );
+          _currentConversation!.messages.add(streamingMsg);
+          _isTakingLong = true;
+          notifyListeners();
+          try {
+            resp = await _streamChatResponse(
+              text: text,
+              sessionId: _currentConversation?.id,
+              timezone: _cachedTimezoneName.isNotEmpty ? _cachedTimezoneName : _deviceTimezoneIana,
+              location: _cachedLocation.isNotEmpty ? _cachedLocation : null,
+              gpsCoords: _cachedGpsCoords.isNotEmpty ? _cachedGpsCoords : null,
+            );
+            // Mark streaming complete
+            streamingMsg.isStreaming = false;
+          } catch (_) {
+            // Streaming failed — remove placeholder and fall through to non-streaming
+            streamingMsg.isStreaming = false;
+            _currentConversation!.messages.removeLast();
+            notifyListeners();
+            rethrow;
+          }
+        } else {
+          resp = await _callApi(userMsg, text);
+        }
         final imageData = resp['image_data'] as String? ?? '';
         final fileData = resp['file_data'] as String? ?? '';
         final fileName = resp['file_name'] as String? ?? '';
@@ -576,6 +653,13 @@ class ChatProvider extends ChangeNotifier {
           return;
         }
         if (rawContent.isEmpty && imageData.isEmpty && fileData.isEmpty) {
+          // Streaming placeholder exists but no content — remove it
+          if (canStream && _currentConversation!.messages.isNotEmpty) {
+            final lastMsg = _currentConversation!.messages.last;
+            if (lastMsg.role == 'assistant' && lastMsg.content.isEmpty) {
+              _currentConversation!.messages.removeLast();
+            }
+          }
           if (attempt < 2) {
             await Future.delayed(const Duration(seconds: 2));
             continue;
@@ -606,16 +690,34 @@ class ChatProvider extends ChangeNotifier {
         if (rawContent.isNotEmpty ||
             imageData.isNotEmpty ||
             fileData.isNotEmpty) {
-          _currentConversation!.messages.add(
-            ChatMessage(
-              role: 'assistant',
-              content: rawContent,
-              imageData: imageData,
-              fileData: fileData,
-              fileName: fileName,
-              fileType: fileType,
-            ),
-          );
+          // For streaming: message already exists (placeholder), update it
+          // For non-streaming: add a new message
+          final lastMsg = _currentConversation!.messages.isNotEmpty
+              ? _currentConversation!.messages.last
+              : null;
+          final alreadyAdded = canStream &&
+              lastMsg != null &&
+              lastMsg.role == 'assistant' &&
+              (lastMsg.content.isNotEmpty || lastMsg.isStreaming == false);
+          if (alreadyAdded && canStream && lastMsg.content.isEmpty) {
+            // Streaming placeholder exists but has no content — update it
+            lastMsg.content = rawContent;
+            lastMsg.isStreaming = false;
+          } else if (alreadyAdded && canStream) {
+            // Streaming already populated the content — just mark done
+            lastMsg.isStreaming = false;
+          } else {
+            _currentConversation!.messages.add(
+              ChatMessage(
+                role: 'assistant',
+                content: rawContent,
+                imageData: imageData,
+                fileData: fileData,
+                fileName: fileName,
+                fileType: fileType,
+              ),
+            );
+          }
         }
         _isTakingLong = false;
         _isLoading = false;
@@ -624,6 +726,16 @@ class ChatProvider extends ChangeNotifier {
         _processQueue();
         return;
       } catch (e) {
+        // Remove any streaming placeholder that may have been added
+        if (canStream && _currentConversation!.messages.isNotEmpty) {
+          final lastMsg = _currentConversation!.messages.last;
+          if (lastMsg.role == 'assistant' && lastMsg.isStreaming) {
+            lastMsg.isStreaming = false;
+            if (lastMsg.content.isEmpty) {
+              _currentConversation!.messages.removeLast();
+            }
+          }
+        }
         if (_cancelled) break;
         if (attempt < 2) {
           _isTakingLong = true;
@@ -1197,9 +1309,10 @@ class ChatProvider extends ChangeNotifier {
           fileName: imgAttach.name,
           message: text,
           sessionId: sessionId,
-          timezone: timezone.isNotEmpty ? timezone : null,
+        timezone: timezone.isNotEmpty ? timezone : null,
           location: location,
           messages: history,
+          timeout: const Duration(minutes: 5),
         );
         final response = smartResp['response'] as String? ?? '';
         final imageData = smartResp['image_data'] as String? ?? '';
@@ -1323,7 +1436,7 @@ class ChatProvider extends ChangeNotifier {
           (hasEditVerb && hasVisualContext && wordCount >= 1);
 
       if (isEditRequest) {
-        // Only use /v1/image/edit — it uses real editing tools (inpainting, InstructPix2Pix, editor service)
+        // Only use /v1/image/edit — it uses real editing tools (inpainting, Python editor, vision-guided generation)
         // No Pollinations (generates new images) and no /api/image/redesign (modifies to something else)
         try {
           final editResp = await _api.editImage(
@@ -1331,6 +1444,7 @@ class ChatProvider extends ChangeNotifier {
             fileName: imgAttach.name,
             prompt: text,
             sessionId: sessionId,
+            timeout: const Duration(minutes: 4),
           );
           final response = editResp['response'] as String? ?? '';
           final imageData = editResp['image_data'] as String? ?? '';
@@ -1515,6 +1629,58 @@ class ChatProvider extends ChangeNotifier {
     };
   }
 
+  /// Stream a chat response — returns a map with 'response' key containing
+  /// the final accumulated text. Streams tokens to the UI via notifyListeners.
+  Future<Map<String, dynamic>> _streamChatResponse({
+    required String text,
+    required String? sessionId,
+    required String? timezone,
+    required String? location,
+    required String? gpsCoords,
+  }) async {
+    final history = _buildMessageHistory();
+    String accumulated = '';
+    String finalSessionId = sessionId ?? 'default';
+    String finalType = 'chat';
+    try {
+      await for (final event in _api.chatStream(
+        message: text,
+        sessionId: sessionId,
+        timezone: timezone != null && timezone.isNotEmpty ? timezone : null,
+        location: location,
+        gpsCoords: gpsCoords,
+        messages: history,
+      )) {
+        if (_cancelled) break;
+        if (event.done) {
+          finalSessionId = event.sessionId.isNotEmpty ? event.sessionId : finalSessionId;
+          finalType = event.type.isNotEmpty ? event.type : finalType;
+          break;
+        }
+        if (event.content.isNotEmpty) {
+          accumulated += event.content;
+          // Update the last assistant message in-place for live streaming effect
+          if (_currentConversation != null &&
+              _currentConversation!.messages.isNotEmpty &&
+              _currentConversation!.messages.last.role == 'assistant' &&
+              _currentConversation!.messages.last.isStreaming) {
+            _currentConversation!.messages.last.content = accumulated;
+          }
+          notifyListeners();
+        }
+      }
+    } catch (_) {
+      // Streaming failed — caller will fall back to non-streaming
+      rethrow;
+    }
+    return {
+      'response': accumulated,
+      'image_data': '',
+      'type': finalType,
+      'session_id': finalSessionId,
+    };
+  }
+
   Future<void> pickImageForAnalysis(BuildContext context) async {
     try {
       final attachment = await _fileService.pickImageFromGallery();
@@ -1673,19 +1839,29 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> startVoiceInput() async {
     try {
-      final available = await _speech.initialize(
-        onError: (_) {
-          _isListening = false;
-          notifyListeners();
-        },
-        onStatus: (status) {
-          if (status == 'notListening' && _isListening) {
-            _isListening = false;
-            if (_voiceText.isNotEmpty && _autoSendVoice) {
-              final text = _voiceText;
-              _voiceText = '';
-              sendMessage(text);
+      await _speech.initialize(
+        onStatusCallback: (status) {
+          if (status == 'notListening' || status == 'done' || status == 'endOfSpeech') {
+            if (_isListening) {
+              _isListening = false;
+              if (_voiceText.isNotEmpty && _autoSendVoice) {
+                final text = _voiceText;
+                _voiceText = '';
+                sendMessage(text);
+              }
+              if (_continuousVoiceEnabled) {
+                Future.delayed(
+                  const Duration(milliseconds: 500),
+                  startVoiceInput,
+                );
+              }
+              notifyListeners();
             }
+          }
+        },
+        onErrorCallback: (_) {
+          if (_isListening) {
+            _isListening = false;
             if (_continuousVoiceEnabled) {
               Future.delayed(
                 const Duration(milliseconds: 500),
@@ -1696,7 +1872,6 @@ class ChatProvider extends ChangeNotifier {
           }
         },
       );
-      if (!available) return;
 
       _isListening = true;
       _voiceText = '';
@@ -1860,8 +2035,14 @@ class ChatProvider extends ChangeNotifier {
 
   OverlayService? _overlayService;
   OverlayService? get overlayService => _overlayService;
+
   void attachOverlayService(OverlayService service) {
     _overlayService = service;
+    service.onOverlayTapped = () {
+      if (_continuousVoiceEnabled || _continuousVoiceSearchEnabled) {
+        onAppResumed();
+      }
+    };
   }
 
   bool _continuousVoiceSearchEnabled = false;
@@ -1870,6 +2051,11 @@ class ChatProvider extends ChangeNotifier {
   void setContinuousVoiceSearchEnabled(bool v) {
     _continuousVoiceSearchEnabled = v;
     _prefs.saveContinuousVoiceSearch(v);
+    if (v) {
+      _startContinuousVoiceService();
+    } else {
+      _stopContinuousVoiceService();
+    }
     notifyListeners();
   }
 
@@ -1889,6 +2075,21 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  void onAppResumed() {
+    if (kIsWeb) return;
+    if (_continuousVoiceEnabled && !_isListening) {
+      startVoiceInput();
+    }
+    if (_continuousVoiceSearchEnabled && !_continuousVoiceService.isRunning) {
+      _startContinuousVoiceService();
+    }
+  }
+
+  void onAppPaused() {
+    // On web, speech recognition stops when tab is backgrounded
+    // On native, the continuous voice service keeps running via its internal loop
+  }
+
   Future<void> _loadPrefs() async {
     try {
       _themeMode = await _prefs.loadThemeMode();
@@ -1898,6 +2099,7 @@ class ChatProvider extends ChangeNotifier {
       _autoSendVoice = await _prefs.loadAutoSendVoice();
       _backgroundAssistantEnabled = await _prefs.loadBackgroundAssistant();
       _systemOverlayEnabled = await _prefs.loadSystemOverlay();
+      _continuousVoiceSearchEnabled = await _prefs.loadContinuousVoiceSearch();
       if (_systemOverlayEnabled) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _overlayService?.setWantsOverlay(true);
@@ -1909,6 +2111,39 @@ class ChatProvider extends ChangeNotifier {
         _currentConversation = _conversations.first;
       }
       notifyListeners();
+      // Auto-start services after prefs are loaded
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _autoStartServicesFromPrefs();
+      });
     } catch (_) {}
+  }
+
+  void _autoStartServicesFromPrefs() {
+    if (kIsWeb) return;
+    if (_continuousVoiceEnabled) {
+      startVoiceInput();
+    }
+    if (_continuousVoiceSearchEnabled) {
+      _startContinuousVoiceService();
+    }
+  }
+
+  void _startContinuousVoiceService() {
+    _continuousVoiceService.onCommandRecognized = (text) {
+      if (text.isNotEmpty) {
+        sendMessage(text);
+      }
+    };
+    _continuousVoiceService.onIntentDetected = (action) {
+      final query = action.params['query'];
+      if (query != null && query.isNotEmpty) {
+        sendMessage(query);
+      }
+    };
+    _continuousVoiceService.start();
+  }
+
+  void _stopContinuousVoiceService() {
+    _continuousVoiceService.stop();
   }
 }

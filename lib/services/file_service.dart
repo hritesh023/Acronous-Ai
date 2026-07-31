@@ -25,10 +25,12 @@ class FileService {
       imageQuality: quality ?? config.imagePickerQuality,
     );
     if (image == null) return null;
+    final bytes = await image.readAsBytes();
     return MessageAttachment(
       name: image.name,
       path: image.path,
       type: AttachmentType.image,
+      bytes: bytes,
     );
   }
 
@@ -45,10 +47,12 @@ class FileService {
       imageQuality: quality ?? config.imagePickerQuality,
     );
     if (image == null) return null;
+    final bytes = await image.readAsBytes();
     return MessageAttachment(
       name: image.name,
       path: image.path,
       type: AttachmentType.image,
+      bytes: bytes,
     );
   }
 
@@ -63,19 +67,27 @@ class FileService {
     if (result == null) return null;
     final file = result.files.single;
     final ext = file.extension?.toLowerCase() ?? '';
-    if (kIsWeb && file.bytes != null) {
+    final type = _inferType(ext);
+    Uint8List? bytes;
+    if (file.bytes != null) {
+      bytes = file.bytes;
+    } else if (type == AttachmentType.image && file.path != null) {
+      bytes = await File(file.path!).readAsBytes();
+    }
+    if (kIsWeb && bytes != null) {
       return MessageAttachment(
         name: file.name,
         path: file.name,
-        type: _inferType(ext),
-        bytes: file.bytes,
+        type: type,
+        bytes: bytes,
       );
     }
     if (file.path == null) return null;
     return MessageAttachment(
       name: file.name,
       path: file.path!,
-      type: _inferType(ext),
+      type: type,
+      bytes: bytes,
     );
   }
 

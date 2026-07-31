@@ -14,23 +14,18 @@ User uploads image + edit prompt
       ├─ Strategy 1: Python Service (if EDITOR_SERVICE_URL set)
       │   └─ image-service/app.py (rembg + Pillow + CLIP + SD + Real-ESRGAN)
       │
-      ├─ Strategy 2: Hugging Face InstructPix2Pix (free, no key, no mask)
-      │   └─ timbrooks/instruct-pix2pix — instruction-based image editing
-      │
-      ├─ Strategy 3: Workers AI Inpainting (dimension-matched mask)
+      ├─ Strategy 2: Workers AI Inpainting (dimension-matched mask)
       │   ├─ Reads image dimensions from binary header (JPEG/PNG/WebP)
       │   ├─ Creates pixel-level mask at exact image dimensions
       │   └─ Uses @cf/runwayml/stable-diffusion-v1-5-inpainting
       │
-      ├─ Strategy 4: OpenRouter InstructPix2Pix (secondary fallback)
-      │   └─ Via OpenRouter vision models
-      │
-      ├─ Strategy 5: Vision-Guided Python Service
-      │   ├─ Analyze image with OpenRouter vision model
+      ├─ Strategy 3: Vision-Guided Python Service
+      │   ├─ Ollama vision analyzes image + intent
+      │   ├─ Python service applies intelligent edits
       │   ├─ Craft edit prompt with LLM
       │   └─ Send enhanced prompt + image to Python service
       │
-      └─ Strategy 6: Apology
+      └─ Strategy 4: Apology
           └─ If all strategies fail, return natural apology text
 ```
 
@@ -87,7 +82,6 @@ docker compose up -d --build
 | `buildEditPrompt()` | Crafts precise edit instruction with vision context |
 | `parseEditTarget()` | Classifies prompt into clothing/background/face/hair/color/auto |
 | `tryWorkersAIInpaint()` | CF Workers AI inpainting with dimension-matched mask |
-| `tryHuggingFaceEdit()` | Hugging Face InstructPix2Pix (free, instruction-based, no mask) |
 | `tryOpenRouterEdit()` | OpenRouter-based image editing |
 
 ## Working Edit Examples

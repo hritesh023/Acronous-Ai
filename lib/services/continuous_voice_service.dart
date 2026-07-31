@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'speech_service.dart';
 import 'intent_processor.dart';
@@ -17,9 +18,9 @@ class ContinuousVoiceService extends ChangeNotifier {
   void Function(IntentAction action)? onIntentDetected;
 
   ContinuousVoiceService({
-    SpeechService? speech,
+    required SpeechService speech,
     IntentProcessor? processor,
-  })  : _speech = speech ?? SpeechService(),
+  })  : _speech = speech,
         _processor = processor ?? IntentProcessor();
 
   bool get isRunning => _isRunning;
@@ -44,56 +45,57 @@ class ContinuousVoiceService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> listenOnce({
-    void Function(String text)? onText,
-    void Function()? onDone,
-  }) async {
-    if (_isListening || _speech.isListening) {
-      onDone?.call();
-      return;
-    }
+  Future<String?> _listenOnce() async {
+    if (_speech.isListening || _isListening) return null;
 
     _isListening = true;
+    _lastCommand = '';
     _state = ContinuousVoiceState.listening;
     notifyListeners();
 
-    final available = await _speech.initialize(
-      onError: (err) {
-        _isListening = false;
-        _state = ContinuousVoiceState.idle;
-        notifyListeners();
-        onDone?.call();
+    final completer = Completer<String?>();
+
+    await _speech.initialize(
+      onStatusCallback: (status) {
+        if (status == 'done' || status == 'notListening' || status == 'endOfSpeech') {
+          if (!completer.isCompleted) {
+            completer.complete(_lastCommand.isNotEmpty ? _lastCommand : null);
+          }
+        }
+      },
+      onErrorCallback: (error) {
+        if (!completer.isCompleted) {
+          completer.complete(null);
+        }
       },
     );
 
-    if (!available) {
-      _isListening = false;
-      _state = ContinuousVoiceState.idle;
-      notifyListeners();
-      onDone?.call();
-      return;
-    }
-
-    String recognizedText = '';
     try {
       await _speech.startListening(
         onResult: (result) {
-          recognizedText = result.recognizedWords ?? '';
-          _lastCommand = recognizedText;
+          final text = result.recognizedWords ?? '';
+          _lastCommand = text;
           notifyListeners();
-          onText?.call(recognizedText);
         },
       );
     } catch (_) {
+      if (!completer.isCompleted) {
+        completer.complete(null);
+      }
     }
+
+    final result = await completer.future.timeout(
+      const Duration(seconds: 30),
+      onTimeout: () {
+        _speech.stopListening();
+        return _lastCommand.isNotEmpty ? _lastCommand : null;
+      },
+    );
 
     _isListening = false;
     notifyListeners();
 
-    if (recognizedText.trim().isNotEmpty) {
-      onText?.call(recognizedText.trim());
-    }
-    onDone?.call();
+    return result;
   }
 
   Future<void> _runLoop() async {
@@ -103,43 +105,17 @@ class ContinuousVoiceService extends ChangeNotifier {
         continue;
       }
 
-      _isListening = true;
-      notifyListeners();
-
-      final available = await _speech.initialize(
-        onError: (err) {
-          _isRunning = false;
-          _isListening = false;
-          _state = ContinuousVoiceState.idle;
-          notifyListeners();
-        },
-      );
-
-      if (!available || !_isRunning) break;
-
-      String recognizedText = '';
-      try {
-        await _speech.startListening(
-          onResult: (result) {
-            recognizedText = result.recognizedWords ?? '';
-            _lastCommand = recognizedText;
-            notifyListeners();
-          },
-        );
-      } catch (_) {
-      }
-
-      _isListening = false;
-      notifyListeners();
+      final recognizedText = await _listenOnce();
 
       if (!_isRunning) break;
 
-      if (recognizedText.trim().isNotEmpty) {
+      if (recognizedText != null && recognizedText.trim().isNotEmpty) {
         _state = ContinuousVoiceState.processing;
         notifyListeners();
 
-        final action = _processor.process(recognizedText.trim());
-        onCommandRecognized?.call(recognizedText.trim());
+        final text = recognizedText.trim();
+        final action = _processor.process(text);
+        onCommandRecognized?.call(text);
         onIntentDetected?.call(action);
 
         _state = ContinuousVoiceState.listening;

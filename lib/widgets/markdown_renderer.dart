@@ -1,3 +1,5 @@
+import 'dart:ui' show PointerDeviceKind;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,20 +13,23 @@ class MarkdownRenderer extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final fixed = _preprocessCodeBlocks(content);
     final nodes = _parseMarkdown(fixed);
-    return SizedBox(
-      width: double.infinity,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: nodes.map((node) => _buildNode(node, context, cs)).toList(),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: nodes.map((node) => _buildNode(node, context, cs)).toList(),
     );
   }
 
   static final _codeIndicator = RegExp(
-    r'[{};=]|(?:public|private|class|def|function|import|from|const|let|var|if|for|while|return)\b',
+    r'[{}();=]|=>|===|!==|(?:public|private|class|def|function|import|from|const|let|var|if|for|while|return)\b',
   );
 
   String _preprocessCodeBlocks(String text) {
+    // Step 0: If the entire response looks like raw code without fences, wrap it
+    text = _wrapBareCode(text);
+    // Step 0.5: Expand compressed code blocks (few lines with long content)
+    text = _expandCompressedCodeBlocks(text);
+    // Step 0.7: Unwrap code blocks that contain natural language prose
+    text = _unwrapProseCodeBlocks(text);
     final lines = text.split('\n');
     final result = <String>[];
     int i = 0;
@@ -62,6 +67,254 @@ class MarkdownRenderer extends StatelessWidget {
       i++;
     }
     return result.join('\n');
+  }
+
+  /// Unwrap code blocks that contain natural language prose instead of code.
+  /// The LLM sometimes wraps general knowledge answers in ``` blocks.
+  String _unwrapProseCodeBlocks(String text) {
+    return text.replaceAllMapped(
+      RegExp(r'```(\w*)\n([\s\S]*?)```', multiLine: true),
+      (match) {
+        final lang = match.group(1) ?? '';
+        final code = match.group(2) ?? '';
+        final trimmed = code.trim();
+        if (trimmed.isEmpty) return match.group(0)!;
+
+        final lines = trimmed.split('\n');
+        final nonEmptyLines = lines.where((l) => l.trim().isNotEmpty).toList();
+        if (nonEmptyLines.isEmpty) return match.group(0)!;
+
+        // If the content has natural language patterns, it's likely prose
+        final fullText = nonEmptyLines.join(' ');
+        final hasNaturalLanguage = RegExp(
+          r'\b(?:the|a|an|is|are|was|were|has|have|had|can|could|would|should|will|shall|may|might|must|for|and|but|or|not|with|from|to|in|on|at|by|as|of|that|this|which|who|where|when|how|what|why|because|since|while|although|however|therefore|moreover|furthermore|nevertheless|consequently|accordingly)\b',
+          caseSensitive: false,
+        ).hasMatch(fullText);
+
+        if (!hasNaturalLanguage) return match.group(0)!;
+
+        // Count prose vs code lines
+        int proseLineCount = 0;
+        int codeLikeCount = 0;
+        for (final line in nonEmptyLines) {
+          final l = line.trim();
+          // Strong code indicators
+          if (RegExp(r'[{}();=]').hasMatch(l) && l.length > 10) {
+            codeLikeCount++;
+            continue;
+          }
+          if (RegExp(r'^(?:#include|#define|import |from |export |const |let |var |function |class |def |public |private |protected |static |void |int |float |double |return |if |else|for |while |switch |case |try |catch )').hasMatch(l)) {
+            codeLikeCount++;
+            continue;
+          }
+          if (RegExp(r'^\s*(?://|#|/\*|\*/|<!--)').hasMatch(l)) {
+            codeLikeCount++;
+            continue;
+          }
+          // Prose indicators
+          if (l.length > 15 && RegExp(r'^[A-Z]').hasMatch(l) && RegExp(r'[.!?]\s*$').hasMatch(l)) {
+            proseLineCount++;
+            continue;
+          }
+          if (RegExp(r'^[-•*]\s+[A-Z]').hasMatch(l)) {
+            proseLineCount++;
+            continue;
+          }
+          if (l.length > 30 && !RegExp(r'[{};=<>]').hasMatch(l) && RegExp(r'[a-z]{4,}').hasMatch(l)) {
+            proseLineCount++;
+          }
+        }
+
+        final total = nonEmptyLines.length;
+        final proseRatio = total > 0 ? proseLineCount / total : 0;
+        final codeRatio = total > 0 ? codeLikeCount / total : 0;
+
+        // Unwrap if majority is prose or very low code ratio
+        if (proseRatio > 0.35 || codeRatio < 0.30) {
+          return trimmed;
+        }
+        return match.group(0)!;
+      },
+    );
+  }
+
+  /// Detects raw code that has no markdown fences and wraps it in ``` blocks.
+  /// This handles the case where the LLM returns code starting with { or
+  /// other code tokens without surrounding ``` fences.
+  String _wrapBareCode(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return text;
+    // Already has code fences — nothing to do
+    if (trimmed.contains('```')) return text;
+
+    final lines = trimmed.split('\n');
+    // Check if content looks like code (not prose)
+    // Require structural syntax indicators, not just keywords
+    // (words like "if", "for", "return" appear in natural language)
+    final hasStructuralSyntax = RegExp(r'[{}();=]|=>|===|!==');
+    int codeLineCount = 0;
+    int totalLines = 0;
+    for (final line in lines) {
+      final l = line.trim();
+      if (l.isEmpty) continue;
+      totalLines++;
+      // A line is only "code" if it has structural syntax OR is a comment/pragma
+      // Keywords alone are NOT enough — "if you have a question" is not code
+      if (hasStructuralSyntax.hasMatch(l) ||
+          l.startsWith('//') ||
+          l.startsWith('#!/') ||
+          l.startsWith('/*') ||
+          l.startsWith('* ') ||
+          (l.startsWith('{') && l.endsWith('}')) ||
+          (l.startsWith('(') && l.endsWith(')'))) {
+        codeLineCount++;
+      }
+    }
+    // Very strict: >80% of lines must have structural syntax to auto-wrap
+    // This prevents false positives on natural language with occasional keywords
+    if (totalLines >= 2 && codeLineCount / totalLines > 0.8) {
+      final lang = _detectLanguage(trimmed);
+      return '```$lang\n$trimmed\n```';
+    }
+    // Single line: only wrap if it's long AND has braces/semicolons (actual code)
+    if (totalLines == 1 && codeLineCount == 1 && trimmed.length > 80 &&
+        (trimmed.contains('{') || trimmed.contains(';'))) {
+      final lang = _detectLanguage(trimmed);
+      return '```$lang\n$trimmed\n```';
+    }
+    return text;
+  }
+
+  /// Expands compressed code blocks where code is crammed into few lines.
+  /// E.g., ```java\n{ line1(); line2(); }\n``` → properly formatted code.
+  String _expandCompressedCodeBlocks(String text) {
+    return text.replaceAllMapped(
+      RegExp(r'```(\w*)\n([\s\S]*?)```', multiLine: true),
+      (match) {
+        final lang = match.group(1) ?? '';
+        final code = match.group(2) ?? '';
+        final trimmed = code.trim();
+        if (trimmed.isEmpty) return match.group(0)!;
+
+        final lines = trimmed.split('\n');
+        final nonEmpty = lines.where((l) => l.trim().isNotEmpty).toList();
+        if (nonEmpty.isEmpty) return match.group(0)!;
+        final maxLineLen = nonEmpty.map((l) => l.length).reduce((a, b) => a > b ? a : b);
+
+        // Already properly formatted: multiple short lines with good indentation
+        final hasIndentation = nonEmpty.any((l) => l.startsWith('  ') || l.startsWith('    '));
+        if (nonEmpty.length > 4 && maxLineLen < 100 && hasIndentation) {
+          return match.group(0)!;
+        }
+
+        // Detect compression: either few lines with long content, or code with braces crammed together
+        final braceCount = trimmed.split('').where((c) => c == '{' || c == '}').length;
+        final semicolonCount = trimmed.split('').where((c) => c == ';').length;
+        final isCompressed = nonEmpty.length <= 4 && maxLineLen > 60;
+        final isCrammed = braceCount >= 4 && nonEmpty.length <= 3;
+        final hasSemicolonCompression = semicolonCount >= 3 && nonEmpty.length <= 3;
+
+        if (!isCompressed && !isCrammed && !hasSemicolonCompression) {
+          return match.group(0)!;
+        }
+
+        // Step-by-step expansion for brace-heavy code
+        String expanded = trimmed;
+
+        // 1. Split "else {" and "} else" onto proper lines
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'\}\s*else\s*\{'),
+          (m) => '}\nelse {',
+        );
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'\}\s*else\s*if\s*\('),
+          (m) => '}\nelse if (',
+        );
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'\}\s*catch\s*\('),
+          (m) => '}\ncatch (',
+        );
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'\}\s*finally\s*\{'),
+          (m) => '}\nfinally {',
+        );
+
+        // 2. Put opening braces on their own line (but NOT after keywords like if/for/while/else/function/class)
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'(?<=\))\s*\{'),
+          (m) => ' {',
+        );
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'(?<=\w)\s*\{\s*(?=[a-zA-Z$_/\n])'),
+          (m) => ' {\n',
+        );
+
+        // 3. Put closing braces on their own line
+        expanded = expanded.replaceAllMapped(
+          RegExp(r';\s*\}'),
+          (m) => ';\n}',
+        );
+        expanded = expanded.replaceAllMapped(
+          RegExp(r'(?<=[a-zA-Z$_\d)\]])\s*\}(?!\s*[,])'),
+          (m) => '\n}',
+        );
+
+        // 4. Split semicolons into new lines
+        expanded = expanded.replaceAllMapped(
+          RegExp(r';\s*(?=[a-zA-Z$_\[{])'),
+          (m) => ';\n',
+        );
+        // Also split semicolons before closing braces
+        expanded = expanded.replaceAllMapped(
+          RegExp(r';\s*\n?\}'),
+          (m) => ';\n}',
+        );
+
+        // 5. Indentation pass
+        final outLines = expanded.split('\n');
+        final indented = <String>[];
+        int indent = 0;
+        final indentStr = '    ';
+        for (var line in outLines) {
+          final trimmedLine = line.trim();
+          if (trimmedLine.isEmpty) { indented.add(''); continue; }
+          // Decrease indent for closing braces
+          if (trimmedLine.startsWith('}') || trimmedLine.startsWith('catch') || trimmedLine.startsWith('else') || trimmedLine.startsWith('finally')) {
+            indent = (indent - 1).clamp(0, 20);
+          }
+          indented.add(indentStr * indent + trimmedLine);
+          // Increase indent for opening braces at end of line
+          if (trimmedLine.endsWith('{')) {
+            indent++;
+          }
+          // Handle "else {" and "} else {"
+          if (trimmedLine.endsWith('{') && (trimmedLine.startsWith('else') || trimmedLine.startsWith('catch') || trimmedLine.startsWith('finally'))) {
+            // Already incremented above, which is correct
+          }
+        }
+
+        // Clean up multiple newlines
+        final result = indented.join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n').trim();
+        return '```$lang\n$result\n```';
+      },
+    );
+  }
+
+  String _detectLanguage(String code) {
+    if (RegExp(r'#include\s*[<"]').hasMatch(code)) return 'c';
+    if (RegExp(r'\bimport\s+(?:java|javax)\b').hasMatch(code)) return 'java';
+    if (RegExp(r'\bpublic\s+class\b').hasMatch(code)) return 'java';
+    if (RegExp(r'\bSystem\.out\.').hasMatch(code)) return 'java';
+    if (RegExp(r'\bdef\s+\w+\s*\(').hasMatch(code) || RegExp(r'\bself\.').hasMatch(code)) return 'python';
+    if (RegExp(r'\bimport\s+.*from\s+').hasMatch(code) || RegExp(r'\brequire\s*\(').hasMatch(code)) return 'javascript';
+    if (RegExp(r'\bfunction\s+\w+').hasMatch(code) || RegExp(r'\bconst\s+\w+\s*=').hasMatch(code)) return 'javascript';
+    if (RegExp(r'\bconsole\.log\s*\(').hasMatch(code)) return 'javascript';
+    if (RegExp(r'\bfunc\s+\w+').hasMatch(code)) return 'go';
+    if (RegExp(r'\bfn\s+\w+').hasMatch(code)) return 'rust';
+    if (RegExp(r'\bprintf\s*\(').hasMatch(code) || RegExp(r'\bscanf\s*\(').hasMatch(code)) return 'c';
+    if (RegExp(r'<html', caseSensitive: false).hasMatch(code)) return 'html';
+    if (RegExp(r'\bSELECT\b.*\bFROM\b', caseSensitive: false).hasMatch(code)) return 'sql';
+    return '';
   }
 
   static const _validLangs = {
@@ -497,16 +750,19 @@ class _CodeBlockWidget extends StatefulWidget {
 
 class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
   late final ScrollController _horizontalScrollController;
+  late final ScrollController _verticalScrollController;
 
   @override
   void initState() {
     super.initState();
     _horizontalScrollController = ScrollController();
+    _verticalScrollController = ScrollController();
   }
 
   @override
   void dispose() {
     _horizontalScrollController.dispose();
+    _verticalScrollController.dispose();
     super.dispose();
   }
 
@@ -521,8 +777,18 @@ class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
     final codeColor = isDark ? const Color(0xFFA78BFA) : const Color(0xFF6D28D9);
     final borderColor = cs.outlineVariant.withValues(alpha: 0.3);
 
+    final codeText = Text(
+      node.text,
+      style: TextStyle(
+        fontFamily: 'monospace',
+        fontSize: 13,
+        color: codeColor,
+        height: 1.55,
+      ),
+    );
+
     return Container(
-      width: double.infinity,
+      constraints: const BoxConstraints(maxWidth: 416, maxHeight: 416),
       margin: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
         color: bgColor,
@@ -531,10 +797,10 @@ class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
             decoration: BoxDecoration(
               color: headerColor,
@@ -582,30 +848,35 @@ class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
               ],
             ),
           ),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 400),
-            child: Scrollbar(
-              thumbVisibility: true,
-              radius: const Radius.circular(5),
-              thickness: 7,
-              child: SingleChildScrollView(
-                scrollDirection: Axis.vertical,
-                child: Scrollbar(
+          Expanded(
+            child: ScrollConfiguration(
+              behavior: ScrollConfiguration.of(context).copyWith(
+                dragDevices: {
+                  PointerDeviceKind.mouse,
+                  PointerDeviceKind.touch,
+                  PointerDeviceKind.trackpad,
+                  PointerDeviceKind.stylus,
+                },
+              ),
+              child: Scrollbar(
+                controller: _horizontalScrollController,
+                thumbVisibility: true,
+                radius: const Radius.circular(5),
+                thickness: 7,
+                child: SingleChildScrollView(
                   controller: _horizontalScrollController,
-                  thumbVisibility: true,
-                  radius: const Radius.circular(5),
-                  thickness: 7,
-                  child: SingleChildScrollView(
-                    controller: _horizontalScrollController,
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.all(14),
-                    child: SelectableText(
-                      node.text,
-                      style: TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 13,
-                        color: codeColor,
-                        height: 1.55,
+                  scrollDirection: Axis.horizontal,
+                  child: Scrollbar(
+                    controller: _verticalScrollController,
+                    thumbVisibility: true,
+                    radius: const Radius.circular(5),
+                    thickness: 7,
+                    child: SingleChildScrollView(
+                      controller: _verticalScrollController,
+                      scrollDirection: Axis.vertical,
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: codeText,
                       ),
                     ),
                   ),

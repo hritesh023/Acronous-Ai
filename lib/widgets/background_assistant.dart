@@ -114,6 +114,8 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
     return Consumer3<ChatProvider, AuthProvider, OverlayService>(
       builder: (context, chat, auth, overlay, _) {
         if (!context.mounted) return widget.child;
+        // Never show floating button on web
+        if (kIsWeb) return widget.child;
         final showFloating = chat.backgroundAssistantEnabled &&
             auth.status == AuthStatus.authenticated;
         final wantsOverlay = chat.systemOverlayEnabled &&

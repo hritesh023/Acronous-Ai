@@ -16,11 +16,11 @@
 - **Workers AI SDXL** (`@cf/stabilityai/stable-diffusion-xl-base-1.0`) — free fallback.
 
 ### Image Editing (modify existing images)
-**7-layer pipeline — OpenRouter FLUX replaced with Workers AI FLUX:**
+**8-layer pipeline — Ollama vision added for intelligent editing:**
 
-1. **Python Microservice** (`image-service/`) — rembg + Pillow + CLIP vision + Real-ESRGAN upscaling + SD local generation. Set `EDITOR_SERVICE_URL`.
-2. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask. Tries both `image_b64` (base64) and raw array inputs, `strength: 1.0`.
-3. **Hugging Face InstructPix2Pix** — `timbrooks/instruct-pix2pix`, free, instruction-based editing (no mask required). 60s timeout for cold starts. ~30 req/hr without token, higher with `HF_API_TOKEN`.
+1. **Vision-Guided Python Editing** (NEW) — Ollama vision (LLaVA) analyzes image + Python tools apply intelligent edits
+2. **Python Microservice** (`image-service/`) — rembg + Pillow + CLIP vision + Real-ESRGAN upscaling + SD local generation. Set `EDITOR_SERVICE_URL`.
+3. **Workers AI Inpainting** — `@cf/runwayml/stable-diffusion-v1-5-inpainting` with dimension-matched mask. Tries both `image_b64` (base64) and raw array inputs, `strength: 1.0`.
 4. **LLM-Guided Edit** — LLM vision analysis + Python service SD generation (tries Workers FLUX + Workers AI as fallbacks).
 5. **LLM-Guided FLUX** — LLM vision analysis + Workers AI FLUX 1 Schnell generation.
 6. **Workers AI FLUX direct** — text-to-image via `@cf/black-forest-labs/flux-1-schnell` (free, unlimited via Workers AI).
@@ -36,13 +36,13 @@
 ### Image Editing Endpoints in Worker
 | Endpoint | Purpose |
 |---|---|
-| `/v1/image/edit` | Main editing endpoint (7 strategies) |
-| `/v1/image/ultra-edit` | Frontend fallback 1 (6 strategies) |
-| `/api/image/redesign` | Frontend fallback 2 (6 strategies with vision) |
+| `/v1/image/edit` | Main editing endpoint (8 strategies with vision-guided editing) |
+| `/v1/image/ultra-edit` | Frontend fallback 1 (7 strategies) |
+| `/api/image/redesign` | Frontend fallback 2 (7 strategies with vision) |
 | `/v1/image/smart-edit` | Intelligent routing (LLM classifies edit/generate/analyze) |
 
 ### Image Analysis (Vision)
-- **OpenRouter** with vision models (`VISION_MODEL`, `FALLBACK_VISION_MODEL`)
+- **Ollama Vision** — LLaVA model on Oracle Cloud, unlimited, no API key needed
 
 ### Video Generation
 - **Python Image Service** — local SD model generates 8 photorealistic frames → MoviePy assembles into MP4
@@ -54,26 +54,31 @@
 - **Python Image Service** — pydub + soundfile for audio manipulation (trim, speed, volume, normalize)
 
 ### File Processing
-- **OpenRouter** for file analysis/code generation
+- **Ollama** for file analysis/code generation
 
 ## Python Image Service (Oracle Cloud)
 - **URL**: Set `EDITOR_SERVICE_URL` env var to your Oracle Cloud image-service URL
-- **Capabilities**: Background removal, image upscaling, CLIP analysis, image generation, image editing, video frame generation, voice TTS, voice editing
-- **Models**: rembg (background removal), Real-ESRGAN (upscaling), CLIP (analysis), Stable Diffusion (generation), Edge-TTS (voice)
-- **Docker Compose**: `oracle-cloud/docker-compose.yml` — nginx (port 80), api-server (port 3000), image-service (port 7860)
-- **Memory**: 14GB limit for image-service (fits SD + CLIP + rembg in 24GB RAM)
+- **Capabilities**: Background removal, image upscaling, CLIP analysis, image generation, image editing, vision-guided editing, video frame generation, voice TTS, voice editing
+- **Models**: rembg (background removal), Real-ESRGAN (upscaling), CLIP (analysis), Stable Diffusion (generation), Edge-TTS (voice), Ollama LLaVA (vision)
+- **Endpoints**: `/edit` (basic), `/vision/edit` (Ollama vision-guided), `/vision/analyze` (image analysis), `/generate` (text-to-image), `/generate-video` (video generation)
+- **Docker Compose**: `oracle-cloud/docker-compose.yml` — nginx (port 80), api-server (port 3000), image-service (port 7860), ollama (port 11434)
+- **Memory**: 14GB limit for image-service, 18GB for Ollama (fits SD + CLIP + rembg + LLaVA in 24GB RAM)
 
 ## API Setup
 
-### Hugging Face (free tier, no key needed for inference)
-- Instruct-pix2pix: POST `https://api-inference.huggingface.co/models/timbrooks/instruct-pix2pix` with base64 image + prompt. 60s timeout for cold starts.
-- Inpainting: Not used directly — Workers AI handles inpainting instead
+### Ollama (Oracle Cloud, unlimited)
+- **Base URL**: Set `OLLAMA_BASE_URL` env var to Oracle Cloud Ollama URL
+- **Chat Model**: `OLLAMA_MODEL` (default: `qwen3:8b`)
+- **Vision Model**: `OLLAMA_VISION_MODEL` (default: `llava:7b`)
+- **All inference runs locally** — no external API keys needed
 
-### OpenRouter (fallback only)
-- **Base URL**: `https://openrouter.ai/api/v1` (env `OPENROUTER_BASE_URL`)
-- **API Key**: Stored as `OPENROUTER_API_KEY` secret
-- **Models**: `meta-llama/llama-3.3-70b-instruct:free`, `google/gemini-2.5-flash-lite`, `nvidia/nemotron-nano-12b-v2-vl:free`, `qwen/qwen3-next-80b-a3b-instruct:free`
-- **Headers**: `HTTP-Referer: https://ai.acronous.com`, `X-Title: Acronous AI`
+### Ollama (Oracle Cloud, unlimited)
+- **Base URL**: Set `OLLAMA_BASE_URL` env var to Oracle Cloud Ollama URL
+- **Chat Model**: `OLLAMA_MODEL` (default: `qwen3:8b`)
+- **Vision Model**: `OLLAMA_VISION_MODEL` (default: `llava:7b`)
+- **Capabilities**: Text generation, vision analysis, image editing instructions, intent classification, prompt enhancement
+- **Limits**: None — runs locally on Oracle Cloud, unlimited inference
+- **Used by**: All chat, vision, and utility functions — OpenRouter has been fully removed
 
 ## Watermark
 - 10px font size, positioned on the image itself (inside `InteractiveViewer`/`Stack`)
@@ -95,9 +100,8 @@ npx wrangler pages deploy build/web --project-name=acronous-ai
 
 ### Set secrets
 ```sh
-npx wrangler secret put OPENROUTER_API_KEY
-# Optional: Hugging Face token for higher InstructPix2Pix rate limits (~30 req/hr without)
-npx wrangler secret put HF_API_TOKEN
+# Optional: Ollama base URL for unlimited inference
+npx wrangler secret put OLLAMA_BASE_URL
 ```
 
 ### Deploy both
@@ -106,6 +110,20 @@ npx wrangler deploy cloudflare-worker.js --name acronous-ai
 flutter build web --dart-define="API_BASE_URL=https://ai.acronous.com"
 Copy-Item -LiteralPath "web/_worker.js" -Destination "build/web/_worker.js" -Force
 npx wrangler pages deploy build/web --project-name=acronous-ai
+```
+
+### Deploy Ollama on Oracle Cloud
+```sh
+# SSH into Oracle Cloud server
+ssh ubuntu@<your-oracle-ip>
+
+# Pull models
+ollama pull qwen3:8b
+ollama pull llava:7b
+
+# Start services
+cd /path/to/acronous-ai/oracle-cloud
+docker-compose up -d ollama image-service
 ```
 
 ### Web Search

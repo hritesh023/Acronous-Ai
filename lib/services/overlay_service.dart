@@ -5,11 +5,14 @@ import 'package:flutter/widgets.dart';
 
 class OverlayService extends ChangeNotifier {
   static const _channel = MethodChannel('acronous_ai/overlay');
+  static const _eventsChannel = MethodChannel('acronous_ai/overlay_events');
 
   bool _isSystemOverlayVisible = false;
   bool _systemOverlayPermissionGranted = false;
   bool _isInitialized = false;
   bool _wantsOverlay = false;
+
+  VoidCallback? onOverlayTapped;
 
   bool get isSystemOverlayVisible => _isSystemOverlayVisible;
   bool get systemOverlayPermissionGranted => _systemOverlayPermissionGranted;
@@ -28,6 +31,11 @@ class OverlayService extends ChangeNotifier {
     if (_isInitialized) return;
     if (supportsSystemOverlay) {
       await _checkOverlayPermission();
+      _eventsChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onOverlayTapped') {
+          onOverlayTapped?.call();
+        }
+      });
     }
     _isInitialized = true;
     notifyListeners();

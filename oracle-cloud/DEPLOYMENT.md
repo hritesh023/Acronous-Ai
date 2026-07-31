@@ -162,8 +162,8 @@ docker compose up -d
 │  └─────────┘  └──────────┘  └────────┘ │
 │       │              │            │      │
 │   Flutter Web    OpenRouter   rembg     │
-│   build          HuggingFace  Pillow   │
-│                  CLIP, SD, Edge-TTS    │
+│   build          Pillow, SD   Edge-TTS  │
+│                  CLIP                  │
 └─────────────────────────────────────────┘
 ```
 

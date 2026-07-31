@@ -37,6 +37,23 @@ class ChatMessageWidget extends StatelessWidget {
     for (final p in codePatterns) {
       if (p.hasMatch(text)) return true;
     }
+    // Detect raw code without fences (e.g. starts with { or contains ; and =)
+    final lines = text.trim().split('\n');
+    if (lines.length >= 2) {
+      int codeLines = 0;
+      for (final line in lines) {
+        final l = line.trim();
+        if (l.isEmpty) continue;
+        if (l.endsWith(';') || l.endsWith(':') ||
+            l.startsWith('//') || l.startsWith('#') ||
+            (l.startsWith('{') && l.endsWith('}')) ||
+            l.contains('=>') || l.contains('===') ||
+            RegExp(r'[{}();=]').hasMatch(l)) {
+          codeLines++;
+        }
+      }
+      if (codeLines / lines.length > 0.5) return true;
+    }
     return false;
   }
 

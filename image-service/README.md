@@ -1,35 +1,8 @@
 # Acronous AI Image Editing Service
 
-## Deploy to Hugging Face Spaces (Free GPU)
+## Deploy to Oracle Cloud (Recommended)
 
-1. Go to https://huggingface.co/new-space
-2. Set Space name: `acronous-image-service`
-3. Set License: `mit`
-4. Set SDK: `Docker`
-5. Set Space hardware: `CPU basic` (free) or `T4 small` (for GPU, ~$0.60/hr)
-
-### Option A: Deploy via Git
-```bash
-cd image-service
-git init
-git add .
-git commit -m "Initial"
-git remote add space https://huggingface.co/spaces/YOUR_USER/acronous-image-service
-git push space main
-```
-
-### Option B: Deploy via HF API
-```bash
-# Install huggingface-hub
-pip install huggingface-hub
-
-# Upload
-huggingface-cli upload YOUR_USER/acronous-image-service .
-```
-
-## Environment Variables
-- `HF_API_TOKEN` - Optional, for higher rate limits on HF Inference API
-- No other vars needed for CPU mode
+See `oracle-cloud/DEPLOYMENT.md` for full Docker Compose setup on Oracle Cloud.
 
 ## Local Test
 ```bash

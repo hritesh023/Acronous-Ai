@@ -9,18 +9,17 @@ routes = [
 ]
 
 [vars]
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
 VISION_MODEL = "google/gemini-2.5-flash-lite"
 FALLBACK_VISION_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
-FAST_MODEL = "qwen/qwen3-next-80b-a3b-instruct:free"
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OLLAMA_MODEL = "qwen2.5:1.5b"
+OLLAMA_CONTEXT_SIZE = "32768"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
-# Python image editing service URL — set to your Oracle Cloud image-service
-# Example: http://your-oracle-ip:7860 (runs locally with tiny SD model on CPU)
-EDITOR_SERVICE_URL = "http://140.245.224.36/image-service"
+# Python image editing service URL — Cloudflare Tunnel to Oracle Cloud
+# Tunnel routes image-service.acronous.com → localhost:7860
+EDITOR_SERVICE_URL = "https://image-service.acronous.com"
 
 [[kv_namespaces]]
 binding = "AUTH_USERS"

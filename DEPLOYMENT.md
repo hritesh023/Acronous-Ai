@@ -15,25 +15,8 @@ npx wrangler pages deploy build/web --project-name=acronous-ai
 
 ## Deploy Python Image Service (Optional, for best editing quality)
 
-### Option 1: Hugging Face Spaces (Free)
-1. Create space at https://huggingface.co/new-space
-   - Name: `acronous-image-service`
-   - SDK: Docker
-   - Hardware: CPU basic (free) or T4 small ($0.60/hr GPU)
-
-2. Deploy:
-```bash
-cd image-service
-git init && git add . && git commit -m "deploy"
-git remote add space https://huggingface.co/spaces/YOUR_USER/acronous-image-service
-git push space main
-```
-
-3. Set the URL in Cloudflare Worker:
-```bash
-npx wrangler secret put EDITOR_SERVICE_URL
-# Enter: https://YOUR_USER-acronous-image-service.hf.space
-```
+### Option 1: Oracle Cloud (Recommended)
+Deploy on your Oracle Cloud VM using Docker Compose. See `oracle-cloud/DEPLOYMENT.md` for full setup.
 
 ### Option 2: Railway (Free tier)
 Deploy `image-service/` as a Railway service from GitHub.

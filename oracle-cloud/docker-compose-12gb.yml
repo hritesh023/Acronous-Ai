@@ -11,7 +11,6 @@ services:
       - ./data/certbot/www:/var/www/certbot:ro
     depends_on:
       - api-server
-      - image-service
       - searxng
     restart: unless-stopped
     networks:
@@ -19,14 +18,13 @@ services:
 
   api-server:
     build:
-      context: .
+      context: ./oracle-cloud
       dockerfile: Dockerfile.api
     environment:
       - PORT=3000
       - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODEL=qwen2.5-coder:7b
-      - OLLAMA_CONTEXT_SIZE=24576
-      - OLLAMA_VISION_MODEL=llava:7b
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:4b}
+      - OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-llava:7b}
       - EDITOR_SERVICE_URL=http://image-service:7860
       - SEARXNG_URL=http://searxng:8080
       - DATA_DIR=/data
@@ -35,21 +33,28 @@ services:
     restart: unless-stopped
     networks:
       - acronous-net
+    depends_on:
+      - ollama
+      - searxng
 
-  image-service:
-    build:
-      context: ../image-service
-      dockerfile: Dockerfile
-    environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_VISION_MODEL=llava:7b
-      - PORT=7860
+  ollama:
+    image: ollama/ollama:latest
     ports:
-      - "7860:7860"
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
     restart: unless-stopped
-    mem_limit: 3g
     networks:
       - acronous-net
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   searxng:
     image: searxng/searxng:latest
@@ -60,7 +65,10 @@ services:
     environment:
       - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-acronous-searxng-secret-2024}
     restart: unless-stopped
-    mem_limit: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     networks:
       - acronous-net
     healthcheck:
@@ -69,21 +77,27 @@ services:
       timeout: 10s
       retries: 3
 
-  ollama:
-    image: ollama/ollama:latest
+  image-service:
+    build:
+      context: ./image-service
+      dockerfile: Dockerfile
     ports:
-      - "11434:11434"
+      - "7860:7860"
     volumes:
-      - ollama_data:/root/.ollama
+      - ./data:/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_VISION_MODEL=${OLLAMA_VISION_MODEL:-llava:7b}
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     restart: unless-stopped
-    mem_limit: 10g
     networks:
       - acronous-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 3G
 
 volumes:
   ollama_data:

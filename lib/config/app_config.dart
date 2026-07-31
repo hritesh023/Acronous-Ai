@@ -25,6 +25,7 @@ class AppConfig {
   late final String apiBaseUrl;
   late final Duration apiImageGenTimeout;
   late final String apiChatPath;
+  late final String apiChatStreamPath;
   late final String apiImageChatPath;
   late final String apiFilePath;
   late final String apiImageGeneratePath;
@@ -66,6 +67,7 @@ class AppConfig {
     );
     apiImageGenTimeout = Duration(seconds: _envInt('API_IMAGE_GEN_TIMEOUT', 0));
     apiChatPath = '/v1/chat';
+    apiChatStreamPath = '/v1/chat/stream';
     apiImageChatPath = '/v1/chat/image';
     apiFilePath = '/v1/chat/file';
     apiImageGeneratePath = '/v1/image/generate';

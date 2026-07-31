@@ -59,6 +59,7 @@ class ChatMessage {
   final String fileData;
   final String fileName;
   final String fileType;
+  bool isStreaming;
 
   ChatMessage({
     required this.role,
@@ -70,6 +71,7 @@ class ChatMessage {
     this.fileData = '',
     this.fileName = '',
     this.fileType = '',
+    this.isStreaming = false,
   }) : timestamp = timestamp ?? DateTime.now(),
        attachments = attachments ?? [],
        id = id ?? DateTime.now().microsecondsSinceEpoch.toString();

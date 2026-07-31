@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
@@ -52,141 +53,145 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
             ),
             const SizedBox(height: AppDimens.paddingXL + 4),
-            _SectionHeader(title: 'Continuous Voice Search', cs: cs),
-            _SettingsCard(
-              children: [
-                _SwitchTile(
-                  icon: Icons.mic_rounded,
-                  title: 'Always-on Listening',
-                  subtitle: 'Continuously listen for voice commands and process them automatically',
-                  value: chat.continuousVoiceSearchEnabled,
-                  onChanged: (v) => chat.setContinuousVoiceSearchEnabled(v),
-                  cs: cs,
-                ),
-                if (chat.continuousVoiceSearchEnabled) ...[
-                  _divider(cs),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                      AppDimens.paddingXL,
-                      AppDimens.paddingMD,
-                      AppDimens.paddingXL,
-                      AppDimens.paddingMD,
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.info_outline_rounded, size: 18, color: cs.primary),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Voice commands like "call John", "send a message", '
-                            'or "open a website" will be processed automatically',
-                            style: TextStyle(
-                              fontSize: AppDimens.fontSizeMD,
-                              color: cs.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ],
-            ),
-            const SizedBox(height: AppDimens.paddingXL + 4),
-            _SectionHeader(title: 'Voice', cs: cs),
-            _SettingsCard(
-              children: [
-                _SwitchTile(
-                  icon: Icons.mic_rounded,
-                  title: 'Continuous Voice',
-                  subtitle: 'Keep microphone active in background',
-                  value: chat.continuousVoiceEnabled,
-                  onChanged: (v) => chat.setContinuousVoiceEnabled(v),
-                  cs: cs,
-                ),
-                _divider(cs),
-                ListTile(
-                  leading: Icon(Icons.search_rounded,
-                      color: cs.primary,
-                      size: AppDimens.inputIconInnerSize),
-                  title: const Text('Voice Search',
-                      style: TextStyle(
-                          fontWeight: FontWeight.w500,
-                          fontSize: AppDimens.fontSizeBase)),
-                  subtitle: Text('Open voice input for search',
-                      style: TextStyle(
-                          fontSize: AppDimens.fontSizeMD,
-                          color: cs.onSurfaceVariant)),
-                  trailing: FilledButton.tonal(
-                    onPressed: () => _openVoiceSearch(context),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size(100, 36),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    child: const Text('Open',
-                        style: TextStyle(fontSize: AppDimens.fontSizeBase)),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: AppDimens.paddingXL + 4),
-            _SectionHeader(title: AppStrings.assistant, cs: cs),
-            _SettingsCard(
-              children: [
-                _SwitchTile(
-                  icon: Icons.smart_toy_rounded,
-                  title: AppStrings.backgroundAssistant,
-                  subtitle: AppStrings.backgroundAssistantSub,
-                  value: chat.backgroundAssistantEnabled,
-                  onChanged: (v) => chat.setBackgroundAssistantEnabled(v),
-                  cs: cs,
-                  leading: Container(
-                    width: AppDimens.inputIconInnerSize + 2,
-                    height: AppDimens.inputIconInnerSize + 2,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        colors: [
-                          cs.primary,
-                          cs.primary.withValues(alpha: 0.8),
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(
-                          (AppDimens.inputIconInnerSize + 2) / 2),
-                      child: Image.asset(
-                        'assets/Acronous_Ai_svj_logo.png',
-                        width: AppDimens.inputIconInnerSize,
-                        height: AppDimens.inputIconInnerSize,
-                        fit: BoxFit.contain,
-                        errorBuilder: (_, _, _) => Icon(
-                          Icons.auto_awesome_rounded,
-                          size: AppDimens.inputIconInnerSize,
-                          color: cs.onPrimary,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                if (overlay.supportsSystemOverlay) ...[
-                  _divider(cs),
+            if (!kIsWeb) ...[
+              _SectionHeader(title: 'Continuous Voice Search', cs: cs),
+              _SettingsCard(
+                children: [
                   _SwitchTile(
-                    icon: Icons.picture_in_picture_alt_rounded,
-                    title: 'System Overlay',
-                    subtitle: 'Show floating icon even when app is closed',
-                    value: chat.systemOverlayEnabled,
-                    onChanged: (v) => chat.setSystemOverlayEnabled(v),
+                    icon: Icons.mic_rounded,
+                    title: 'Always-on Listening',
+                    subtitle: 'Continuously listen for voice commands even when app is in background',
+                    value: chat.continuousVoiceSearchEnabled,
+                    onChanged: (v) => chat.setContinuousVoiceSearchEnabled(v),
                     cs: cs,
                   ),
+                  if (chat.continuousVoiceSearchEnabled) ...[
+                    _divider(cs),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        AppDimens.paddingXL,
+                        AppDimens.paddingMD,
+                        AppDimens.paddingXL,
+                        AppDimens.paddingMD,
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline_rounded, size: 18, color: cs.primary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Voice commands like "call John", "send a message", '
+                              'or "open a website" will be processed automatically',
+                              style: TextStyle(
+                                fontSize: AppDimens.fontSizeMD,
+                                color: cs.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
-              ],
-            ),
-            const SizedBox(height: AppDimens.paddingXL + 4),
+              ),
+              const SizedBox(height: AppDimens.paddingXL + 4),
+              _SectionHeader(title: 'Voice', cs: cs),
+              _SettingsCard(
+                children: [
+                  _SwitchTile(
+                    icon: Icons.mic_rounded,
+                    title: 'Continuous Voice',
+                    subtitle: 'Keep microphone active until app is closed',
+                    value: chat.continuousVoiceEnabled,
+                    onChanged: (v) => chat.setContinuousVoiceEnabled(v),
+                    cs: cs,
+                  ),
+                  _divider(cs),
+                  ListTile(
+                    leading: Icon(Icons.search_rounded,
+                        color: cs.primary,
+                        size: AppDimens.inputIconInnerSize),
+                    title: const Text('Voice Search',
+                        style: TextStyle(
+                            fontWeight: FontWeight.w500,
+                            fontSize: AppDimens.fontSizeBase)),
+                    subtitle: Text('Open voice input for search',
+                        style: TextStyle(
+                            fontSize: AppDimens.fontSizeMD,
+                            color: cs.onSurfaceVariant)),
+                    trailing: FilledButton.tonal(
+                      onPressed: () => _openVoiceSearch(context),
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size(100, 36),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: const Text('Open',
+                          style: TextStyle(fontSize: AppDimens.fontSizeBase)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppDimens.paddingXL + 4),
+            ],
+            if (!kIsWeb) ...[
+              _SectionHeader(title: AppStrings.assistant, cs: cs),
+              _SettingsCard(
+                children: [
+                  _SwitchTile(
+                    icon: Icons.smart_toy_rounded,
+                    title: AppStrings.backgroundAssistant,
+                    subtitle: AppStrings.backgroundAssistantSub,
+                    value: chat.backgroundAssistantEnabled,
+                    onChanged: (v) => chat.setBackgroundAssistantEnabled(v),
+                    cs: cs,
+                    leading: Container(
+                      width: AppDimens.inputIconInnerSize + 2,
+                      height: AppDimens.inputIconInnerSize + 2,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          colors: [
+                            cs.primary,
+                            cs.primary.withValues(alpha: 0.8),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(
+                            (AppDimens.inputIconInnerSize + 2) / 2),
+                        child: Image.asset(
+                          'assets/Acronous_Ai_svj_logo.png',
+                          width: AppDimens.inputIconInnerSize,
+                          height: AppDimens.inputIconInnerSize,
+                          fit: BoxFit.contain,
+                          errorBuilder: (_, _, _) => Icon(
+                            Icons.auto_awesome_rounded,
+                            size: AppDimens.inputIconInnerSize,
+                            color: cs.onPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (overlay.supportsSystemOverlay) ...[
+                    _divider(cs),
+                    _SwitchTile(
+                      icon: Icons.picture_in_picture_alt_rounded,
+                      title: 'System Overlay',
+                      subtitle: 'Show floating icon even when app is closed',
+                      value: chat.systemOverlayEnabled,
+                      onChanged: (v) => chat.setSystemOverlayEnabled(v),
+                      cs: cs,
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: AppDimens.paddingXL + 4),
+            ],
             _SectionHeader(title: 'Permissions', cs: cs),
             _SettingsCard(
               children: [

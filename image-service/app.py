@@ -23,9 +23,59 @@ from urllib.parse import quote_plus
 
 import numpy as np
 import requests
+import aiohttp
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageEnhance, ImageStat
+
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+OLLAMA_VISION_MODEL = os.environ.get("OLLAMA_VISION_MODEL", "llava:7b")
+
+async def is_ollama_available(timeout=3):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                return resp.status == 200
+    except:
+        return False
+
+async def call_ollama(messages, model=None, timeout=30):
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": model or OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("message", {}).get("content", "")
+    except Exception as e:
+        logging.warning(f"Ollama call failed: {e}")
+    return ""
+
+async def call_ollama_vision(image_base64, prompt, timeout=60):
+    url = f"{OLLAMA_BASE_URL}/api/chat"
+    payload = {
+        "model": OLLAMA_VISION_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are an expert image analyst. Describe the image in detail, focusing on elements relevant to the user's request."},
+            {"role": "user", "content": prompt, "images": [image_base64]},
+        ],
+        "stream": False,
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("message", {}).get("content", "")
+    except Exception as e:
+        logging.warning(f"Ollama vision call failed: {e}")
+    return ""
 
 app = FastAPI(title="Acronous AI Image Service", version="2.1.0")
 
@@ -170,6 +220,7 @@ def upscale_image(image: Image.Image, scale: int = 4) -> Optional[Image.Image]:
 
 SD_PIPE = None
 LOCAL_GEN_PIPE = None
+LOCAL_IMG2IMG_PIPE = None
 
 HAS_EDGE_TTS = False
 try:
@@ -243,6 +294,24 @@ def _load_local_gen_pipe():
         except Exception as e2:
             logging.warning(f"Local gen pipeline fallback failed: {e2}")
             return None
+
+def _load_local_img2img_pipe():
+    """Load SD model for CPU image-to-image editing — preserves original structure."""
+    global LOCAL_IMG2IMG_PIPE
+    if LOCAL_IMG2IMG_PIPE is not None:
+        return LOCAL_IMG2IMG_PIPE
+    try:
+        from diffusers import AutoPipelineForImage2Image
+        LOCAL_IMG2IMG_PIPE = AutoPipelineForImage2Image.from_pretrained(
+            "segmind/small-1.0",
+            torch_dtype=torch.float32,
+        )
+        LOCAL_IMG2IMG_PIPE.enable_attention_slicing()
+        logging.info("Acronous AI img2img pipeline loaded")
+        return LOCAL_IMG2IMG_PIPE
+    except Exception as e:
+        logging.warning(f"img2img pipeline load failed: {e}")
+        return None
 
 def generate_local(prompt: str, width: int = 1024, height: int = 1024) -> Optional[Image.Image]:
     """Generate image locally using tiny SD model on CPU."""
@@ -337,6 +406,8 @@ def create_upper_body_mask(image: Image.Image) -> Image.Image:
     """
     mask = segment_clothing(image)
     if mask is not None:
+        if mask.size != image.size:
+            mask = mask.resize(image.size, Image.NEAREST)
         return mask
 
     person = segment_person(image) or segment_foreground(image)
@@ -390,101 +461,245 @@ def match_color(target: np.ndarray, source: np.ndarray, mask: np.ndarray) -> np.
 
 def apply_color_palette(image: Image.Image, mask: Image.Image, palette: list) -> Image.Image:
     """
-    Apply a color palette to the masked region.
+    Apply a color palette to the masked region using HSV-based color transfer.
+    Preserves luminance/texture of the original — shifts hue toward palette colors.
     palette: list of (r, g, b) tuples defining the target colors.
     """
+    if mask is None:
+        mask = Image.new("L", image.size, 255)
+    elif mask.size != image.size:
+        mask = mask.resize(image.size, Image.NEAREST)
     m = np.array(mask.convert("L"), dtype=np.float32) / 255.0
     img = np.array(image.convert("RGB"), dtype=np.float32)
-    h, w = img.shape[:2]
 
-    palette = np.array(palette, dtype=np.float32)
-    result = img.copy()
+    mask_bool = m > 0.3
+    if not np.any(mask_bool):
+        return image
 
-    # Simple per-pixel nearest palette color, weighted by mask
-    for y in range(h):
-        for x in range(w):
-            if m[y, x] > 0.3:
-                pixel = img[y, x]
-                dists = np.sum((palette - pixel) ** 2, axis=1)
-                nearest = palette[np.argmin(dists)]
-                result[y, x] = result[y, x] * (1 - m[y, x]) + nearest * m[y, x]
+    palette_arr = np.array(palette, dtype=np.float32) / 255.0
 
-    return Image.fromarray(result.astype(np.uint8))
+    # Convert image to HSV
+    pixels = img[mask_bool].astype(np.float32) / 255.0
+    h, s, v = rgb_to_hsv_vectorized_simple(pixels)
+
+    # Compute target hue from palette (weighted centroid)
+    palette_hsv = np.array([rgb_to_hsv_single(*p) for p in palette_arr])
+    target_h = np.mean(palette_hsv[:, 0])
+    target_s = np.mean(palette_hsv[:, 1])
+
+    # Shift hue toward target (interpolate, don't replace)
+    hue_diff = (target_h - h + 0.5) % 1.0 - 0.5
+    h_new = (h + hue_diff * 0.6 + 1.0) % 1.0
+
+    # Blend saturation: preserve some original, pull toward target
+    s_new = s * 0.3 + target_s * 0.7
+
+    # Reconstruct RGB, then blend with original by mask weight
+    edited_pixels = hsv_to_rgb_vectorized_simple(h_new, s_new, v)
+
+    m_vals = m[mask_bool, np.newaxis]
+    blended = pixels * (1 - m_vals * 0.75) + edited_pixels * (m_vals * 0.75)
+
+    result = img.copy().astype(np.float32) / 255.0
+    result[mask_bool] = blended
+
+    return Image.fromarray((result * 255).astype(np.uint8))
+
+def rgb_to_hsv_vectorized_simple(rgb):
+    """Vectorized RGB→HSV for (N,3) arrays. Returns h,s,v each in [0,1]."""
+    r, g, b = rgb[:, 0], rgb[:, 1], rgb[:, 2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    diff = mx - mn + 1e-10
+    h = np.zeros_like(mx)
+    s = diff / (mx + 1e-10)
+    v = mx
+    rc = (mx - r) / diff
+    gc = (mx - g) / diff
+    bc = (mx - b) / diff
+    h = np.where(mx == r, (bc - gc) % 6, h)
+    h = np.where(mx == g, (rc - bc) + 2, h)
+    h = np.where(mx == b, (gc - rc) + 4, h)
+    h = h / 6.0
+    return h, s, v
+
+def hsv_to_rgb_vectorized_simple(h, s, v):
+    """Vectorized HSV→RGB for (N,) arrays. h,s,v each in [0,1]."""
+    hi = (h * 6).astype(np.int32) % 6
+    f = h * 6 - np.floor(h * 6)
+    p = v * (1 - s)
+    q = v * (1 - f * s)
+    t = v * (1 - (1 - f) * s)
+    r = np.zeros_like(v)
+    g = np.zeros_like(v)
+    b = np.zeros_like(v)
+    m0 = hi == 0; r = np.where(m0, v, r); g = np.where(m0, t, g); b = np.where(m0, p, b)
+    m1 = hi == 1; r = np.where(m1, q, r); g = np.where(m1, v, g); b = np.where(m1, p, b)
+    m2 = hi == 2; r = np.where(m2, p, r); g = np.where(m2, v, g); b = np.where(m2, t, b)
+    m3 = hi == 3; r = np.where(m3, p, r); g = np.where(m3, q, g); b = np.where(m3, v, b)
+    m4 = hi == 4; r = np.where(m4, t, r); g = np.where(m4, p, g); b = np.where(m4, v, b)
+    m5 = hi == 5; r = np.where(m5, v, r); g = np.where(m5, p, g); b = np.where(m5, q, b)
+    return np.stack([r, g, b], axis=1)
+
+def rgb_to_hsv_single(r, g, b):
+    """Single-pixel RGB→HSV returning h in [0,1], s in [0,1], v in [0,1]."""
+    mx = max(r, g, b)
+    mn = min(r, g, b)
+    diff = mx - mn
+    if diff < 1e-8:
+        return 0.0, 0.0, mx
+    h = 0.0
+    if mx == r:
+        h = ((g - b) / diff) % 6
+    elif mx == g:
+        h = (b - r) / diff + 2
+    else:
+        h = (r - g) / diff + 4
+    h = h / 6.0
+    s = diff / mx
+    return h, s, mx
+
+def rgb_to_hsv_vectorized(rgb):
+    """Vectorized RGB to HSV conversion using numpy."""
+    r, g, b = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
+    mx = np.maximum(np.maximum(r, g), b)
+    mn = np.minimum(np.minimum(r, g), b)
+    diff = mx - mn
+
+    h = np.zeros_like(mx)
+    s = np.where(mx != 0, diff / (mx + 1e-8), 0)
+    v = mx
+
+    mask = diff != 0
+    if np.any(mask):
+        r_mask = mask & (mx == r)
+        h[r_mask] = (60 * ((g[r_mask] - b[r_mask]) / diff[r_mask]) + 360) % 360
+        g_mask = mask & (mx == g)
+        h[g_mask] = (60 * ((b[g_mask] - r[g_mask]) / diff[g_mask]) + 120) % 360
+        b_mask = mask & (mx == b)
+        h[b_mask] = (60 * ((r[b_mask] - g[b_mask]) / diff[b_mask]) + 240) % 360
+
+    return h, s, v
+
+def hsv_to_rgb_vectorized(h, s, v):
+    """Vectorized HSV to RGB conversion using numpy."""
+    hi = np.floor(h / 60).astype(np.int32) % 6
+    f = h / 60 - np.floor(h / 60)
+    p = v * (1 - s)
+    q = v * (1 - f * s)
+    t = v * (1 - (1 - f) * s)
+
+    r = np.zeros_like(v)
+    g = np.zeros_like(v)
+    b = np.zeros_like(v)
+
+    m0 = hi == 0; r[m0] = v[m0]; g[m0] = t[m0]; b[m0] = p[m0]
+    m1 = hi == 1; r[m1] = q[m1]; g[m1] = v[m1]; b[m1] = p[m1]
+    m2 = hi == 2; r[m2] = p[m2]; g[m2] = v[m2]; b[m2] = t[m2]
+    m3 = hi == 3; r[m3] = p[m3]; g[m3] = q[m3]; b[m3] = v[m3]
+    m4 = hi == 4; r[m4] = t[m4]; g[m4] = p[m4]; b[m4] = v[m4]
+    m5 = hi == 5; r[m5] = v[m5]; g[m5] = p[m5]; b[m5] = q[m5]
+
+    return np.stack([r, g, b], axis=2)
 
 def recolor_region(image: Image.Image, mask: Image.Image, target_color: tuple) -> Image.Image:
     """
-    Recolor the masked region to target_color while preserving texture/luminosity.
+    Recolor the masked region to target_color while preserving luminance/texture.
+    Uses HSV shift so folds, shadows, and highlights remain visible.
     """
+    if mask is None:
+        mask = Image.new("L", image.size, 255)
+    elif mask.size != image.size:
+        mask = mask.resize(image.size, Image.NEAREST)
+
+    img = np.array(image.convert("RGB"), dtype=np.float32) / 255.0
     m = np.array(mask.convert("L"), dtype=np.float32) / 255.0
-    img = np.array(image.convert("RGB"), dtype=np.float32)
 
-    # Convert to HSL-like: preserve L, replace H and S
-    gray = np.mean(img, axis=2)  # luminosity proxy
-    tc = np.array(target_color, dtype=np.float32)
-    tc_gray = np.mean(tc)
+    mask_bool = m > 0.3
+    if not np.any(mask_bool):
+        return image
 
-    for c in range(3):
-        adjustment = tc[c] / (tc_gray + 1e-6)
-        img[:, :, c] = img[:, :, c] * (1 - m) + (gray * adjustment) * m
+    tc = np.array(target_color, dtype=np.float32) / 255.0
+    th, ts, tv = rgb_to_hsv_single(tc[0], tc[1], tc[2])
 
-    return Image.fromarray(np.clip(img, 0, 255).astype(np.uint8))
+    pixels = img[mask_bool]
+    h_pix, s_pix, v_pix = rgb_to_hsv_vectorized_simple(pixels)
+
+    # Keep original luminance (V), shift hue and saturation toward target
+    hue_diff = (th - h_pix + 0.5) % 1.0 - 0.5
+    h_new = (h_pix + hue_diff + 1.0) % 1.0
+    s_new = s_pix * 0.2 + ts * 0.8
+
+    edited_pixels = hsv_to_rgb_vectorized_simple(h_new, s_new, v_pix)
+
+    m_vals = m[mask_bool, np.newaxis]
+    blended = pixels * (1 - m_vals * 0.85) + edited_pixels * (m_vals * 0.85)
+
+    result = img.copy()
+    result[mask_bool] = blended
+    return Image.fromarray((result * 255).astype(np.uint8))
+
+def apply_fabric_texture(image: Image.Image, mask: Image.Image, desc: str) -> Image.Image:
+    """
+    Simulate fabric texture on the masked region using Pillow filters.
+    Different fabric types (wool, silk, cotton, denim) get different textures.
+    """
+    d = desc.lower()
+    m = np.array(mask.convert("L"), dtype=np.float32) / 255.0
+    img = np.array(image, dtype=np.float32)
+
+    if "suit" in d or "formal" in d or "tuxedo" in d or "blazer" in d:
+        smooth_radius = 1.5
+        contrast_boost = 1.15
+    elif "denim" in d or "jean" in d:
+        smooth_radius = 0.5
+        contrast_boost = 1.2
+    elif "silk" in d or "satin" in d:
+        smooth_radius = 2.0
+        contrast_boost = 1.3
+    elif "cotton" in d or "casual" in d or "t-shirt" in d:
+        smooth_radius = 1.0
+        contrast_boost = 1.05
+    else:
+        smooth_radius = 1.0
+        contrast_boost = 1.1
+
+    result = Image.fromarray(img.astype(np.uint8))
+    smoothed = result.filter(ImageFilter.GaussianBlur(radius=smooth_radius))
+    smoothed = ImageEnhance.Contrast(smoothed).enhance(contrast_boost)
+    smoothed = ImageEnhance.Sharpness(smoothed).enhance(1.3)
+
+    blended = feather_blend(result, smoothed, mask, radius=3)
+    return blended
 
 def smart_recolor(
     image: Image.Image,
     mask: Image.Image,
     replacement_desc: str,
-) -> Image.Image:
+) -> Optional[Image.Image]:
     """
-    Smart recoloring based on replacement description.
-    Maps descriptions to color palettes and applies them.
+    Recolor masked region ONLY if an explicit color is mentioned.
+    Returns None for non-color prompts (so caller falls through to other strategies).
     """
-    desc = replacement_desc.lower()
+    desc = replacement_desc.lower().strip()
 
-    # Color/style mapping
-    style_map = {
-        "formal suit": [(40, 40, 60), (50, 50, 75), (60, 60, 85), (35, 35, 55)],
-        "suit": [(40, 40, 60), (50, 50, 75)],
-        "tuxedo": [(20, 20, 25), (30, 30, 35), (15, 15, 20)],
-        "blazer": [(50, 60, 100), (60, 70, 110), (45, 55, 95)],
-        "navy suit": [(30, 35, 65), (40, 45, 75), (25, 30, 60)],
-        "black suit": [(25, 25, 28), (35, 35, 38), (20, 20, 22)],
-        "grey suit": [(100, 100, 105), (120, 120, 125), (90, 90, 95)],
-        "white shirt": [(235, 235, 240), (245, 245, 248), (225, 225, 230)],
-        "red dress": [(180, 40, 40), (160, 30, 30), (200, 50, 50)],
-        "black dress": [(30, 30, 35), (40, 40, 45), (25, 25, 28)],
-        "blue dress": [(40, 60, 140), (50, 70, 150), (35, 55, 130)],
-        "jeans": [(50, 70, 120), (60, 80, 130)],
-        "casual": [(100, 150, 180), (120, 160, 190)],
-        "traditional": [(180, 100, 60), (190, 110, 70), (170, 90, 50)],
-        "sporty": [(200, 50, 50), (50, 100, 200), (255, 255, 255)],
+    color_map = {
+        "red": (235, 30, 40), "blue": (25, 65, 240), "green": (25, 215, 50),
+        "white": (245, 245, 248), "black": (50, 50, 55), "navy": (35, 40, 160),
+        "grey": (175, 175, 180), "gray": (175, 175, 180), "brown": (180, 100, 50),
+        "purple": (160, 45, 195), "pink": (235, 100, 140), "yellow": (245, 225, 50),
+        "gold": (240, 200, 40), "silver": (215, 215, 225), "orange": (240, 130, 35),
+        "teal": (30, 185, 180), "magenta": (220, 35, 160), "cyan": (35, 220, 230),
+        "beige": (220, 205, 170), "maroon": (180, 35, 50), "coral": (240, 120, 100),
+        "lavender": (205, 160, 235), "mint": (110, 220, 160), "peach": (245, 185, 140),
+        "turquoise": (35, 200, 200), "indigo": (70, 30, 170), "violet": (165, 50, 210),
     }
-
-    for key, palette in style_map.items():
-        if key in desc:
-            return apply_color_palette(image, mask, palette)
-
-    # Default: try to extract color from desc
-    color_patterns = [
-        (r"black", (25, 25, 28)),
-        (r"white", (240, 240, 245)),
-        (r"red", (180, 40, 40)),
-        (r"blue", (40, 60, 140)),
-        (r"green", (40, 130, 60)),
-        (r"navy", (30, 35, 65)),
-        (r"grey|gray", (120, 120, 125)),
-        (r"brown", (140, 80, 40)),
-        (r"purple", (120, 40, 140)),
-        (r"pink", (200, 100, 120)),
-        (r"yellow", (200, 180, 40)),
-        (r"gold", (200, 170, 40)),
-        (r"silver", (180, 180, 190)),
-    ]
-    for pat, color in color_patterns:
-        if re.search(pat, desc):
+    for name, color in color_map.items():
+        if re.search(rf"\b{re.escape(name)}\b", desc):
             return recolor_region(image, mask, color)
 
-    # Default: formal navy suit
-    return apply_color_palette(image, mask, style_map["formal suit"])
+    # No explicit color found — return None so caller falls through to other strategies
+    return None
 
 # ---------------------------------------------------------------------------
 # GPU inpainting (optional)
@@ -537,14 +752,23 @@ def interpret_prompt(prompt: str) -> dict:
             target = t
             break
 
-    # Detect action
-    if any(w in p for w in ["replace", "change to", "switch", "turn into", "convert to"]):
+    # Detect lighting/brightness adjustments
+    lighting_kw = ["brightness", "brighten", "brighter", "darken", "darker", "lighten", "lighter",
+                   "contrast", "exposure", "illuminate", "dim", "shine", "glow", "shadow"]
+    if any(w in p for w in lighting_kw):
+        action = "adjust_lighting"
+    # Detect background changes
+    elif target == "background" and any(w in p for w in ["change", "replace", "remove", "erase", "delete", "edit", "set", "put"]):
+        action = "change_background"
+    # Detect replace actions (clothing transformation)
+    elif any(w in p for w in ["replace", "change to", "switch", "turn into", "convert to",
+                               "change into", "transform", "turn to"]):
         action = "replace"
-    elif any(w in p for w in ["remove", "delete", "erase", "take off"]):
+    elif any(w in p for w in ["remove", "delete", "erase", "take off", "cut out"]):
         action = "remove"
     elif any(w in p for w in ["add", "put", "insert", "place"]):
         action = "add"
-    elif any(w in p for w in ["color", "recolor", "paint"]):
+    elif any(w in p for w in ["color", "recolor", "paint", "colour"]):
         action = "recolor"
     else:
         action = "edit"
@@ -552,9 +776,11 @@ def interpret_prompt(prompt: str) -> dict:
     # Extract replacement description
     replacement = prompt
     for prefix in [
-        r"(?:replace|change|switch|turn|convert)\s+(?:the\s+|my\s+|this\s+)?(?:\w+\s+)?(?:with|to|into)\s+",
-        r"(?:make\s+(?:it|this|the)\s+)(?:\w+\s+)?",
-        r"(?:edit\s+(?:the\s+|my\s+|this\s+)?(?:\w+\s+)?(?:to\s+)?)",
+        r"(?:replace|change|switch|turn|convert|transform)\s+(?:the\s+|my\s+|this\s+|that\s+|his\s+|her\s+)?(?:\w+\s+)?(?:into|to|with)\s+",
+        r"(?:make\s+(?:it|this|the|that|my|his|her)\s+)(?:\w+\s+)?",
+        r"(?:edit\s+(?:the\s+|my\s+|this\s+|that\s+)?(?:\w+\s+)?(?:to\s+)?)",
+        r"(?:recolor|colour|color)\s+(?:the\s+|this\s+|that\s+|my\s+|his\s+|her\s+)?(?:\w+\s+)?(?:to\s+)?",
+        r"(?:paint)\s+(?:the\s+|this\s+|that\s+|my\s+)?(?:\w+\s+)?",
     ]:
         m = re.search(prefix + r"(.+)", p, re.IGNORECASE)
         if m:
@@ -574,6 +800,7 @@ def edit_image(image_bytes: bytes, prompt: str) -> dict:
     image = bytes_to_img(image_bytes).convert("RGB")
     orig = image.copy()
     info = interpret_prompt(prompt)
+    p_lower = prompt.lower().strip()
     logging.info(f"Edit info: {info}")
 
     # Create mask for the target region
@@ -590,7 +817,6 @@ def edit_image(image_bytes: bytes, prompt: str) -> dict:
         mask = create_upper_body_mask(image)
 
     if mask is not None:
-        # Ensure mask has some content
         m_arr = np.array(mask)
         if np.max(m_arr) < 10:
             mask = None
@@ -598,7 +824,102 @@ def edit_image(image_bytes: bytes, prompt: str) -> dict:
     result = None
     strategy = "none"
 
-    # Strategy 1: GPU inpainting (best quality)
+    # ── Brightness / Lighting Adjustments ──
+    if info["action"] == "adjust_lighting":
+        result = image.copy()
+        if any(w in p_lower for w in ["brighten", "brighter", "lighten", "lighter", "brightness", "shine", "glow", "illuminate"]):
+            factor = 1.3
+            if "a lot" in p_lower or "very" in p_lower:
+                factor = 1.6
+            elif "little" in p_lower or "slightly" in p_lower or "bit" in p_lower:
+                factor = 1.15
+            result = ImageEnhance.Brightness(result).enhance(factor)
+            strategy = "brighten"
+        if any(w in p_lower for w in ["darken", "darker", "dim"]):
+            factor = 0.7
+            if "a lot" in p_lower or "very" in p_lower:
+                factor = 0.5
+            elif "little" in p_lower or "slightly" in p_lower or "bit" in p_lower:
+                factor = 0.85
+            result = ImageEnhance.Brightness(result).enhance(factor)
+            strategy = "darken"
+        if "contrast" in p_lower:
+            factor = 1.3
+            if "less" in p_lower or "lower" in p_lower:
+                factor = 0.7
+            result = ImageEnhance.Contrast(result).enhance(factor)
+            strategy = "contrast"
+        # Blend with mask if we have one (only affect masked region)
+        if mask is not None and strategy != "none":
+            result = feather_blend(orig, result, mask, radius=6)
+        else:
+            result = feather_blend(orig, result, Image.new("L", image.size, 255), radius=0)
+        edited_bytes = img_to_bytes(result)
+        mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
+        return {
+            "edited": base64.b64encode(edited_bytes).decode(),
+            "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
+            "strategy": strategy,
+            "interpretation": info,
+            "width": result.width,
+            "height": result.height,
+        }
+
+    # ── Background Changes ──
+    if info["action"] == "change_background":
+        # Remove background: make background transparent/white
+        if any(w in p_lower for w in ["remove", "erase", "delete", "cut", "transparent"]):
+            if HAS_REMBG:
+                data = rembg_remove(img_to_bytes(image), session=rembg_session)
+                result = Image.open(io.BytesIO(data)).convert("RGBA")
+                strategy = "remove_bg"
+                edited_bytes = img_to_bytes(result, "PNG")
+                return {
+                    "edited": base64.b64encode(edited_bytes).decode(),
+                    "mask": "",
+                    "strategy": strategy,
+                    "interpretation": info,
+                    "width": result.width,
+                    "height": result.height,
+                }
+        # Change background: recolor the background area
+        if mask is not None:
+            result = smart_recolor(image, mask, info["replacement"])
+            strategy = "change_background"
+            result = ImageEnhance.Sharpness(result).enhance(1.2)
+            edited_bytes = img_to_bytes(result)
+            mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
+            return {
+                "edited": base64.b64encode(edited_bytes).decode(),
+                "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
+                "strategy": strategy,
+                "interpretation": info,
+                "width": result.width,
+                "height": result.height,
+            }
+
+    # ── Removals ──
+    if info["action"] == "remove" and mask is not None:
+        # Fill masked region with surrounding content (blur/heal approximation)
+        result = image.copy()
+        m = mask.convert("L").filter(ImageFilter.GaussianBlur(radius=15))
+        # Inpaint by blurring the masked region
+        blurred = result.filter(ImageFilter.GaussianBlur(radius=20))
+        result = feather_blend(result, blurred, m, radius=10)
+        strategy = "remove"
+        edited_bytes = img_to_bytes(result)
+        mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
+        return {
+            "edited": base64.b64encode(edited_bytes).decode(),
+            "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
+            "strategy": strategy,
+            "interpretation": info,
+            "width": result.width,
+            "height": result.height,
+        }
+
+    # ── Clothing / Object Recolor or Replace ──
+    # Strategy 1: GPU inpainting (best quality, requires CUDA)
     if result is None and HAS_TORCH_CUDA and mask is not None:
         sd_prompt = f"A {info['replacement']}, high quality, detailed, realistic"
         inpainted = inpaint_sd(image, mask, sd_prompt)
@@ -606,35 +927,34 @@ def edit_image(image_bytes: bytes, prompt: str) -> dict:
             result = feather_blend(image, inpainted, mask, radius=8)
             strategy = "sd_inpaint"
 
-    # Strategy 2: CPU smart recolor (always available)
+    # Strategy 2: Pillow recolor — only edit the masked region, leave everything else untouched
     if result is None and mask is not None:
-        if info["action"] in ("replace", "recolor", "edit"):
+        if info["action"] in ("replace", "recolor", "edit", "add"):
             result = smart_recolor(image, mask, info["replacement"])
-            strategy = "smart_recolor"
-            # Enhance quality
-            result = ImageEnhance.Sharpness(result).enhance(1.1)
-            result = ImageEnhance.Contrast(result).enhance(1.05)
+            if result is not None:
+                strategy = "smart_recolor"
+                edited_bytes = img_to_bytes(result)
+                mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
+                return {
+                    "edited": base64.b64encode(edited_bytes).decode(),
+                    "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
+                    "strategy": strategy,
+                    "interpretation": info,
+                    "width": result.width,
+                    "height": result.height,
+                }
 
-    # Strategy 3: Full image edit (no mask needed)
+    # If nothing could be done, return original image unchanged (worker will detect via isImageUnchanged)
     if result is None:
-        # Color the entire image based on prompt
-        w, h = image.size
-        full_mask = Image.new("L", (w, h), 200)
-        result = smart_recolor(image, full_mask, info["replacement"])
-        strategy = "full_recolor"
-
-    # Return result
-    edited_bytes = img_to_bytes(result)
-    mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
-
-    return {
-        "edited": base64.b64encode(edited_bytes).decode(),
-        "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
-        "strategy": strategy,
-        "interpretation": info,
-        "width": result.width,
-        "height": result.height,
-    }
+        edited_bytes = img_to_bytes(orig)
+        return {
+            "edited": base64.b64encode(edited_bytes).decode(),
+            "mask": "",
+            "strategy": "unchanged",
+            "interpretation": info,
+            "width": orig.width,
+            "height": orig.height,
+        }
 
 # ---------------------------------------------------------------------------
 # Web Search (free, unlimited via DuckDuckGo HTML scraping)
@@ -786,6 +1106,205 @@ async def api_edit(
         raise HTTPException(400, "No prompt")
     return edit_image(data, prompt)
 
+@app.post("/edit-json")
+async def api_edit_json(body: dict):
+    """Edit image using JSON body (base64 image + prompt)."""
+    image_b64 = body.get("image", "")
+    prompt = body.get("prompt", "")
+    if not image_b64:
+        raise HTTPException(400, "No image data")
+    if not prompt.strip():
+        raise HTTPException(400, "No prompt")
+    try:
+        data = base64.b64decode(image_b64)
+    except Exception:
+        raise HTTPException(400, "Invalid base64 image")
+    return edit_image(data, prompt)
+
+@app.post("/vision/edit")
+async def api_vision_edit(
+    file: UploadFile = File(...),
+    prompt: str = Form(...),
+):
+    """
+    Ollama vision-guided image editing.
+    Uses LLaVA to analyze the image and generate structured edit instructions,
+    then applies enhanced Pillow-based edits.
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(400, "No image data")
+    if not prompt.strip():
+        raise HTTPException(400, "No prompt")
+
+    image = bytes_to_img(data).convert("RGB")
+    image_b64 = img_to_b64(image, "JPEG")
+
+    loop = _asyncio.get_event_loop()
+
+    edit_params = {"target": "auto", "colors": None, "style_keywords": "", "texture_type": "smooth"}
+
+    # Step 1: Quick Ollama health check — skip vision analysis if unavailable
+    ollama_ok = await is_ollama_available(timeout=3)
+    if ollama_ok:
+        vision_prompt = (
+            f"You are an image editing assistant. Analyze this image and the edit request below. "
+            f"Return a JSON object with these fields:\n"
+            f"- 'target': one of 'clothing','background','face','hair','color','object','auto'\n"
+            f"- 'colors': a list of 3-4 RGB color tuples (0-255) that best match the desired style\n"
+            f"- 'style_keywords': comma-separated style descriptors (e.g. 'formal, dark, classic')\n"
+            f"- 'texture_type': one of 'suit','silk','cotton','denim','casual','smooth'\n"
+            f"Edit request: {prompt}\n\n"
+            f"Respond with ONLY valid JSON, no other text."
+        )
+        vision_result = await call_ollama_vision(image_b64, vision_prompt, timeout=30)
+
+        # Parse JSON from vision result
+        try:
+            json_match = re.search(r"\{[\s\S]*\}", vision_result)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                if isinstance(parsed, dict):
+                    edit_params.update(parsed)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    # Step 2: Create mask based on detected target
+    tgt = edit_params.get("target", "auto")
+    mask = None
+    if tgt == "background":
+        fg = segment_foreground(image)
+        if fg is not None:
+            mask = ImageOps.invert(fg)
+    elif tgt in ("clothing", "dress", "shirt", "pants", "outfit", "auto"):
+        mask = create_upper_body_mask(image)
+    elif tgt in ("face", "hair"):
+        mask = create_upper_body_mask(image)
+    else:
+        mask = create_upper_body_mask(image)
+
+    if mask is not None:
+        m_arr = np.array(mask)
+        if np.max(m_arr) < 10:
+            mask = None
+
+    # Step 3: Apply enhanced Pillow editing
+    result = None
+    if mask is not None:
+        colors = edit_params.get("colors")
+        if colors and isinstance(colors, list) and len(colors) >= 3:
+            palette = [tuple(c) for c in colors[:4]]
+            result = apply_color_palette(image, mask, palette)
+        else:
+            result = smart_recolor(image, mask, prompt)
+
+        if result is not None:
+            texture = edit_params.get("texture_type", "smooth")
+            result = apply_fabric_texture(result, mask, texture)
+            result = ImageEnhance.Sharpness(result).enhance(1.2)
+            result = ImageEnhance.Contrast(result).enhance(1.06)
+
+    # Step 4: Fall back to regular edit
+    if result is None:
+        return edit_image(data, prompt)
+
+    edited_bytes = img_to_bytes(result)
+    mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
+    return {
+        "edited": base64.b64encode(edited_bytes).decode(),
+        "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
+        "strategy": "vision_pillow",
+        "width": result.width,
+        "height": result.height,
+    }
+
+@app.post("/vision/edit-json")
+async def api_vision_edit_json(body: dict):
+    """Vision-guided edit using JSON body (base64 image + prompt)."""
+    image_b64 = body.get("image", "")
+    prompt = body.get("prompt", "")
+    if not image_b64:
+        raise HTTPException(400, "No image data")
+    if not prompt.strip():
+        raise HTTPException(400, "No prompt")
+    try:
+        data = base64.b64decode(image_b64)
+    except Exception:
+        raise HTTPException(400, "Invalid base64 image")
+
+    image = bytes_to_img(data).convert("RGB")
+    image_b64 = img_to_b64(image, "JPEG")
+
+    loop = _asyncio.get_event_loop()
+    edit_params = {"target": "auto", "colors": None, "style_keywords": "", "texture_type": "smooth"}
+    ollama_ok = await is_ollama_available(timeout=3)
+    if ollama_ok:
+        vision_prompt = (
+            f"You are an image editing assistant. Analyze this image and the edit request below. "
+            f"Return a JSON object with these fields:\n"
+            f"- 'target': one of 'clothing','background','face','hair','color','object','auto'\n"
+            f"- 'colors': a list of 3-4 RGB color tuples (0-255) that best match the desired style\n"
+            f"- 'style_keywords': comma-separated style descriptors (e.g. 'formal, dark, classic')\n"
+            f"- 'texture_type': one of 'suit','silk','cotton','denim','casual','smooth'\n"
+            f"Edit request: {prompt}\n\n"
+            f"Respond with ONLY valid JSON, no other text."
+        )
+        vision_result = await call_ollama_vision(image_b64, vision_prompt, timeout=30)
+        try:
+            json_match = re.search(r"\{[\s\S]*\}", vision_result)
+            if json_match:
+                parsed = json.loads(json_match.group())
+                if isinstance(parsed, dict):
+                    edit_params.update(parsed)
+        except (json.JSONDecodeError, Exception):
+            pass
+
+    tgt = edit_params.get("target", "auto")
+    mask = None
+    if tgt == "background":
+        fg = segment_foreground(image)
+        if fg is not None:
+            mask = ImageOps.invert(fg)
+    elif tgt in ("clothing", "dress", "shirt", "pants", "outfit", "auto"):
+        mask = create_upper_body_mask(image)
+    elif tgt in ("face", "hair"):
+        mask = create_upper_body_mask(image)
+    else:
+        mask = create_upper_body_mask(image)
+
+    if mask is not None:
+        m_arr = np.array(mask)
+        if np.max(m_arr) < 10:
+            mask = None
+
+    result = None
+    if mask is not None:
+        colors = edit_params.get("colors")
+        if colors and isinstance(colors, list) and len(colors) >= 3:
+            palette = [tuple(c) for c in colors[:4]]
+            result = apply_color_palette(image, mask, palette)
+        else:
+            result = smart_recolor(image, mask, prompt)
+
+        if result is not None:
+            texture = edit_params.get("texture_type", "smooth")
+            result = apply_fabric_texture(result, mask, texture)
+            result = ImageEnhance.Sharpness(result).enhance(1.2)
+            result = ImageEnhance.Contrast(result).enhance(1.06)
+
+    if result is None:
+        return edit_image(data, prompt)
+
+    edited_bytes = img_to_bytes(result)
+    mask_bytes = img_to_bytes(mask, "PNG") if mask else b""
+    return {
+        "edited": base64.b64encode(edited_bytes).decode(),
+        "mask": base64.b64encode(mask_bytes).decode() if mask_bytes else "",
+        "strategy": "vision_pillow_json",
+        "width": result.width,
+        "height": result.height,
+    }
+
 # ---------------------------------------------------------------------------
 # Photorealistic Image Generation — local SD + post-processing
 # ---------------------------------------------------------------------------
@@ -886,7 +1405,8 @@ async def api_segment(
         mask = create_upper_body_mask(img)
     if mask is None:
         raise HTTPException(500, "Segmentation failed")
-    return {"mask": img_to_b64(mask, "PNG"), "width": img.width, "height": img.height}
+    mask_raw = base64.b64encode(np.array(mask).tobytes()).decode()
+    return {"mask": img_to_b64(mask, "PNG"), "mask_raw": mask_raw, "width": img.width, "height": img.height}
 
 @app.post("/remove-bg")
 async def api_remove_bg(file: UploadFile = File(...)):

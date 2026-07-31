@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:image_picker/image_picker.dart';
 import '../constants/app_constants.dart';
+import '../models/message.dart';
 import '../providers/chat_provider.dart';
 
 class ChatInput extends StatefulWidget {
@@ -261,29 +262,32 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
           children: [
             ...List.generate(chat.pendingAttachments.length, (i) {
               final att = chat.pendingAttachments[i];
+              final isImage = att.type == AttachmentType.image && att.bytes != null;
               return Padding(
                 padding: const EdgeInsets.only(right: 5),
-                child: Chip(
-                  avatar: Text(att.iconLabel,
-                      style: const TextStyle(fontSize: AppDimens.fontSizeMD)),
-                  label: Text(
-                    att.name.length > 16
-                        ? '${att.name.substring(0, 13)}...'
-                        : att.name,
-                    style: const TextStyle(fontSize: AppDimens.fontSizeSM),
-                  ),
-                  deleteIcon: const Icon(Icons.close_rounded,
-                      size: AppDimens.iconSmall),
-                  onDeleted: () => chat.removePendingAttachment(i),
-                  visualDensity: VisualDensity.compact,
-                  materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  labelPadding: const EdgeInsets.only(left: AppDimens.gapXS),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: AppDimens.paddingSM),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                ),
+                child: isImage
+                    ? _buildImagePreviewChip(att, i, chat, cs)
+                    : Chip(
+                        avatar: Text(att.iconLabel,
+                            style: const TextStyle(fontSize: AppDimens.fontSizeMD)),
+                        label: Text(
+                          att.name.length > 16
+                              ? '${att.name.substring(0, 13)}...'
+                              : att.name,
+                          style: const TextStyle(fontSize: AppDimens.fontSizeSM),
+                        ),
+                        deleteIcon: const Icon(Icons.close_rounded,
+                            size: AppDimens.iconSmall),
+                        onDeleted: () => chat.removePendingAttachment(i),
+                        visualDensity: VisualDensity.compact,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        labelPadding: const EdgeInsets.only(left: AppDimens.gapXS),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: AppDimens.paddingSM),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
               );
             }),
             ActionChip(
@@ -313,6 +317,39 @@ class _ChatInputState extends State<ChatInput> with WidgetsBindingObserver {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildImagePreviewChip(MessageAttachment att, int index, ChatProvider chat, ColorScheme cs) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Image.memory(
+            att.bytes!,
+            width: 64,
+            height: 64,
+            fit: BoxFit.cover,
+          ),
+        ),
+        Positioned(
+          top: -4,
+          right: -4,
+          child: GestureDetector(
+            onTap: () => chat.removePendingAttachment(index),
+            child: Container(
+              width: 20,
+              height: 20,
+              decoration: BoxDecoration(
+                color: cs.error,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.close_rounded, size: 14, color: cs.onError),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

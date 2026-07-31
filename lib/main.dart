@@ -153,10 +153,20 @@ class AcronousAIApp extends StatefulWidget {
 }
 
 class _AcronousAIAppState extends State<AcronousAIApp> with WidgetsBindingObserver {
+  bool _overlayAttached = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_overlayAttached && mounted) {
+        _overlayAttached = true;
+        context.read<ChatProvider>().attachOverlayService(
+          context.read<OverlayService>(),
+        );
+      }
+    });
   }
 
   @override
@@ -169,11 +179,16 @@ class _AcronousAIAppState extends State<AcronousAIApp> with WidgetsBindingObserv
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final overlay = context.read<OverlayService>();
     overlay.onAppLifecycleChanged(state);
+    final chat = context.read<ChatProvider>();
+    if (state == AppLifecycleState.resumed) {
+      chat.onAppResumed();
+    } else if (state == AppLifecycleState.paused) {
+      chat.onAppPaused();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    context.read<ChatProvider>().attachOverlayService(context.read<OverlayService>());
     return Consumer<ChatProvider>(
       builder: (context, chat, _) => MaterialApp(
         navigatorKey: navigatorKey,

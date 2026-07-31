@@ -17,15 +17,18 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "acronous_ai/overlay"
+    private val EVENTS_CHANNEL = "acronous_ai/overlay_events"
     private var overlayView: View? = null
     private var overlayParams: WindowManager.LayoutParams? = null
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
+    private var flutterEngineRef: FlutterEngine? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        flutterEngineRef = flutterEngine
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "requestOverlayPermission" -> {
@@ -59,6 +62,15 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun sendOverlayTapped() {
+        try {
+            flutterEngineRef?.let { engine ->
+                MethodChannel(engine.dartExecutor.binaryMessenger, EVENTS_CHANNEL)
+                    .invokeMethod("onOverlayTapped", null)
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun showOverlayIcon() {
         if (overlayView != null) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) return
@@ -76,6 +88,7 @@ class MainActivity : FlutterActivity() {
                 setStroke(2, Color.argb(60, 99, 102, 241))
             }
             setOnClickListener {
+                sendOverlayTapped()
                 val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)

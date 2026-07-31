@@ -53,21 +53,3 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           projectName: acronous-ai
           directory: Acronous\ Ai/build/web
-
-  deploy-image-service:
-    runs-on: ubuntu-latest
-    name: Deploy Image Service (optional)
-    if: github.event_name == 'workflow_dispatch'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Deploy to Hugging Face Spaces
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          cd Acronous\ Ai/image-service
-          git init
-          git add .
-          git commit -m "Deploy ${{ github.sha }}"
-          git remote add space https://huggingface.co/spaces/acronous/image-service
-          git push --force https://user:$HF_TOKEN@huggingface.co/spaces/acronous/image-service main

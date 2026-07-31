@@ -12,7 +12,6 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - acronous-ai/**
-    - acronous-hf-space/**
     - build/**
 
 linter:

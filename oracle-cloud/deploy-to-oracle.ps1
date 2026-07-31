@@ -6,7 +6,7 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$PublicIP,
 
-    [string]$SSHKey = "$env:USERPROFILE\.ssh\oracle_acronous",
+    [string]$SSHKey = "$env:USERPROFILE\.ssh\oracle_key",
     [string]$SSHUser = "ubuntu"
 )
 

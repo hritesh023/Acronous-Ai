@@ -3,6 +3,20 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
+class ChatStreamEvent {
+  final String content;
+  final bool done;
+  final String sessionId;
+  final String type;
+
+  const ChatStreamEvent({
+    this.content = '',
+    this.done = false,
+    this.sessionId = '',
+    this.type = 'chat',
+  });
+}
+
 class ApiException implements Exception {
   final int statusCode;
   final String message;
@@ -113,6 +127,8 @@ class ApiClient {
   String _baseUrl;
   String? _authToken;
   http.Client _client = http.Client();
+  static const _defaultTimeout = Duration(minutes: 3);
+  static const _chatStreamPath = '/v1/chat/stream';
 
   ApiClient({String baseUrl = '', this.httpClient}) : _baseUrl = baseUrl {
     if (httpClient != null) _client = httpClient!;
@@ -365,7 +381,7 @@ class ApiClient {
     if (messages != null && messages.isNotEmpty) {
       body['messages'] = messages;
     }
-    final resp = await _post('/v1/chat', body);
+    final resp = await _post('/v1/chat', body, timeout: const Duration(minutes: 3));
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
@@ -375,6 +391,80 @@ class ApiClient {
       fileName: resp['file_name'] as String?,
       fileType: resp['file_type'] as String?,
     );
+  }
+
+  /// SSE streaming chat — yields [ChatStreamEvent] as tokens arrive.
+  Stream<ChatStreamEvent> chatStream({
+    required String message,
+    String? sessionId,
+    String? timezone,
+    String? location,
+    String? gpsCoords,
+    List<Map<String, String>>? messages,
+  }) async* {
+    final body = <String, dynamic>{
+      'message': message,
+      'session_id': sessionId ?? 'default',
+    };
+    if (timezone != null && timezone.isNotEmpty) body['timezone'] = timezone;
+    if (location != null && location.isNotEmpty) body['location'] = location;
+    if (gpsCoords != null && gpsCoords.isNotEmpty) body['gps_coords'] = gpsCoords;
+    if (messages != null && messages.isNotEmpty) body['messages'] = messages;
+
+    final uri = Uri.parse('$_baseUrl$_chatStreamPath');
+    final request = http.Request('POST', uri);
+    request.headers['Content-Type'] = 'application/json';
+    request.headers['Accept'] = 'text/event-stream';
+    request.body = jsonEncode(body);
+
+    final client = http.Client();
+    try {
+      final response = await client.send(request).timeout(_defaultTimeout);
+      if (response.statusCode != 200) {
+        final body = await response.stream.bytesToString();
+        throw ApiException(response.statusCode, 'Stream failed: $body');
+      }
+
+      String buffer = '';
+      await for (final chunk in response.stream.transform(utf8.decoder)) {
+        buffer += chunk;
+        // Process complete SSE lines
+        while (buffer.contains('\n\n')) {
+          final idx = buffer.indexOf('\n\n');
+          final sseBlock = buffer.substring(0, idx);
+          buffer = buffer.substring(idx + 2);
+
+          // Parse the data field
+          final dataLine = sseBlock.split('\n').firstWhere(
+            (l) => l.startsWith('data: '),
+            orElse: () => '',
+          );
+          if (dataLine.isEmpty) continue;
+          final jsonStr = dataLine.substring(6); // strip "data: "
+          try {
+            final parsed = jsonDecode(jsonStr);
+            if (parsed is Map<String, dynamic>) {
+              if (parsed['done'] == true) {
+                yield ChatStreamEvent(
+                  done: true,
+                  sessionId: parsed['session_id'] as String? ?? sessionId ?? '',
+                  type: parsed['type'] as String? ?? 'chat',
+                );
+                return;
+              }
+              final content = parsed['content'] as String?;
+              if (content != null && content.isNotEmpty) {
+                yield ChatStreamEvent(content: content);
+              }
+            }
+          } catch (_) {}
+        }
+      }
+      // If we exit the loop without a done event, emit one
+      yield const ChatStreamEvent(done: true);
+    } finally {
+      client.close();
+    }
   }
 
   Future<ChatResponse> chatWithImage({
