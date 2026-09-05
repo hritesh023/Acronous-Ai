@@ -36,12 +36,14 @@ Thumbs.db
 .env.production
 
 # Data files (will be created at runtime)
+data/
 data/*.db
 data/*.pt
 data/*.npz
 *.db
 *.sqlite
 *.sqlite3
+*.db-journal
 
 # Capacitor
 capacitor.config.json

@@ -1448,7 +1448,8 @@ async function tryEditorService(fileBytes, editPrompt) {
     const visionResp = await fetch(`${ENV.EDITOR_SERVICE_URL}/vision/edit`, { method: 'POST', body: visionForm, headers: visionForm.getHeaders() });
     if (visionResp.ok) {
       const visionData = await visionResp.json();
-      if (visionData?.edited) return visionData.edited;
+      // Never accept an unchanged image — only the requested edit may be applied
+      if (visionData?.edited && visionData.strategy !== 'unchanged' && visionData.changed !== false) return visionData.edited;
     }
   } catch {}
 
@@ -1461,7 +1462,8 @@ async function tryEditorService(fileBytes, editPrompt) {
     const resp = await fetch(`${ENV.EDITOR_SERVICE_URL}/edit`, { method: 'POST', body: form, headers: form.getHeaders() });
     if (!resp.ok) return null;
     const data = await resp.json();
-    return data?.edited || null;
+    if (data?.edited && data.strategy !== 'unchanged' && data.changed !== false) return data.edited;
+    return null;
   } catch { return null; }
 }
 
@@ -1569,17 +1571,12 @@ async function generateNaturalApology(reason) {
 async function runEditPipeline(fileBytes, editPrompt, mimeType) {
   const editTarget = parseEditTarget(editPrompt);
 
-  // Tier 1: Python Editor Service (vision-guided, Pillow tools)
+  // Tier 1: Python Editor Service (vision-guided, Pillow tools) — applies ONLY the
+  // requested change and preserves every other pixel of the attached image.
   let edited = await tryEditorService(fileBytes, editPrompt);
   if (edited) return { image_data: edited };
 
-  // Tier 2: LLM-Guided Generation (vision analyzes original → generates modified version)
-  const imageBase64 = Buffer.from(fileBytes).toString('base64');
-  const dims = getImageDimensions(fileBytes);
-  const guidedResult = await tryLLMGuidedEdit(imageBase64, mimeType || 'image/jpeg', editPrompt, dims?.width, dims?.height);
-  if (guidedResult) return { image_data: guidedResult };
-
-  // All tools failed — return natural apology
+  // All tools failed — return natural apology. NEVER regenerate or echo the original.
   const apology = await generateNaturalApology('I was unable to edit the image as requested. The editing service may be temporarily unavailable. Please try a simpler edit or try again later.');
   return { response: apology, type: 'chat' };
 }

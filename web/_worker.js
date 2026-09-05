@@ -39,6 +39,25 @@ export default {
           headers: indexResponse.headers,
         });
       }
+      // Bootstrap files are un-hashed — always revalidate so new deploys
+      // show up immediately instead of being pinned by the Flutter service
+      // worker / browser cache (stale main.dart.js = stale UI bugs).
+      const NO_CACHE_FILES = [
+        '/index.html',
+        '/flutter_bootstrap.js',
+        '/main.dart.js',
+        '/flutter_service_worker.js',
+        '/version.json',
+        '/manifest.json',
+      ];
+      if (NO_CACHE_FILES.includes(path)) {
+        const headers = new Headers(response.headers);
+        headers.set('Cache-Control', 'no-cache, must-revalidate');
+        return new Response(response.body, {
+          status: response.status,
+          headers,
+        });
+      }
       return response;
     } catch {
       return new Response('Not Found', { status: 404 });

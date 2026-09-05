@@ -27,6 +27,7 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   bool _sidebarOpen = false;
   final _scrollController = ScrollController();
+  bool _autoScroll = true;
   List<Suggestion> _suggestions = [];
 
   @override
@@ -40,11 +41,22 @@ class _ChatPageState extends State<ChatPage> {
       }
     });
     widget.authProvider.addListener(_onAuthChanged);
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 80;
+    if (atBottom != _autoScroll) {
+      setState(() => _autoScroll = atBottom);
+    }
   }
 
   @override
   void dispose() {
     widget.authProvider.removeListener(_onAuthChanged);
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
   }
@@ -99,7 +111,7 @@ class _ChatPageState extends State<ChatPage> {
                     builder: (context, chat, _) {
                       final msgs = chat.currentMessages;
                       WidgetsBinding.instance.addPostFrameCallback((_) {
-                        if (_scrollController.hasClients) {
+                        if (_scrollController.hasClients && _autoScroll) {
                           _scrollController.animateTo(
                             _scrollController.position.maxScrollExtent,
                             duration: const Duration(milliseconds: 200),

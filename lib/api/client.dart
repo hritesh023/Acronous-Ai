@@ -8,12 +8,22 @@ class ChatStreamEvent {
   final bool done;
   final String sessionId;
   final String type;
+  final String fileData;
+  final String fileName;
+  final String fileType;
+  final String imageData;
+  final String filePoster;
 
   const ChatStreamEvent({
     this.content = '',
     this.done = false,
     this.sessionId = '',
     this.type = 'chat',
+    this.fileData = '',
+    this.fileName = '',
+    this.fileType = '',
+    this.imageData = '',
+    this.filePoster = '',
   });
 }
 
@@ -75,6 +85,7 @@ class ChatResponse {
   final String? fileData;
   final String? fileName;
   final String? fileType;
+  final String? filePoster;
   final int complexity;
   final String complexityLabel;
 
@@ -91,6 +102,7 @@ class ChatResponse {
     this.fileData,
     this.fileName,
     this.fileType,
+    this.filePoster,
     this.complexity = 0,
     this.complexityLabel = 'simple',
   });
@@ -118,6 +130,7 @@ class ChatResponse {
     fileData: json['file_data'] as String?,
     fileName: json['file_name'] as String?,
     fileType: json['file_type'] as String?,
+    filePoster: json['file_poster'] as String?,
     complexity: json['complexity'] as int? ?? 0,
     complexityLabel: json['complexity_label'] as String? ?? 'simple',
   );
@@ -127,7 +140,10 @@ class ApiClient {
   String _baseUrl;
   String? _authToken;
   http.Client _client = http.Client();
-  static const _defaultTimeout = Duration(minutes: 3);
+  // Effectively unbounded timeouts — long image/video/code generations must
+  // never be cut off mid-flight. Tokens stream in continuously for chat, so
+  // this only guards against a truly dead server.
+  static const _defaultTimeout = Duration(minutes: 30);
   static const _chatStreamPath = '/v1/chat/stream';
 
   ApiClient({String baseUrl = '', this.httpClient}) : _baseUrl = baseUrl {
@@ -381,7 +397,7 @@ class ApiClient {
     if (messages != null && messages.isNotEmpty) {
       body['messages'] = messages;
     }
-    final resp = await _post('/v1/chat', body, timeout: const Duration(minutes: 3));
+    final resp = await _post('/v1/chat', body, timeout: const Duration(minutes: 30));
     return ChatResponse(
       content: resp['response'] as String? ?? '',
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
@@ -390,6 +406,7 @@ class ApiClient {
       fileData: resp['file_data'] as String?,
       fileName: resp['file_name'] as String?,
       fileType: resp['file_type'] as String?,
+      filePoster: resp['file_poster'] as String?,
     );
   }
 
@@ -449,6 +466,11 @@ class ApiClient {
                   done: true,
                   sessionId: parsed['session_id'] as String? ?? sessionId ?? '',
                   type: parsed['type'] as String? ?? 'chat',
+                  fileData: parsed['file_data'] as String? ?? '',
+                  fileName: parsed['file_name'] as String? ?? '',
+                  fileType: parsed['file_type'] as String? ?? '',
+                  imageData: parsed['image_data'] as String? ?? '',
+                  filePoster: parsed['file_poster'] as String? ?? '',
                 );
                 return;
               }
@@ -496,6 +518,10 @@ class ApiClient {
       sessionId: resp['session_id'] as String? ?? sessionId ?? '',
       type: resp['type'] as String? ?? 'chat',
       imageBase64: resp['image_data'] as String?,
+      fileData: resp['file_data'] as String?,
+      fileName: resp['file_name'] as String?,
+      fileType: resp['file_type'] as String?,
+      filePoster: resp['file_poster'] as String?,
     );
   }
 

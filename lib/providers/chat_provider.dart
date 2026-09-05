@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js_util' as js_util;
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:web/web.dart' as web;
@@ -44,13 +45,41 @@ class ChatProvider extends ChangeNotifier {
 
   static String _sanitizeAssistantText(String text) {
     if (text.trim().isEmpty) return '';
-    var cleaned = text
-        .replaceAll(RegExp(r'\[[^\]]*\]'), '') // Strip ALL bracket tags (internal markers, search context, etc.)
+    // PROTECT fenced code blocks — their contents (indentation, brackets,
+    // URLs, identifiers) must NEVER be altered by the sanitizer
+    final codeBlocks = <String>[];
+    var cleaned = text.replaceAllMapped(RegExp(r'```[\s\S]*?```'), (m) {
+      codeBlocks.add(m.group(0)!);
+      return '\u0000CB${codeBlocks.length - 1}\u0000';
+    });
+    cleaned = cleaned
+        .replaceAll(RegExp(r'\[[^\]]*\]'), '') // Strip bracket tags in prose (internal markers, search context, etc.)
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
-    if (cleaned.isEmpty) return text.trim();
-    // Whole-text cleanup: strip backend leak phrases anywhere in the text
+    if (cleaned.isEmpty && codeBlocks.isEmpty) return text.trim();
+    // Strip apologetic openers — Acronous AI never apologizes
+    cleaned = cleaned.replaceFirst(
+      RegExp(
+        r"^\s*(?:(?:i'?m|i\s+am|we'?re|we\s+are)\s+(?:really|very|so|terribly|deeply)\s+)?(?:sorry|apologize|apologise|apologies)(?:\s+(?:really|very|so|terribly|deeply))?\b[,.;:!]*\s*(?:but|however|yet|though)?\s*",
+        caseSensitive: false,
+      ),
+      '',
+    );
+    cleaned = cleaned.replaceFirst(
+      RegExp(r"^\s*(?:my|our)\s+(?:sincere\s+)?apologies\b[,.;:!]*\s*(?:but|however|yet|though)?\s*", caseSensitive: false),
+      '',
+    );
+    // Whole-text cleanup: strip backend leak phrases anywhere in the prose
     cleaned = cleaned
+        // Stock-photo / placeholder image services are NEVER part of an
+        // answer — their mention means a hallucinated URL leaked through
+        .replaceAll(
+          RegExp(
+            r'[^\n]*(?:picsum|pexels|unsplash|pixabay|shutterstock|loremflickr|placehold\.(?:co|com))[^\n]*',
+            caseSensitive: false,
+          ),
+          '',
+        )
         .replaceAll(RegExp(r'(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|provided\s+by)\s+[^.\n]*', caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:based\s+on\s+(?:my|the|our)\s+(?:training|web\s+)?(?:data\s+)?search|according\s+to\s+(?:my|the|our)\s+(?:web\s+)?(?:search|results?|findings?)|as\s+per\s+(?:my|the)\s+search|i\s+(?:searched|looked\s+up|checked|found|retrieved|gathered)\s+(?:online|the\s+web|information|data)|let\s+me\s+(?:search|look\s+up|check|find))\b[^.\n]*', caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:as\s+of\s+my\s+(?:knowledge\s+)?cutoff|knowledge\s+cutoff|last\s+(?:updated|trained|update\s+in)|training\s+data|based\s+on\s+my\s+training)\b[^.\n]*', caseSensitive: false), '')
@@ -60,19 +89,36 @@ class ChatProvider extends ChangeNotifier {
         .replaceAll(RegExp(r"\b(?:i\s+(?:don[']?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r"\b(?:i\s+(?:cannot|can[']?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b[^.\n]*', caseSensitive: false), '')
-        // Strip backend/service names
-        .replaceAll(RegExp(r'\b(?:openrouter|cloudflare|workers\s+ai|searxng|duckduckgo|ollama|llama|qwen|deepseek|gemini|stable\s+diffusion|flux|instructpix2pix)\b', caseSensitive: false), '')
+        // Backend/provider/model/company names — replaced with Acronous so the
+        // sentence still reads naturally but NO third-party name ever shows
+        .replaceAll(
+          RegExp(
+            r'\b(?:cloudflare\s+workers?|cloudflare|workers\s+ai|searxng|duckduckgo|ollama|llama|qwen|deepseek|chatgpt|gpt[- ]?[45o]|gpt|claude|anthropic|openai|gemini|mistral|cohere|llava|stable\s+diffusion|instructpix2pix|flux\.?1|flux|groq|hugging\s*face|deepmind|runwayml|black[- ]forest[- ]labs|pollinations|nominatim|moviepy|edge[- ]tts|rembg|real[- ]esrgan|whisper|oracle|image[- ]?service|backend|deployment|sana)\b',
+            caseSensitive: false,
+          ),
+          'Acronous',
+        )
+        // Identity sentences that survived the above ("I am Acronous based on…") get normalized
+        .replaceAll(RegExp(r"(?:i(?:'m| am)|built|created|developed|trained|made)\s+(?:on|by|with|using)\s+Acronous\b[^.\n]*", caseSensitive: false), '')
         // Strip GPS coordinates from responses
         .replaceAll(RegExp(r'\d{1,3}\.\d{2,6}\s*°?\s*[NSns]\s*[,;]?\s*\d{1,3}\.\d{2,6}\s*°?\s*[EWew]'), '')
         .replaceAll(RegExp(r'\b(?:latitude|lat|lng|longitude)\s*[:=]?\s*-?\d{1,3}\.\d{1,6}', caseSensitive: false), '')
         .replaceAll(RegExp(r'\(\s*-?\d{1,3}\.\d{1,6}\s*,\s*-?\d{1,3}\.\d{1,6}\s*\)'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
-        .replaceAll(RegExp(r'\s{2,}'), ' ')
         .trim();
+    // Whitespace collapse ONLY on prose (never touches restored code blocks)
+    cleaned = cleaned.split('\n').map((l) => l.trim()).join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    // Restore protected code blocks exactly as generated
+    cleaned = cleaned.replaceAllMapped(RegExp('\u0000CB(\\d+)\u0000'), (m) {
+      final i = int.tryParse(m.group(1)!);
+      return (i != null && i < codeBlocks.length) ? codeBlocks[i] : '';
+    });
     // Line-by-line cleanup as well
     final lines = cleaned.split('\n');
     final filtered = lines.where((line) {
-      return !_privateInfoLinePattern.hasMatch(line.trim());
+      final t = line.trim();
+      if (t.startsWith('```')) return true; // never drop fence lines
+      return !_privateInfoLinePattern.hasMatch(t);
     }).join('\n').trim();
     return filtered.isEmpty ? cleaned : filtered;
   }
@@ -310,9 +356,147 @@ class ChatProvider extends ChangeNotifier {
     _cancelled = true;
     _isLoading = false;
     _isTakingLong = false;
+    _finishGenerationProgress();
     _api.cancelCurrentRequest();
     notifyListeners();
   }
+
+  // ── Generation progress skeleton ────────────────────────────────────────
+  // While an image / video / document / image-edit is being produced, an
+  // assistant bubble shows a skeleton preview whose status label cycles
+  // through steps derived from what the user actually asked for.
+  Timer? _progressTimer;
+  ChatMessage? _progressMsg;
+  List<String> _progressSteps = const [];
+  int _progressIdx = 0;
+
+  bool get _generationInProgress => _progressMsg != null;
+
+  static bool _isVideoGenRequest(String text) {
+    final t = text.trim().toLowerCase();
+    if (t.length < 5) return false;
+    final patterns = [
+      RegExp(r'\b(make|create|generate|produce|render|give me|show me|build)\b[^.?!]{0,60}\b(video|animation|animated (clip|video|short)|motion graphic)\b'),
+      RegExp(r'\b(video|animation)\s+(of|about|for|on)\b'),
+      RegExp(r'^\s*(make|create|generate)\s+(me\s+)?(a\s+)?(short\s+)?(clip|video)\b'),
+      RegExp(r'\b\d+\s*(second|sec|minute|min)\s+video\b'),
+    ];
+    return patterns.any((p) => p.hasMatch(t));
+  }
+
+  static String? _extractImageSubject(String text) {
+    var t = text.trim().toLowerCase().replaceAll(RegExp(r'[!.?]+$'), '');
+    t = t.replaceFirst(
+      RegExp(r'^(please\s+|can you\s+|could you\s+|i want you to\s+|i need you to\s+)'),
+      '',
+    );
+    t = t.replaceFirst(
+      RegExp(
+        r'^(draw|paint|sketch|render|imagine|generate|create|make|design)\s+(me\s+)?(an?\s+|the\s+)?(image|picture|photo|artwork|drawing|painting|illustration)?\s*(of\s+|showing\s+|with\s+)?',
+      ),
+      '',
+    ).trim();
+    if (t.isEmpty || t.length < 3) return null;
+    if (t.length > 42) {
+      final cut = t.substring(0, 42);
+      final lastSpace = cut.lastIndexOf(' ');
+      t = lastSpace > 12 ? cut.substring(0, lastSpace) : cut;
+    }
+    return t;
+  }
+
+  static List<String> _buildProgressSteps(
+    String text, {
+    required String kind,
+  }) {
+    final t = text.toLowerCase();
+    switch (kind) {
+      case 'edit':
+        final steps = <String>['Analyzing your photo…'];
+        if (t.contains('background')) {
+          steps.addAll(['Removing the old background…', 'Blending in the new background…']);
+        } else if (RegExp(r'recolo|change.{0,12}colou?r|color swap|different colou?r').hasMatch(t)) {
+          steps.add('Recoloring your image…');
+        } else if (RegExp(r'enhance|sharp|hd|4k|quality|upscale|brighten|clearer|denoise').hasMatch(t)) {
+          steps.add('Enhancing details and clarity…');
+        } else if (RegExp(r'remove|erase|delete|get rid of').hasMatch(t)) {
+          steps.add('Removing unwanted elements…');
+        } else if (RegExp(r'dress|suit|outfit|shirt|hairstyle|hair|face').hasMatch(t)) {
+          steps.add('Reworking the subject…');
+        }
+        steps.addAll([
+          'Applying your changes…',
+          'Refining edges and lighting…',
+          'Applying final touches…',
+        ]);
+        return steps;
+      case 'video':
+        return [
+          'Storyboarding your video…',
+          'Designing scenes from your idea…',
+          'Animating shot 1…',
+          'Animating shot 2…',
+          'Rendering transitions…',
+          'Recording narration…',
+          'Encoding video…',
+          'Applying final touches…',
+        ];
+      case 'file':
+        return [
+          'Outlining your document…',
+          'Generating the content…',
+          'Formatting pages…',
+          'Polishing wording…',
+          'Applying final touches…',
+        ];
+      default:
+        final subject = _extractImageSubject(text);
+        return [
+          if (subject != null) 'Imagining $subject…',
+          'Sketching the composition…',
+          'Painting colors and light…',
+          'Adding depth and texture…',
+          'Applying final touches…',
+        ];
+    }
+  }
+
+  void _startGenerationProgress(String text, {required String kind}) {
+    _finishGenerationProgress();
+    _progressSteps = _buildProgressSteps(text, kind: kind);
+    if (_progressSteps.isEmpty) return;
+    _progressIdx = 0;
+    _progressMsg = ChatMessage(
+      role: 'assistant',
+      content: '',
+      isStreaming: true,
+      progressLabel: _progressSteps.first,
+      progressKind: kind,
+    );
+    _currentConversation!.messages.add(_progressMsg!);
+    _progressTimer = Timer.periodic(const Duration(milliseconds: 2400), (_) {
+      final msg = _progressMsg;
+      if (msg == null || _progressSteps.isEmpty) return;
+      // Cycle forward but hold on the final step ("Applying final touches…").
+      _progressIdx = math.min(_progressIdx + 1, _progressSteps.length - 1);
+      msg.progressLabel = _progressSteps[_progressIdx];
+      notifyListeners();
+    });
+    notifyListeners();
+  }
+
+  void _finishGenerationProgress({bool remove = true}) {
+    _progressTimer?.cancel();
+    _progressTimer = null;
+    final msg = _progressMsg;
+    _progressMsg = null;
+    _progressSteps = const [];
+    if (msg != null && remove && _currentConversation != null) {
+      _currentConversation!.messages.remove(msg);
+    }
+  }
+
+  // ── End generation progress skeleton ────────────────────────────────────
 
   String _cachedLocation = '';
   String _cachedGpsCoords = '';
@@ -554,6 +738,84 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  static final RegExp _questionStartPattern = RegExp(
+    r'^(?:how|what|why|which|where|who|when|is|are|was|were|does|do|did)\b',
+    caseSensitive: false,
+  );
+
+  /// Detects image-edit intent in plain text WITHOUT an attached image.
+  /// Requests like "edit this photo", "turn the background into beach",
+  /// "remove the background", "make it brighter" must never fall through to
+  /// plain chat — the LLM used to answer those with code snippets.
+  bool _looksLikeImageEditRequest(String text) {
+    final t = text.trim().toLowerCase();
+    if (t.length < 4) return false;
+
+    // File-conversion asks route to file generation, not image editing
+    if (_detectFileGenFormat(text) != null) return false;
+    // Image-generation asks have their own pipeline
+    if (_isImageGenRequest(text)) return false;
+
+    // Code-related asks belong to normal chat — never hijack them
+    const codeHints = [
+      'code', 'snippet', 'script', 'function', 'program', 'algorithm',
+      'python', 'javascript', 'typescript', 'java ', 'c++', 'c#',
+      'sql', 'html', 'css', 'flutter', 'react', 'node.js', 'regex',
+      'query', 'terminal', 'formula',
+    ];
+    for (final h in codeHints) {
+      if (t.contains(h)) return false;
+    }
+    // Questions ABOUT editing are informational, not edit requests
+    if (_questionStartPattern.hasMatch(t)) return false;
+    // Brainstorming / informational asks are not edits either
+    if (RegExp(
+      r'\b(?:ideas?|concepts?|suggestions?|tips?|tutorial|guide|examples?|learn|learning|course|lessons?)\b',
+    ).hasMatch(t)) {
+      return false;
+    }
+
+    // Nouns that live INSIDE a picture — editing targets
+    final hasTargetNoun = RegExp(
+      r'\b(?:images?|photos?|photographs?|pictures?|pics?|selfies?|screenshots?|wallpapers?|portraits?|avatars?|backgrounds?|bg|skies|sky|hair|hairstyle|haircut|face|eyes?|eyebrows|teeth|skin|dress|gown|shirt|t-?shirt|outfit|clothes|clothing|suit|jeans|jacket|coat|watermark|logo|object|objects|person|people|head|hat|cap|glasses|sunglasses|beard|moustache|mustache|scenery|scene|setting)\b',
+    ).hasMatch(t);
+
+    final hasActionWord = RegExp(
+      r'\b(?:edit|edits|editing|edited|chang\w+|turn\w*|mak\w+|convert\w*|transform\w*|replac\w+|swap\w*|set|put|appl\w+|add\w*|giv\w+|remov\w+|delet\w+ |eras\w+|clean\w*|clear\w*|fix\w*|repair\w*|redo|redraw|repaint|redesign\w*|restyle\w*|reimagin\w*|regenerat\w*|styliz\w*|stylis\w*|enhanc\w+|improv\w+|blur\w*|sharpen\w*|brighten\w*|darken\w*|lighten\w*|crop\w*|resiz\w+|rotat\w+|flip\w*|upscale[ds]?|restor\w+|coloriz\w+|colouris\w+|recolou?r\w*|extend\w*|fill|outpaint)\b'
+      r'|touch\s?up'
+      r'|(?:can|could|will)\s+you\b'
+      r'|i\s+(?:want|need|would\s+like)\b',
+    ).hasMatch(t);
+
+    // "edit this photo", "turn the background into beach", "change her dress"…
+    if (hasTargetNoun && hasActionWord) return true;
+
+    // Short follow-ups referring to a recent result:
+    // "make it brighter", "turn it into anime"
+    final refersToResult = RegExp(
+      r'\b(?:make|turn|change|convert|transform|enhance|improve|blur|sharpen|brighten|darken|recolor|recolour|restore|redo)\s+(?:it|this|that|him|her|them|everything)\b',
+    ).hasMatch(t);
+    final transformTarget = RegExp(
+      r'(?:into|to)\s+(?:a|an)?\s*(?:cartoon|anime|painting|sketch|drawing|watercolor|oil painting|3d render|pixar)',
+      caseSensitive: false,
+    ).hasMatch(t);
+    if (refersToResult || transformTarget) return true;
+
+    return false;
+  }
+
+  /// Returns the base64 image data of the most recent assistant-generated
+  /// image in the current conversation, or null if none exists.
+  String? _findLastGeneratedImageData() {
+    if (_currentConversation == null) return null;
+    final msgs = _currentConversation!.messages;
+    for (var i = msgs.length - 1; i >= 0; i--) {
+      final m = msgs[i];
+      if (m.role == 'assistant' && m.imageData.isNotEmpty) return m.imageData;
+    }
+    return null;
+  }
+
   Future<void> sendMessage(
     String text, {
     List<MessageAttachment>? attachments,
@@ -565,17 +827,74 @@ class ChatProvider extends ChangeNotifier {
       _newConversation();
     }
 
+    // ── Smart request classification ────────────────────────────────────
+    // An image-edit request without an attached image must NEVER fall
+    // through to plain chat. Reuse the most recently generated image if one
+    // exists; otherwise the request is intercepted below and the user is
+    // asked to attach an image.
+    final editIntentWithoutAttachment =
+        attach.isEmpty &&
+        !_isImageGenRequest(text) &&
+        _looksLikeImageEditRequest(text);
+    List<MessageAttachment> effectiveAttachments =
+        List<MessageAttachment>.from(attach);
+    if (editIntentWithoutAttachment) {
+      final lastImageData = _findLastGeneratedImageData();
+      if (lastImageData != null) {
+        try {
+          var b64 = lastImageData.trim();
+          final commaIdx = b64.indexOf(',');
+          if (b64.startsWith('data:') && commaIdx != -1) {
+            b64 = b64.substring(commaIdx + 1);
+          }
+          b64 = b64.replaceAll(RegExp(r'\s'), '');
+          final bytes = base64Decode(b64);
+          if (bytes.isNotEmpty) {
+            effectiveAttachments.add(MessageAttachment(
+              name: 'image_edit_${DateTime.now().millisecondsSinceEpoch}.png',
+              path: '',
+              type: AttachmentType.image,
+              bytes: bytes,
+            ));
+          }
+        } catch (_) {}
+      }
+    }
+
     if (_isLoading) {
-      _messageQueue.add({'text': text, 'attachments': attach});
+      _messageQueue.add({'text': text, 'attachments': effectiveAttachments});
       final userMsg = ChatMessage(
         role: 'user',
         content: text,
-        attachments: List.from(attach),
+        attachments: List.from(effectiveAttachments),
       );
       _currentConversation!.messages.add(userMsg);
       _currentConversation!.updatedAt = DateTime.now();
       if (attachments == null) _pendingAttachments.clear();
       notifyListeners();
+      return;
+    }
+
+    // Intercept edit requests that reference no image at all — reply asking
+    // for the image instead of letting the chat model improvise with code.
+    if (editIntentWithoutAttachment && effectiveAttachments.isEmpty) {
+      _currentConversation!.messages.add(
+        ChatMessage(role: 'user', content: text),
+      );
+      _currentConversation!.messages.add(
+        ChatMessage(
+          role: 'assistant',
+          content:
+              "Happy to! Please attach the image you'd like me to edit "
+              '(use the gallery or camera button) and tell me exactly what '
+              'to change — colors, background, style, objects, anything.',
+        ),
+      );
+      _currentConversation!.updatedAt = DateTime.now();
+      if (attachments == null) _pendingAttachments.clear();
+      _prefs.saveConversations(_conversations).catchError((_) {});
+      notifyListeners();
+      _processQueue();
       return;
     }
 
@@ -587,7 +906,7 @@ class ChatProvider extends ChangeNotifier {
     final userMsg = ChatMessage(
       role: 'user',
       content: text,
-      attachments: List.from(attach),
+      attachments: List.from(effectiveAttachments),
     );
     _currentConversation!.messages.add(userMsg);
     _currentConversation!.updatedAt = DateTime.now();
@@ -598,7 +917,26 @@ class ChatProvider extends ChangeNotifier {
     final hasAttachments = userMsg.attachments.isNotEmpty;
     final isImageGen = !hasAttachments && _isImageGenRequest(text);
     final isFileGen = !hasAttachments && !isImageGen && _detectFileGenFormat(text) != null;
+    final isVideoGen = !hasAttachments && !isImageGen && !isFileGen && _isVideoGenRequest(text);
     final canStream = !hasAttachments && !isImageGen && !isFileGen;
+    // Generation-style requests show a skeleton preview with live status
+    // steps while the backend works (image gen, video gen, file gen, and
+    // attached-image edits/analysis).
+    final wantsProgress = isImageGen || isFileGen || isVideoGen ||
+        (hasAttachments &&
+            userMsg.attachments.any((a) => a.type == AttachmentType.image));
+    if (wantsProgress) {
+      _startGenerationProgress(
+        text,
+        kind: (hasAttachments && _isVideoGenRequest(text)) || isVideoGen
+            ? 'video'
+            : isFileGen
+                ? 'file'
+                : hasAttachments
+                    ? 'edit'
+                    : 'image',
+      );
+    }
 
     for (var attempt = 0; attempt < 3; attempt++) {
       if (!_isServerConnected && attempt > 0) {
@@ -606,7 +944,7 @@ class ChatProvider extends ChangeNotifier {
       }
       try {
         Map<String, dynamic> resp;
-        if (canStream && attempt == 0) {
+        if (canStream && attempt == 0 && !_generationInProgress) {
           // Try streaming for text-only chat — add placeholder message
           final streamingMsg = ChatMessage(
             role: 'assistant',
@@ -636,15 +974,27 @@ class ChatProvider extends ChangeNotifier {
         } else {
           resp = await _callApi(userMsg, text);
         }
+        // A response arrived — drop the skeleton preview before processing.
+        _finishGenerationProgress();
         final imageData = resp['image_data'] as String? ?? '';
         final fileData = resp['file_data'] as String? ?? '';
         final fileName = resp['file_name'] as String? ?? '';
         final fileType = resp['file_type'] as String? ?? '';
+        final filePoster = resp['file_poster'] as String? ?? '';
         final rawContent = _sanitizeAssistantText(
           resp['response'] as String? ?? '',
         );
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
+          // NEVER drop silently — always show the user something
+          _currentConversation!.messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: rawContent.isNotEmpty
+                  ? rawContent
+                  : "I ran into a problem processing that request. Could you try again in a moment?",
+            ),
+          );
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -664,6 +1014,13 @@ class ChatProvider extends ChangeNotifier {
             await Future.delayed(const Duration(seconds: 2));
             continue;
           }
+          // All attempts returned nothing — NEVER leave the user without a reply
+          _currentConversation!.messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: "I didn't receive a proper response just now. Please try sending your message again.",
+            ),
+          );
           _isTakingLong = false;
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
@@ -671,15 +1028,24 @@ class ChatProvider extends ChangeNotifier {
           _processQueue();
           return;
         }
-        
+
         // Ensure no empty responses are processed - this is a critical safeguard
-        if ((rawContent.isEmpty && respType != 'image_gen') || 
-            (imageData.isEmpty && respType == 'image_gen') || 
+        if ((rawContent.isEmpty && respType != 'image_gen') ||
+            (imageData.isEmpty && respType == 'image_gen') ||
             (fileData.isEmpty && respType != 'error' && respType != 'chat' && respType != 'image_gen')) {
           if (attempt < 2) {
             await Future.delayed(const Duration(seconds: 2));
             continue;
           }
+          // Final attempt still empty — show a message instead of dropping silently
+          _currentConversation!.messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: imageData.isEmpty && fileData.isEmpty
+                  ? "I couldn't complete that request. Please try rephrasing it and sending it again."
+                  : "I generated a response but the attachment data came back incomplete. Please try again.",
+            ),
+          );
           _isTakingLong = false;
           _isLoading = false;
           notifyListeners();
@@ -699,14 +1065,11 @@ class ChatProvider extends ChangeNotifier {
               lastMsg != null &&
               lastMsg.role == 'assistant' &&
               (lastMsg.content.isNotEmpty || lastMsg.isStreaming == false);
-          if (alreadyAdded && canStream && lastMsg.content.isEmpty) {
-            // Streaming placeholder exists but has no content — update it
-            lastMsg.content = rawContent;
-            lastMsg.isStreaming = false;
-          } else if (alreadyAdded && canStream) {
-            // Streaming already populated the content — just mark done
-            lastMsg.isStreaming = false;
-          } else {
+          if (alreadyAdded && canStream && (fileData.isNotEmpty || imageData.isNotEmpty)) {
+            // Binary payload (rendered video / generated image) arrived via the
+            // stream's done event — replace the text-only placeholder so the
+            // attachment fields (final) are populated.
+            _currentConversation!.messages.removeLast();
             _currentConversation!.messages.add(
               ChatMessage(
                 role: 'assistant',
@@ -715,6 +1078,33 @@ class ChatProvider extends ChangeNotifier {
                 fileData: fileData,
                 fileName: fileName,
                 fileType: fileType,
+                filePoster: filePoster,
+              ),
+            );
+          } else if (alreadyAdded && canStream && lastMsg.content.isEmpty) {
+            // Streaming placeholder exists but has no content — update it
+            lastMsg.content = rawContent;
+            lastMsg.isStreaming = false;
+          } else if (alreadyAdded && canStream) {
+            // Streaming populated the content — swap in the SANITIZED version
+            // so backend/provider names are never left on screen
+            lastMsg.content = rawContent;
+            lastMsg.isStreaming = false;
+          } else {
+            // Keep conversation history meaningful: an image/file reply with no
+            // text still needs a caption, otherwise later turns lose context.
+            final effectiveContent = rawContent.isEmpty && (imageData.isNotEmpty || fileData.isNotEmpty)
+                ? "Here's your image."
+                : rawContent;
+            _currentConversation!.messages.add(
+              ChatMessage(
+                role: 'assistant',
+                content: effectiveContent,
+                imageData: imageData,
+                fileData: fileData,
+                fileName: fileName,
+                fileType: fileType,
+                filePoster: filePoster,
               ),
             );
           }
@@ -751,6 +1141,14 @@ class ChatProvider extends ChangeNotifier {
         }
         _isServerConnected = false;
         unawaited(_discoverServer());
+        // Connection failed after all retries — NEVER leave the user hanging
+        _finishGenerationProgress();
+        _currentConversation!.messages.add(
+          ChatMessage(
+            role: 'assistant',
+            content: "I'm having trouble connecting right now. Please check your connection and try again in a moment.",
+          ),
+        );
         break;
       }
     }
@@ -1312,15 +1710,27 @@ class ChatProvider extends ChangeNotifier {
         timezone: timezone.isNotEmpty ? timezone : null,
           location: location,
           messages: history,
-          timeout: const Duration(minutes: 5),
+          timeout: const Duration(minutes: 30),
         );
         final response = smartResp['response'] as String? ?? '';
         final imageData = smartResp['image_data'] as String? ?? '';
+        final fileData = smartResp['file_data'] as String? ?? '';
+        final fileName = smartResp['file_name'] as String? ?? '';
+        final fileType = smartResp['file_type'] as String? ?? '';
+        final filePoster = smartResp['file_poster'] as String? ?? '';
         final respType = smartResp['type'] as String? ?? 'chat';
-        if (imageData.isNotEmpty || response.isNotEmpty) {
+        // Forward video/file payloads too — converting an attached image (or any
+        // file) into a video returns file_data, which must reach the message so
+        // the in-bubble player actually appears (file_poster = the video's
+        // thumbnail preview so the bubble never shows a blank player).
+        if (imageData.isNotEmpty || fileData.isNotEmpty || response.isNotEmpty) {
           return {
             'response': response,
             'image_data': imageData,
+            'file_data': fileData,
+            'file_name': fileName,
+            'file_type': fileType,
+            'file_poster': filePoster,
             'type': respType == 'image_gen' ? respType : 'chat',
           };
         }
@@ -1444,16 +1854,24 @@ class ChatProvider extends ChangeNotifier {
             fileName: imgAttach.name,
             prompt: text,
             sessionId: sessionId,
-            timeout: const Duration(minutes: 4),
+            timeout: const Duration(minutes: 30),
           );
           final response = editResp['response'] as String? ?? '';
           final imageData = editResp['image_data'] as String? ?? '';
-          final editType = editResp['type'] as String? ?? '';
-          if (imageData.isNotEmpty) {
+          final fileData = editResp['file_data'] as String? ?? '';
+          final fileName = editResp['file_name'] as String? ?? '';
+          final fileType = editResp['file_type'] as String? ?? '';
+          final filePoster = editResp['file_poster'] as String? ?? '';
+          final editType = editResp['type'] as String? ?? 'chat';
+          if (imageData.isNotEmpty || fileData.isNotEmpty) {
             return {
               'response': response,
               'image_data': imageData,
               'type': editType,
+              'file_data': fileData,
+              'file_name': fileName,
+              'file_type': fileType,
+              'file_poster': filePoster,
             };
           }
           if (response.isNotEmpty) {
@@ -1482,6 +1900,10 @@ class ChatProvider extends ChangeNotifier {
         'response': resp.content,
         'image_data': resp.imageBase64 ?? '',
         'type': resp.type,
+        'file_data': resp.fileData ?? '',
+        'file_name': resp.fileName ?? '',
+        'file_type': resp.fileType ?? '',
+        'file_poster': resp.filePoster ?? '',
       };
     } else if (userMsg.attachments.isNotEmpty) {
       final attach = userMsg.attachments.first;
@@ -1494,7 +1916,17 @@ class ChatProvider extends ChangeNotifier {
         timezone: timezone.isNotEmpty ? timezone : null,
         location: location,
       );
-      return {'response': resp.content, 'image_data': '', 'type': resp.type};
+      // Forward any generated video/file payload (e.g. converting an attached
+      // file into a video) so it renders in the chat bubble.
+      return {
+        'response': resp.content,
+        'image_data': '',
+        'file_data': resp.fileData ?? '',
+        'file_name': resp.fileName ?? '',
+        'file_type': resp.fileType ?? '',
+        'file_poster': resp.filePoster ?? '',
+        'type': resp.type,
+      };
     }
     // Check for file generation requests (PDF, Word, Excel, etc.) before image gen
     final fileFormat = _detectFileGenFormat(text);
@@ -1626,6 +2058,7 @@ class ChatProvider extends ChangeNotifier {
       'file_data': resp.fileData ?? '',
       'file_name': resp.fileName ?? '',
       'file_type': resp.fileType ?? '',
+      'file_poster': resp.filePoster ?? '',
     };
   }
 
@@ -1642,6 +2075,11 @@ class ChatProvider extends ChangeNotifier {
     String accumulated = '';
     String finalSessionId = sessionId ?? 'default';
     String finalType = 'chat';
+    String fileData = '';
+    String fileName = '';
+    String fileType = '';
+    String filePoster = '';
+    String imageData = '';
     try {
       await for (final event in _api.chatStream(
         message: text,
@@ -1655,16 +2093,23 @@ class ChatProvider extends ChangeNotifier {
         if (event.done) {
           finalSessionId = event.sessionId.isNotEmpty ? event.sessionId : finalSessionId;
           finalType = event.type.isNotEmpty ? event.type : finalType;
+          fileData = event.fileData;
+          fileName = event.fileName;
+          fileType = event.fileType;
+          filePoster = event.filePoster;
+          imageData = event.imageData;
           break;
         }
         if (event.content.isNotEmpty) {
           accumulated += event.content;
+          // Sanitize live to prevent backend-detail leaks in the streaming bubble
+          final sanitized = _sanitizeAssistantText(accumulated);
           // Update the last assistant message in-place for live streaming effect
           if (_currentConversation != null &&
               _currentConversation!.messages.isNotEmpty &&
               _currentConversation!.messages.last.role == 'assistant' &&
               _currentConversation!.messages.last.isStreaming) {
-            _currentConversation!.messages.last.content = accumulated;
+            _currentConversation!.messages.last.content = sanitized;
           }
           notifyListeners();
         }
@@ -1675,7 +2120,11 @@ class ChatProvider extends ChangeNotifier {
     }
     return {
       'response': accumulated,
-      'image_data': '',
+      'image_data': imageData,
+      'file_data': fileData,
+      'file_name': fileName,
+      'file_type': fileType,
+      'file_poster': filePoster,
       'type': finalType,
       'session_id': finalSessionId,
     };

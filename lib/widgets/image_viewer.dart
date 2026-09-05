@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:web/web.dart' as web;
+import 'logo_watermark.dart';
 
 class ImageViewer extends StatefulWidget {
   final Uint8List imageBytes;
@@ -117,26 +118,9 @@ class _ImageViewerState extends State<ImageViewer>
                   ),
                 ),
                 Positioned(
-                  bottom: 6,
-                  right: 6,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 0.5,
-                      vertical: 0.5,
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(0.5),
-                      child: Image.asset(
-                        'assets/logo.png',
-                        width: 6,
-                        height: 6,
-                      ),
-                    ),
-                  ),
+                  bottom: 4,
+                  right: 4,
+                  child: const LogoWatermark(size: 6),
                 ),
               ],
             ),

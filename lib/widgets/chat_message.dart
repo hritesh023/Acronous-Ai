@@ -1,17 +1,24 @@
 import 'dart:convert';
 import 'dart:io' show File;
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:video_player/video_player.dart';
+import 'package:path_provider/path_provider.dart';
+import 'video_src.dart';
 import '../constants/app_constants.dart';
 import '../models/message.dart';
 import '../providers/chat_provider.dart';
 import '../utils/file_save.dart';
+import '../widgets/generation_skeleton.dart';
 import '../widgets/image_viewer.dart';
+import '../widgets/logo_watermark.dart';
 import '../widgets/markdown_renderer.dart';
+import '../widgets/video_preview.dart';
 
 class ChatMessageWidget extends StatelessWidget {
   final ChatMessage message;
@@ -179,7 +186,8 @@ class ChatMessageWidget extends StatelessWidget {
     );
   }
 
-  Widget _buildAIBubble(BuildContext context, ColorScheme cs, String time) {
+
+   Widget _buildAIBubble(BuildContext context, ColorScheme cs, String time) {
     return Padding(
       padding: EdgeInsets.only(
         left: AppDimens.paddingXL,
@@ -244,12 +252,26 @@ class ChatMessageWidget extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (message.imageData.isNotEmpty)
-                          _buildGeneratedImage(context, message.imageData, cs),
-                        if (message.fileData.isNotEmpty)
-                          _buildFileDownload(context, message, cs),
-                        if (message.content.isNotEmpty)
-                          MarkdownRenderer(content: message.content),
+                        if (message.isStreaming &&
+                            message.progressLabel.isNotEmpty) ...[
+                          SizedBox(
+                            width: math.min(
+                              340.0,
+                              MediaQuery.sizeOf(context).width - 120,
+                            ).clamp(120.0, 340.0),
+                            child: GenerationSkeleton(
+                              label: message.progressLabel,
+                              kind: _generationKind(message.progressKind),
+                            ),
+                          ),
+                        ] else ...[
+                          if (message.imageData.isNotEmpty)
+                            _buildGeneratedImage(context, message.imageData, cs),
+                          if (message.fileData.isNotEmpty)
+                            _buildGeneratedMedia(context, message, cs),
+                          if (message.content.isNotEmpty)
+                            MarkdownRenderer(content: message.content),
+                        ],
                       ],
                     ),
                   ),
@@ -347,6 +369,19 @@ class ChatMessageWidget extends StatelessWidget {
     );
   }
 
+  GenerationKind _generationKind(String kind) {
+    switch (kind) {
+      case 'video':
+        return GenerationKind.video;
+      case 'file':
+        return GenerationKind.file;
+      case 'edit':
+        return GenerationKind.edit;
+      default:
+        return GenerationKind.image;
+    }
+  }
+
   Widget _buildGeneratedImage(
     BuildContext context,
     String b64,
@@ -382,7 +417,10 @@ class ChatMessageWidget extends StatelessWidget {
                   opacity: 1.0,
                   duration: const Duration(milliseconds: 400),
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 300),
+                    constraints: const BoxConstraints(
+                      maxWidth: 340,
+                      maxHeight: 300,
+                    ),
                     child: Stack(
                       fit: StackFit.loose,
                       clipBehavior: Clip.antiAlias,
@@ -433,27 +471,10 @@ class ChatMessageWidget extends StatelessWidget {
                             ),
                           ),
                         ),
-                        Positioned(
-                          bottom: 4,
-                          right: 4,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.black.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 1,
-                              vertical: 1,
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(1),
-                              child: Image.asset(
-                                'assets/logo.png',
-                                width: 8,
-                                height: 8,
-                              ),
-                            ),
-                          ),
+                        const Positioned(
+                          bottom: 3,
+                          right: 3,
+                          child: LogoWatermark(size: 6),
                         ),
                       ],
                     ),
@@ -467,6 +488,34 @@ class ChatMessageWidget extends StatelessWidget {
     } catch (_) {
       return const SizedBox.shrink();
     }
+  }
+
+  Widget _buildGeneratedMedia(
+    BuildContext context,
+    ChatMessage msg,
+    ColorScheme cs,
+  ) {
+    final t = msg.fileType.toLowerCase();
+    if (t == 'mp4' || t == 'webm' || t == 'mov' || t == 'm4v') {
+      // On the web build the native HTML5 <video> element is far more reliable
+      // than the video_player controller (which often fails to initialize from a
+      // blob URL), so the in-bubble preview/thumbnail always appears.
+      if (kIsWeb) {
+        return WebVideoPreview(
+          b64: msg.fileData,
+          fileName: msg.fileName,
+          poster: msg.filePoster,
+          onDownload: () => _downloadGeneratedVideo(context, msg),
+        );
+      }
+      return _VideoPreviewBubble(
+        msg: msg,
+        cs: cs,
+        buildFallback: (ctx, m, c) => _buildFileDownload(ctx, m, c),
+        onDownload: (ctx, m) => _downloadGeneratedVideo(ctx, m),
+      );
+    }
+    return _buildFileDownload(context, msg, cs);
   }
 
   Widget _buildFileDownload(
@@ -599,6 +648,27 @@ class ChatMessageWidget extends StatelessWidget {
     }
   }
 
+  void _downloadGeneratedVideo(BuildContext context, ChatMessage msg) {
+    try {
+      final bytes = base64Decode(msg.fileData);
+      final name = msg.fileName.isNotEmpty
+          ? msg.fileName
+          : 'acronous_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      if (kIsWeb) {
+        _downloadOnWeb(bytes, name);
+      } else {
+        _saveToDisk(context, bytes, name);
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not download video'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   void _downloadOnWeb(Uint8List bytes, String name) {
     final ext = name.split('.').last.toLowerCase();
     final mimeTypes = <String, String>{
@@ -620,6 +690,13 @@ class ChatMessageWidget extends StatelessWidget {
       'xml': 'application/xml',
       'md': 'text/markdown',
       'txt': 'text/plain',
+      'mp4': 'video/mp4',
+      'webm': 'video/webm',
+      'mov': 'video/quicktime',
+      'm4v': 'video/mp4',
+      'mp3': 'audio/mpeg',
+      'wav': 'audio/wav',
+      'm4a': 'audio/mp4',
     };
     final mime = mimeTypes[ext] ?? 'application/octet-stream';
     final blob = base64Encode(bytes);
@@ -749,6 +826,423 @@ class ChatMessageWidget extends StatelessWidget {
   }
 }
 
+class _VideoPreviewBubble extends StatefulWidget {
+  final ChatMessage msg;
+  final ColorScheme cs;
+  final Widget Function(BuildContext, ChatMessage, ColorScheme) buildFallback;
+  final void Function(BuildContext, ChatMessage) onDownload;
+  const _VideoPreviewBubble({
+    required this.msg,
+    required this.cs,
+    required this.buildFallback,
+    required this.onDownload,
+  });
+
+  @override
+  State<_VideoPreviewBubble> createState() => _VideoPreviewBubbleState();
+}
+
+class _VideoPreviewBubbleState extends State<_VideoPreviewBubble> {
+  VideoPlayerController? _controller;
+  bool _ready = false;
+  final bool _playing = false;
+  bool _failed = false;
+  String? _webUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      final bytes = base64Decode(widget.msg.fileData);
+      late VideoPlayerController c;
+      if (kIsWeb) {
+        // data: URIs don't reliably load in the HTML5 video element — use a
+        // blob: URL so the preview thumbnail/player actually appears on web.
+        _webUrl = createVideoObjectUrl(bytes);
+        c = VideoPlayerController.networkUrl(Uri.parse(_webUrl!));
+      } else {
+        final dir = await getTemporaryDirectory();
+        final file = File(
+          '${dir.path}/acronous_${DateTime.now().microsecondsSinceEpoch}.mp4',
+        );
+        await file.writeAsBytes(bytes);
+        c = VideoPlayerController.file(file);
+      }
+      await c.initialize();
+      await c.setLooping(true);
+      c.addListener(() {
+        if (mounted) setState(() {});
+      });
+      if (mounted) {
+        setState(() {
+          _controller = c;
+          _ready = true;
+        });
+      } else {
+        c.dispose();
+      }
+    } catch (e) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  void _openFullScreen(BuildContext context) {
+    final bytes = base64Decode(widget.msg.fileData);
+    Navigator.of(context).push(
+      PageRouteBuilder(
+        opaque: true,
+        pageBuilder: (ctx, animation, secondaryAnimation) => _VideoFullScreenPage(
+          bytes: bytes,
+          cs: widget.cs,
+          onDownload: widget.onDownload,
+          message: widget.msg,
+        ),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) =>
+            FadeTransition(opacity: animation, child: child),
+        transitionDuration: const Duration(milliseconds: 250),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    if (_webUrl != null) revokeVideoObjectUrl(_webUrl!);
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  bool get _hasPoster => widget.msg.filePoster.isNotEmpty;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = widget.cs;
+    if (_failed) return widget.buildFallback(context, widget.msg, cs);
+
+    // Show poster thumbnail immediately while video controller initializes,
+    // so the bubble never appears blank (perceived as missing thumbnail).
+    if (!_ready) {
+      if (_hasPoster) {
+        try {
+          final posterBytes = base64Decode(widget.msg.filePoster);
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 340, maxHeight: 300),
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Image.memory(posterBytes, fit: BoxFit.cover, gaplessPlayback: true),
+                      const Positioned.fill(
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [Colors.transparent, Colors.black26],
+                              stops: [0.6, 1.0],
+                            ),
+                          ),
+                        ),
+                      ),
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                          child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 32),
+                        ),
+                      ),
+                      Positioned.fill(
+                        child: GestureDetector(
+                          onTap: () => _openFullScreen(context),
+                          child: Container(color: Colors.transparent),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        } catch (_) {}
+      }
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Container(
+          width: 340,
+          height: 190,
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerHighest.withValues(alpha: 0.2),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 12,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 340, maxHeight: 300),
+            child: AspectRatio(
+              aspectRatio: _controller?.value.aspectRatio ?? 16 / 9,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (_ready && _controller != null)
+                    GestureDetector(
+                      onTap: () => _openFullScreen(context),
+                      child: VideoPlayer(_controller!),
+                    )
+                  else
+                    Container(
+                      color: cs.surfaceContainerHighest.withValues(alpha: 0.2),
+                      child: const Center(
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    ),
+                  if (_ready && !_playing)
+                    Positioned.fill(
+                      child: GestureDetector(
+                        onTap: () => _openFullScreen(context),
+                        child: Container(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.play_arrow_rounded,
+                                size: 38,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (_ready)
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: Row(
+                        children: [
+                          GestureDetector(
+                            onTap: () => _openFullScreen(context),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.fullscreen_rounded,
+                                  color: Colors.white, size: 20),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: () => widget.onDownload(context, widget.msg),
+                            child: Container(
+                              padding: const EdgeInsets.all(6),
+                              decoration: const BoxDecoration(
+                                color: Colors.black54,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.download_rounded,
+                                  color: Colors.white, size: 20),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _VideoFullScreenPage extends StatefulWidget {
+  final Uint8List bytes;
+  final ColorScheme cs;
+  final void Function(BuildContext, ChatMessage) onDownload;
+  final ChatMessage message;
+  const _VideoFullScreenPage({
+    required this.bytes,
+    required this.cs,
+    required this.onDownload,
+    required this.message,
+  });
+  @override
+  State<_VideoFullScreenPage> createState() => _VideoFullScreenPageState();
+}
+
+class _VideoFullScreenPageState extends State<_VideoFullScreenPage> {
+  VideoPlayerController? _controller;
+  bool _ready = false;
+  bool _playing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      late VideoPlayerController c;
+      if (kIsWeb) {
+        final url = createVideoObjectUrl(widget.bytes);
+        c = VideoPlayerController.networkUrl(Uri.parse(url));
+      } else {
+        final dir = await getTemporaryDirectory();
+        final file = File(
+          '${dir.path}/acronous_fs_${DateTime.now().microsecondsSinceEpoch}.mp4',
+        );
+        await file.writeAsBytes(widget.bytes);
+        c = VideoPlayerController.file(file);
+      }
+      await c.initialize();
+      await c.setLooping(true);
+      c.addListener(() {
+        if (mounted) setState(() => _playing = c.value.isPlaying);
+      });
+      await c.play();
+      if (mounted) setState(() => _ready = true);
+    } catch (e) {
+      if (mounted) setState(() => _ready = true);
+    }
+  }
+
+  void _close() => Navigator.of(context).pop();
+
+  String _fmt(Duration d) {
+    final m = d.inMinutes.toString().padLeft(1, '0');
+    final s = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = widget.cs;
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Center(
+            child: _ready && _controller != null
+                ? AspectRatio(
+                    aspectRatio: _controller!.value.aspectRatio,
+                    child: VideoPlayer(_controller!),
+                  )
+                : const CircularProgressIndicator(),
+          ),
+          Positioned(
+            top: 12,
+            right: 12,
+            child: IconButton(
+              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
+              onPressed: _close,
+            ),
+          ),
+          if (_ready && _controller != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                color: Colors.black54,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: Icon(
+                        _playing ? Icons.pause : Icons.play_arrow,
+                        color: Colors.white,
+                      ),
+                      onPressed: () {
+                        final c = _controller!;
+                        if (c.value.isPlaying) {
+                          c.pause();
+                        } else {
+                          c.play();
+                        }
+                      },
+                    ),
+                    Expanded(
+                      child: VideoProgressIndicator(
+                        _controller!,
+                        allowScrubbing: true,
+                        colors: VideoProgressColors(
+                          playedColor: cs.primary,
+                          bufferedColor: Colors.white38,
+                          backgroundColor: Colors.white24,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      '${_fmt(_controller!.value.position)} / ${_fmt(_controller!.value.duration)}',
+                      style: const TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.download_rounded, color: Colors.white),
+                      onPressed: () => widget.onDownload(context, widget.message),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          // Esc key closes the fullscreen player (web / desktop)
+          Focus(
+            autofocus: true,
+            onKeyEvent: (node, event) {
+              if (event is KeyDownEvent &&
+                  event.logicalKey == LogicalKeyboardKey.escape) {
+                _close();
+                return KeyEventResult.handled;
+              }
+              return KeyEventResult.ignored;
+            },
+            child: const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ActionIcon extends StatelessWidget {
   final IconData icon;
   final double size;
@@ -786,3 +1280,4 @@ class _ActionIcon extends StatelessWidget {
     );
   }
 }
+

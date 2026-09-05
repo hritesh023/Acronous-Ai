@@ -59,7 +59,15 @@ class ChatMessage {
   final String fileData;
   final String fileName;
   final String fileType;
+  final String filePoster;
   bool isStreaming;
+
+  /// Transient (never persisted) label shown inside a skeleton preview while
+  /// an image/video/document is being generated, e.g. "Changing background…".
+  String progressLabel;
+
+  /// Transient skeleton style: 'image' | 'video' | 'file' | 'edit'.
+  String progressKind;
 
   ChatMessage({
     required this.role,
@@ -71,7 +79,10 @@ class ChatMessage {
     this.fileData = '',
     this.fileName = '',
     this.fileType = '',
+    this.filePoster = '',
     this.isStreaming = false,
+    this.progressLabel = '',
+    this.progressKind = 'image',
   }) : timestamp = timestamp ?? DateTime.now(),
        attachments = attachments ?? [],
        id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
@@ -86,6 +97,7 @@ class ChatMessage {
         'fileData': fileData,
         'fileName': fileName,
         'fileType': fileType,
+        'filePoster': filePoster,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -102,6 +114,7 @@ class ChatMessage {
         fileData: json['fileData'] as String? ?? '',
         fileName: json['fileName'] as String? ?? '',
         fileType: json['fileType'] as String? ?? '',
+        filePoster: json['filePoster'] as String? ?? '',
       );
 }
 

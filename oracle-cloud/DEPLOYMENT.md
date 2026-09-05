@@ -86,10 +86,10 @@ cd /opt/oracle-cloud
 # Make script executable
 chmod +x setup.sh
 
-# Create .env with your API key
+# Create .env with your settings
 cp .env.example .env
 nano .env
-# Set OPENROUTER_API_KEY=sk-or-v1-your_actual_key
+# LLM is served by the local Ollama instance (no external API key required)
 
 # Run setup (installs Docker, builds Flutter, starts services)
 sudo ./setup.sh
@@ -161,7 +161,7 @@ docker compose up -d
 │  │  +proxy) │  │           │  │        │ │
 │  └─────────┘  └──────────┘  └────────┘ │
 │       │              │            │      │
-│   Flutter Web    OpenRouter   rembg     │
+│   Flutter Web      Ollama     rembg     │
 │   build          Pillow, SD   Edge-TTS  │
 │                  CLIP                  │
 └─────────────────────────────────────────┘

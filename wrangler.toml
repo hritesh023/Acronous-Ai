@@ -9,10 +9,17 @@ routes = [
 ]
 
 [vars]
-VISION_MODEL = "google/gemini-2.5-flash-lite"
-FALLBACK_VISION_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free"
-OLLAMA_MODEL = "qwen2.5:1.5b"
-OLLAMA_CONTEXT_SIZE = "32768"
+# Model sizing measured on Oracle 4-core CPU (2026-08): qwen3:8b=2.35tok/s,
+# coder:7b=2.56tok/s, qwen3:4b burns tokens on hidden thinking, qwen2.5:3b=5.6,
+# qwen2.5:1.5b=10.6tok/s with 27tok/s prefill. Small models = snappy UX.
+OLLAMA_MODEL = "qwen2.5:3b"
+OLLAMA_CODE_MODEL = "qwen2.5:3b"
+OLLAMA_VISION_MODEL = "llava:7b"
+# Generous token budgets — responses must NEVER be cut off mid-answer.
+# Chat 16384 / code 12288 caps; models still stop naturally at EOS.
+OLLAMA_CHAT_MAX_TOKENS = "16384"
+OLLAMA_CODE_MAX_TOKENS = "12288"
+OLLAMA_CONTEXT_SIZE = "8192"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
@@ -25,5 +32,6 @@ EDITOR_SERVICE_URL = "https://image-service.acronous.com"
 binding = "AUTH_USERS"
 id = "eb112976703e4447af69c13dd5f8824c"
 
-[ai]
-binding = "AI"
+[[kv_namespaces]]
+binding = "USER_MEMORY"
+id = "245e81f7a70c448d840cc399be821633"

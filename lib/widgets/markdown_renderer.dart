@@ -130,8 +130,9 @@ class MarkdownRenderer extends StatelessWidget {
         final codeRatio = total > 0 ? codeLikeCount / total : 0;
 
         // Unwrap if majority is prose or very low code ratio
+        // Preserve surrounding newlines so adjacent text doesn't merge
         if (proseRatio > 0.35 || codeRatio < 0.30) {
-          return trimmed;
+          return '\n$trimmed\n';
         }
         return match.group(0)!;
       },
@@ -196,6 +197,13 @@ class MarkdownRenderer extends StatelessWidget {
         final trimmed = code.trim();
         if (trimmed.isEmpty) return match.group(0)!;
 
+        // NEVER touch Python — it is indentation-based and any brace/semicolon
+        // rewriting destroys its structure
+        final lowerLang = lang.toLowerCase();
+        if (lowerLang == 'python' || lowerLang == 'py') {
+          return match.group(0)!;
+        }
+
         final lines = trimmed.split('\n');
         final nonEmpty = lines.where((l) => l.trim().isNotEmpty).toList();
         if (nonEmpty.isEmpty) return match.group(0)!;
@@ -259,16 +267,57 @@ class MarkdownRenderer extends StatelessWidget {
           (m) => '\n}',
         );
 
-        // 4. Split semicolons into new lines
-        expanded = expanded.replaceAllMapped(
-          RegExp(r';\s*(?=[a-zA-Z$_\[{])'),
-          (m) => ';\n',
-        );
-        // Also split semicolons before closing braces
-        expanded = expanded.replaceAllMapped(
-          RegExp(r';\s*\n?\}'),
-          (m) => ';\n}',
-        );
+        // 4. Split semicolons into new lines — but only OUTSIDE parentheses,
+        // brackets and string literals, so for-loop headers like
+        // "for (i = 0; i < n; i++)" stay intact and URLs never get mangled
+        {
+          final buf = StringBuffer();
+          int parenDepth = 0;
+          var i = 0;
+          while (i < expanded.length) {
+            final ch = expanded[i];
+            if (ch == '"' || ch == "'" || ch == '`') {
+              buf.write(ch);
+              i++;
+              while (i < expanded.length && expanded[i] != ch) {
+                if (expanded[i] == '\\') {
+                  buf.write(expanded[i]);
+                  i++;
+                  if (i < expanded.length) buf.write(expanded[i]);
+                  i++;
+                  continue;
+                }
+                buf.write(expanded[i]);
+                i++;
+              }
+              if (i < expanded.length) {
+                buf.write(expanded[i]);
+                i++;
+              }
+              continue;
+            }
+            if (ch == '/' && i + 1 < expanded.length && expanded[i + 1] == '/') {
+              final end = expanded.indexOf('\n', i);
+              final stop = end == -1 ? expanded.length : end;
+              buf.write(expanded.substring(i, stop));
+              i = stop;
+              continue;
+            }
+            if (ch == '(' || ch == '[') parenDepth++;
+            if (ch == ')' || ch == ']') parenDepth = (parenDepth - 1).clamp(0, 999);
+            if (ch == ';' && parenDepth == 0) {
+              buf.write(';\n');
+              i++;
+              while (i < expanded.length && expanded[i] == ' ') {
+                i++;
+              }
+              continue;
+            }
+            buf.write(ch);
+            i++;
+          }
+          expanded = buf.toString();
+        }
 
         // 5. Indentation pass
         final outLines = expanded.split('\n');
@@ -858,19 +907,24 @@ class _CodeBlockWidgetState extends State<_CodeBlockWidget> {
                   PointerDeviceKind.stylus,
                 },
               ),
+              // Vertical scrollbar OUTERMOST — pinned to the right (max) end of
+              // the code block instead of riding along the content width.
               child: Scrollbar(
-                controller: _horizontalScrollController,
+                controller: _verticalScrollController,
                 thumbVisibility: true,
                 radius: const Radius.circular(5),
                 thickness: 7,
-                child: SingleChildScrollView(
+                child: Scrollbar(
                   controller: _horizontalScrollController,
-                  scrollDirection: Axis.horizontal,
-                  child: Scrollbar(
-                    controller: _verticalScrollController,
-                    thumbVisibility: true,
-                    radius: const Radius.circular(5),
-                    thickness: 7,
+                  thumbVisibility: true,
+                  radius: const Radius.circular(5),
+                  thickness: 7,
+                  // Horizontal notifications bubble up at depth 1 because they
+                  // pass through the vertical scroll view first.
+                  notificationPredicate: (notice) => notice.depth == 1,
+                  child: SingleChildScrollView(
+                    controller: _horizontalScrollController,
+                    scrollDirection: Axis.horizontal,
                     child: SingleChildScrollView(
                       controller: _verticalScrollController,
                       scrollDirection: Axis.vertical,

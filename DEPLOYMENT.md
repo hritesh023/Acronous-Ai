@@ -29,8 +29,6 @@ Push to main/master triggers automatic deployment via `.github/workflows/deploy.
 
 ## Required Secrets
 ```bash
-npx wrangler secret put OPENROUTER_API_KEY
-# Optional:
 npx wrangler secret put EDITOR_SERVICE_URL
 ```
 
@@ -38,8 +36,6 @@ npx wrangler secret put EDITOR_SERVICE_URL
 ```toml
 [vars]
 EDITOR_SERVICE_URL = ""  # Set via secret in production
-OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct:free"
-VISION_MODEL = "google/gemini-2.5-flash-lite"
 ```
 
 ## Verification
