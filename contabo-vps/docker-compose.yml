@@ -52,8 +52,8 @@ services:
   # snapshots pruned, RAM/disk guards skip cycles under pressure.
   brain:
     build:
-      context: ..
-      dockerfile: acronous_llm/Dockerfile
+      context: ../acronous_llm
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:

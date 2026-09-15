@@ -13,7 +13,8 @@ class AcronousConfig:
 
     def _init(self):
         self.ROOT_DIR = Path(__file__).parent.parent
-        self.DATA_DIR = self.ROOT_DIR / "data"
+        data_env = os.getenv("DATA_DIR", "")
+        self.DATA_DIR = Path(data_env) if data_env else self.ROOT_DIR / "data"
         self.MODELS_DIR = self.DATA_DIR / "models"
         self.DB_PATH = self.DATA_DIR / "memory.db"
         self.CLUSTER_PATH = self.MODELS_DIR / "clusters.npz"
