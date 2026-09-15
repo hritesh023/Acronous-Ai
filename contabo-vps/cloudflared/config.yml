@@ -1,5 +1,8 @@
-tunnel: acronous-contabo
-credentials-file: /root/.cloudflared/acronous-contabo.json
+tunnel: d7890073-3413-4df7-80dc-8f722ede8439
+credentials-file: /root/.cloudflared/d7890073-3413-4df7-80dc-8f722ede8439.json
+# NOTE: you can also run token-based (no credentials file needed):
+#   cloudflared tunnel --no-autoupdate run --token <TOKEN_FROM_DASHBOARD>
+# NEVER commit the token itself to git — it is a secret. Tunnel ID above is fine.
 
 ingress:
   # ── Acronous LLM brain — Contabo Cloud VPS 8 (167.86.104.155, EU) ──
