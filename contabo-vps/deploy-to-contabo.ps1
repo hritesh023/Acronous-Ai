@@ -1,38 +1,36 @@
 # ─────────────────────────────────────────────────────────────
-# Acronous AI — Automated Oracle Cloud Deployment
+# Acronous AI — Automated Contabo VPS Deployment
 # Run this from your Windows machine
 # ─────────────────────────────────────────────────────────────
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$PublicIP,
+    [string]$PublicIP = "167.86.104.155",
 
-    [string]$SSHKey = "$env:USERPROFILE\.ssh\oracle_key",
-    [string]$SSHUser = "ubuntu"
+    [string]$SSHKey = "$env:USERPROFILE\.ssh\contabo_key",
+    [string]$SSHUser = "root"
 )
 
 $ErrorActionPreference = "Stop"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Acronous AI - Oracle Cloud Deployer"  -ForegroundColor Cyan
+Write-Host "  Acronous AI - Contabo VPS Deployer"  -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Target: $SSHUser@$PublicIP" -ForegroundColor Yellow
 Write-Host "SSH Key: $SSHKey" -ForegroundColor Yellow
 Write-Host ""
 
-# ── 1. Test SSH connection ──
+# Contabo default home: root -> /root, others -> /home/<user>
+$RemoteHome = if ($SSHUser -eq "root") { "/root" } else { "/home/$SSHUser" }
+
+# ── 1. Test SSH connection (Contabo default user is root) ──
 Write-Host "[1/6] Testing SSH connection..." -ForegroundColor Green
 $testConn = ssh -i $SSHKey -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$SSHUser@$PublicIP" "echo OK" 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  SSH connection failed. Trying 'opc' user..." -ForegroundColor Red
-    $SSHUser = "opc"
-    $testConn = ssh -i $SSHKey -o ConnectTimeout=10 -o StrictHostKeyChecking=no "$SSHUser@$PublicIP" "echo OK" 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  Cannot connect. Check your IP and SSH key." -ForegroundColor Red
-        Write-Host "  Try manually: ssh -i $SSHKey $SSHUser@$PublicIP" -ForegroundColor Yellow
-        exit 1
-    }
+    Write-Host "  SSH connection failed as $SSHUser." -ForegroundColor Red
+    Write-Host "  Try manually: ssh -i $SSHKey $SSHUser@$PublicIP" -ForegroundColor Yellow
+    Write-Host "  Contabo panel: VNC 5.189.136.10:63080 if locked out." -ForegroundColor Yellow
+    exit 1
 }
 Write-Host "  Connected as $SSHUser" -ForegroundColor Green
 
@@ -41,27 +39,27 @@ Write-Host ""
 Write-Host "[2/6] Uploading project to VM (this may take 2-5 minutes)..." -ForegroundColor Green
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$oracleDir = $PSScriptRoot
+$contaboDir = $PSScriptRoot
 
 # Create temp upload directory on VM
-ssh -i $SSHKey "$SSHUser@$PublicIP" "mkdir -p /home/$SSHUser/acronous-deploy"
+ssh -i $SSHKey "$SSHUser@$PublicIP" "mkdir -p $RemoteHome/acronous-deploy"
 
-# Upload oracle-cloud directory
-Write-Host "  Uploading oracle-cloud/..."
-scp -i $SSHKey -r "$oracleDir" "$SSHUser@${PublicIP}:/home/$SSHUser/acronous-deploy/"
+# Upload contabo-vps directory
+Write-Host "  Uploading contabo-vps/..."
+scp -i $SSHKey -r "$contaboDir" "$SSHUser@${PublicIP}:$RemoteHome/acronous-deploy/"
 
 # Upload image-service directory
 Write-Host "  Uploading image-service/..."
-scp -i $SSHKey -r "$projectRoot\image-service" "$SSHUser@${PublicIP}:/home/$SSHUser/acronous-deploy/"
+scp -i $SSHKey -r "$projectRoot\image-service" "$SSHUser@${PublicIP}:$RemoteHome/acronous-deploy/"
 
 # Upload Flutter project (needed for building web)
 Write-Host "  Uploading Flutter project files..."
-scp -i $SSHKey "$projectRoot\pubspec.yaml" "$SSHUser@${PublicIP}:/home/$SSHUser/acronous-deploy/" 2>$null
-scp -i $SSHKey "$projectRoot\pubspec.lock" "$SSHUser@${PublicIP}:/home/$SSHUser/acronous-deploy/" 2>$null
+scp -i $SSHKey "$projectRoot\pubspec.yaml" "$SSHUser@${PublicIP}:$RemoteHome/acronous-deploy/" 2>$null
+scp -i $SSHKey "$projectRoot\pubspec.lock" "$SSHUser@${PublicIP}:$RemoteHome/acronous-deploy/" 2>$null
 
 # Upload lib/ and web/ directories
-scp -i $SSHKey -r "$projectRoot\lib" "$SSHUser@${PublicIP}:/home/$SSHUser/acronous-deploy/" 2>$null
-scp -i $SSHKey -r "$projectRoot\web" "$SSHUser@${PublicIP}:/home/$SSHUser/acronous-deploy/" 2>$null
+scp -i $SSHKey -r "$projectRoot\lib" "$SSHUser@${PublicIP}:$RemoteHome/acronous-deploy/" 2>$null
+scp -i $SSHKey -r "$projectRoot\web" "$SSHUser@${PublicIP}:$RemoteHome/acronous-deploy/" 2>$null
 
 Write-Host "  Upload complete!" -ForegroundColor Green
 
@@ -100,8 +98,8 @@ echo "=== Setup complete ==="
 "@
 
 $setupScript | Out-File -FilePath "$env:TEMP\vm-setup.sh" -Encoding utf8 -NoNewline
-scp -i $SSHKey "$env:TEMP\vm-setup.sh" "$SSHUser@${PublicIP}:/home/$SSHUser/vm-setup.sh"
-ssh -i $SSHKey "$SSHUser@$PublicIP" "chmod +x /home/$SSHUser/vm-setup.sh && bash /home/$SSHUser/vm-setup.sh"
+scp -i $SSHKey "$env:TEMP\vm-setup.sh" "$SSHUser@${PublicIP}:$RemoteHome/vm-setup.sh"
+ssh -i $SSHKey "$SSHUser@$PublicIP" "chmod +x $RemoteHome/vm-setup.sh && bash $RemoteHome/vm-setup.sh"
 
 # ── 4. Build Flutter web ──
 Write-Host ""
@@ -112,7 +110,7 @@ $buildScript = @"
 set -e
 export PATH="/opt/flutter/bin:`$PATH"
 
-cd /home/$SSHUser/acronous-deploy
+cd $RemoteHome/acronous-deploy
 PUBLIC_IP=`$(curl -s ifconfig.me)
 
 echo "Flutter: pub get..."
@@ -121,15 +119,15 @@ flutter pub get
 echo "Flutter: build web..."
 flutter build web --release --dart-define="API_BASE_URL=http://`$PUBLIC_IP"
 
-mkdir -p oracle-cloud/web-build
-cp -r build/web/* oracle-cloud/web-build/
+mkdir -p contabo-vps/web-build
+cp -r build/web/* contabo-vps/web-build/
 
 echo "Flutter web build complete!"
 "@
 
 $buildScript | Out-File -FilePath "$env:TEMP\flutter-build.sh" -Encoding utf8 -NoNewline
-scp -i $SSHKey "$env:TEMP\flutter-build.sh" "$SSHUser@${PublicIP}:/home/$SSHUser/flutter-build.sh"
-ssh -i $SSHKey "$SSHUser@$PublicIP" "chmod +x /home/$SSHUser/flutter-build.sh && bash /home/$SSHUser/flutter-build.sh"
+scp -i $SSHKey "$env:TEMP\flutter-build.sh" "$SSHUser@${PublicIP}:$RemoteHome/flutter-build.sh"
+ssh -i $SSHKey "$SSHUser@$PublicIP" "chmod +x $RemoteHome/flutter-build.sh && bash $RemoteHome/flutter-build.sh"
 
 # ── 5. Build and start Docker services ──
 Write-Host ""
@@ -139,11 +137,11 @@ $deployScript = @"
 #!/bin/bash
 set -e
 
-cd /home/$SSHUser/acronous-deploy/oracle-cloud
+cd $RemoteHome/acronous-deploy/contabo-vps
 
 # Make sure image-service is in the right place
 if [ ! -d "image-service" ]; then
-    cp -r /home/$SSHUser/acronous-deploy/image-service . 2>/dev/null || true
+    cp -r $RemoteHome/acronous-deploy/image-service . 2>/dev/null || true
 fi
 
 echo "Building Docker images..."
@@ -179,8 +177,8 @@ Write-Host "  API:     http://$PublicIP/v1/chat" -ForegroundColor Yellow
 Write-Host "  Health:  http://$PublicIP/health" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  SSH:     ssh -i $SSHKey $SSHUser@$PublicIP" -ForegroundColor Yellow
-Write-Host "  Logs:    ssh -i $SSHKey $SSHUser@$PublicIP 'cd /home/$SSHUser/acronous-deploy/oracle-cloud && docker compose logs -f'" -ForegroundColor Yellow
-Write-Host "  Stop:    ssh -i $SSHKey $SSHUser@$PublicIP 'cd /home/$SSHUser/acronous-deploy/oracle-cloud && docker compose down'" -ForegroundColor Yellow
+Write-Host "  Logs:    ssh -i $SSHKey $SSHUser@$PublicIP 'cd $RemoteHome/acronous-deploy/contabo-vps && docker compose logs -f'" -ForegroundColor Yellow
+Write-Host "  Stop:    ssh -i $SSHKey $SSHUser@$PublicIP 'cd $RemoteHome/acronous-deploy/contabo-vps && docker compose down'" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Open http://$PublicIP in your browser!" -ForegroundColor Green
 Write-Host ""

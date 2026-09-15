@@ -5,6 +5,7 @@ import '../constants/app_constants.dart';
 import '../providers/chat_provider.dart';
 import '../services/overlay_service.dart';
 import '../widgets/voice_popup.dart';
+import 'pricing_page.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -46,6 +47,29 @@ class _SettingsPageState extends State<SettingsPage> {
               padding: const EdgeInsets.symmetric(
                   horizontal: AppDimens.paddingXL, vertical: AppDimens.gapSM),
               children: [
+            _SectionHeader(title: 'Subscription', cs: cs),
+            _SettingsCard(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.workspace_premium_rounded,
+                      color: cs.primary, size: AppDimens.inputIconInnerSize),
+                  title: const Text('Plans & Billing',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          fontSize: AppDimens.fontSizeBase)),
+                  subtitle: Text('Free, Starter ₹149, Plus ₹449, Pro ₹999, Ultra ₹2,499',
+                      style: TextStyle(
+                          fontSize: AppDimens.fontSizeMD,
+                          color: cs.onSurfaceVariant)),
+                  trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 16),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PricingPage()),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppDimens.paddingXL + 4),
             _SectionHeader(title: AppStrings.appearance, cs: cs),
             _SettingsCard(
               children: [

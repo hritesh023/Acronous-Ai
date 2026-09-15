@@ -15,8 +15,8 @@ npx wrangler pages deploy build/web --project-name=acronous-ai
 
 ## Deploy Python Image Service (Optional, for best editing quality)
 
-### Option 1: Oracle Cloud (Recommended)
-Deploy on your Oracle Cloud VM using Docker Compose. See `oracle-cloud/DEPLOYMENT.md` for full setup.
+### Option 1: Contabo VPS (Recommended)
+Deploy on your Contabo VPS VM using Docker Compose. See `contabo-vps/DEPLOYMENT.md` for full setup.
 
 ### Option 2: Railway (Free tier)
 Deploy `image-service/` as a Railway service from GitHub.

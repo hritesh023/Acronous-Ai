@@ -1,0 +1,52 @@
+tunnel: acronous-contabo
+credentials-file: /root/.cloudflared/acronous-contabo.json
+
+ingress:
+  # ── Acronous LLM brain — Contabo Cloud VPS 8 (167.86.104.155, EU) ──
+  # Brain API (FastAPI acronous_llm.server — chat/learn/self-train/eval)
+  - hostname: brain.acronous.com
+    path: /v1/*
+    service: http://localhost:8000
+    originRequest:
+      connectTimeout: 15s
+      timeout: 300s
+  # Contabo VPS image-service (Python SD, rembg, Pillow editing, Ollama vision)
+  - hostname: image-service.acronous.com
+    service: http://localhost:7860
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 120s
+      timeout: 300s
+
+  # Ollama API (Qwen3:8B text generation + qwen2.5vl vision) — primary LLM brain
+  - hostname: ollama.acronous.com
+    service: http://localhost:11434
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 60s
+      timeout: 300s
+
+  # Direct brain alias (Ollama OpenAI-compat via tunnel)
+  - hostname: brain-ollama.acronous.com
+    service: http://localhost:11434
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 60s
+      timeout: 300s
+
+  # SearXNG search engine
+  - hostname: search.acronous.com
+    service: http://localhost:8080
+    originRequest:
+      connectTimeout: 15s
+      timeout: 60s
+
+  # Nginx (web UI / static files / API)
+  - hostname: brain.acronous.com
+    service: http://localhost:80
+    originRequest:
+      connectTimeout: 10s
+      timeout: 60s
+
+  # Catch-all: return 404 for unmatched routes
+  - service: http_status:404

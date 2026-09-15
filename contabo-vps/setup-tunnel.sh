@@ -1,12 +1,12 @@
-# Setup Named Cloudflare Tunnel on Oracle Cloud
-# Run this ONCE on the Oracle Cloud server to get a persistent tunnel URL
+# Setup Named Cloudflare Tunnel on Contabo VPS
+# Run this ONCE on the Contabo VPS server to get a persistent tunnel URL
 #
 # Prerequisites:
 #   - cloudflared installed
 #   - Cloudflare account with acronous.com domain
 #
 # Usage:
-#   ssh ubuntu@<oracle-ip>
+#   ssh ubuntu@<contabo-ip>
 #   bash setup-tunnel.sh
 
 set -e
@@ -36,16 +36,16 @@ cloudflared tunnel login || {
     echo "  Login failed. For headless servers:"
     echo "  1. Run this on a machine with a browser"
     echo "  2. Copy the cert.pem to /root/.cloudflared/cert.pem"
-    echo "  Or use: cloudflared tunnel token acronous-oracle"
+    echo "  Or use: cloudflared tunnel token acronous-contabo"
     exit 1
 }
 
 # 3. Create named tunnel
-echo "[3/5] Creating named tunnel 'acronous-oracle'..."
-if cloudflared tunnel list | grep -q "acronous-oracle"; then
-    echo "  Tunnel 'acronous-oracle' already exists"
+echo "[3/5] Creating named tunnel 'acronous-contabo'..."
+if cloudflared tunnel list | grep -q "acronous-contabo"; then
+    echo "  Tunnel 'acronous-contabo' already exists"
 else
-    cloudflared tunnel create acronous-oracle
+    cloudflared tunnel create acronous-contabo
     echo "  Created tunnel"
 fi
 
@@ -62,10 +62,10 @@ fi
 
 # 5. Route DNS
 echo "[5/5] Routing DNS to tunnel..."
-cloudflared tunnel route dns acronous-oracle oracle.acronous.com || echo "  DNS route may already exist"
-cloudflared tunnel route dns acronous-oracle search.acronous.com || echo "  DNS route may already exist"
-cloudflared tunnel route dns acronous-oracle ollama.acronous.com || echo "  DNS route may already exist"
-cloudflared tunnel route dns acronous-oracle oracle-ui.acronous.com || echo "  DNS route may already exist"
+cloudflared tunnel route dns acronous-contabo brain.acronous.com || echo "  DNS route may already exist"
+cloudflared tunnel route dns acronous-contabo search.acronous.com || echo "  DNS route may already exist"
+cloudflared tunnel route dns acronous-contabo ollama.acronous.com || echo "  DNS route may already exist"
+cloudflared tunnel route dns acronous-contabo brain-ui.acronous.com || echo "  DNS route may already exist"
 
 echo ""
 echo "=== Setup Complete ==="
@@ -79,7 +79,7 @@ echo "  systemctl enable cloudflared"
 echo "  systemctl start cloudflared"
 echo ""
 echo "Tunnel URLs (permanent, won't change on restart):"
-echo "  Image service: https://oracle.acronous.com"
+echo "  Image service: https://brain.acronous.com"
 echo "  Search:        https://search.acronous.com"
 echo "  Ollama:        https://ollama.acronous.com"
-echo "  Web UI:        https://oracle-ui.acronous.com"
+echo "  Web UI:        https://brain-ui.acronous.com"

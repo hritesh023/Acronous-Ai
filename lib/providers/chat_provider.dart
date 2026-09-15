@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:js_util' as js_util;
+import 'dart:js_interop';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+// ignore: avoid_web_libraries_in_flutter
 import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -43,7 +44,32 @@ class ChatProvider extends ChangeNotifier {
     caseSensitive: false,
   );
 
-  static String _sanitizeAssistantText(String text) {
+  // User raised a public third-party assistant as the TOPIC (e.g. "latest GPT
+  // version"). Factual mentions then pass through so version/model answers
+  // stay intact ("GPT-5.6", "GPT-6 Astra"). Own infra (below) is ALWAYS
+  // redacted, and first-person identity claims ("I am GPT") are ALWAYS
+  // rewritten — the topic exception never permits impersonation.
+  static final RegExp _thirdPartyTopicPattern = RegExp(
+    r'\b(chatgpt|gpt|claude|gemini|anthropic|openai|deepseek|mistral|groq|cohere|llama|copilot)\b',
+    caseSensitive: false,
+  );
+  static final RegExp _ownInfraPattern = RegExp(
+    r'\b(?:cloudflare\s+workers?|cloudflare|workers\s+ai|searxng|duckduckgo|ollama|qwen|llava|stable\s+diffusion|instructpix2pix|flux|hugging\s*face|deepmind|runwayml|black[- ]forest[- ]labs|pollinations|nominatim|moviepy|edge[- ]tts|rembg|real[- ]esrgan|whisper|contabo|image[- ]?service|backend|deployment|sana)\b',
+    caseSensitive: false,
+  );
+  static final RegExp _thirdPartyNamePattern = RegExp(
+    r'\b(?:chatgpt|gpt[- ]?[45o]|gpt|claude|anthropic|openai|gemini|mistral|deepseek|llama|groq|cohere)\b',
+    caseSensitive: false,
+  );
+  static final RegExp _identityClaimPattern = RegExp(
+    r"\b(i'm|i am)\s+(chatgpt|gpt[- ]?[45o]?|gpt|claude|gemini|llama|mistral|deepseek|openai|anthropic|groq|cohere)\b",
+    caseSensitive: false,
+  );
+
+  static bool userAskedAboutThirdParty(String userText) =>
+      _thirdPartyTopicPattern.hasMatch(userText);
+
+  static String _sanitizeAssistantText(String text, {bool allowThirdParty = false}) {
     if (text.trim().isEmpty) return '';
     // PROTECT fenced code blocks — their contents (indentation, brackets,
     // URLs, identifiers) must NEVER be altered by the sanitizer
@@ -89,15 +115,14 @@ class ChatProvider extends ChangeNotifier {
         .replaceAll(RegExp(r"\b(?:i\s+(?:don[']?t|do\s+not)\s+have\s+(?:access\s+to|real[- ]time|live|current|up[- ]to[- ]date))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r"\b(?:i\s+(?:cannot|can[']?t|am\s+unable\s+to)\s+(?:browse|search|access|check))\b[^.\n]*", caseSensitive: false), '')
         .replaceAll(RegExp(r'\b(?:please\s+(?:check|verify|confirm|visit)\s+(?:the|external|online|official))\b[^.\n]*', caseSensitive: false), '')
-        // Backend/provider/model/company names — replaced with Acronous so the
-        // sentence still reads naturally but NO third-party name ever shows
-        .replaceAll(
-          RegExp(
-            r'\b(?:cloudflare\s+workers?|cloudflare|workers\s+ai|searxng|duckduckgo|ollama|llama|qwen|deepseek|chatgpt|gpt[- ]?[45o]|gpt|claude|anthropic|openai|gemini|mistral|cohere|llava|stable\s+diffusion|instructpix2pix|flux\.?1|flux|groq|hugging\s*face|deepmind|runwayml|black[- ]forest[- ]labs|pollinations|nominatim|moviepy|edge[- ]tts|rembg|real[- ]esrgan|whisper|oracle|image[- ]?service|backend|deployment|sana)\b',
-            caseSensitive: false,
-          ),
-          'Acronous',
-        )
+        // Backend/provider/model/company names — own infra is ALWAYS replaced
+        // with Acronous so NO backend detail ever shows. Public third-party
+        // assistant names are replaced ONLY when the user did NOT raise them
+        // as the topic (allowThirdParty) — otherwise factual answers about
+        // them ("latest GPT version is 5.6") would be mangled into nonsense.
+        // First-person identity claims are ALWAYS rewritten (never impersonate).
+        .replaceAll(_identityClaimPattern, 'I am Acronous AI')
+        .replaceAll(_ownInfraPattern, 'Acronous')
         // Identity sentences that survived the above ("I am Acronous based on…") get normalized
         .replaceAll(RegExp(r"(?:i(?:'m| am)|built|created|developed|trained|made)\s+(?:on|by|with|using)\s+Acronous\b[^.\n]*", caseSensitive: false), '')
         // Strip GPS coordinates from responses
@@ -106,6 +131,12 @@ class ChatProvider extends ChangeNotifier {
         .replaceAll(RegExp(r'\(\s*-?\d{1,3}\.\d{1,6}\s*,\s*-?\d{1,3}\.\d{1,6}\s*\)'), '')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
+    // Public third-party assistant names: redact ONLY when the user did NOT
+    // raise them as the topic. (Code blocks are still protected placeholders
+    // here, so this never touches code.)
+    if (!allowThirdParty) {
+      cleaned = cleaned.replaceAll(_thirdPartyNamePattern, 'Acronous');
+    }
     // Whitespace collapse ONLY on prose (never touches restored code blocks)
     cleaned = cleaned.split('\n').map((l) => l.trim()).join('\n').replaceAll(RegExp(r'\n{3,}'), '\n\n');
     // Restore protected code blocks exactly as generated
@@ -604,19 +635,19 @@ class ChatProvider extends ChangeNotifier {
     final completer = Completer<List<double>?>();
     try {
       final geoObj = web.window.navigator.geolocation;
-      js_util.callMethod(geoObj, 'getCurrentPosition', [
-        js_util.allowInterop((dynamic pos) {
-          if (!completer.isCompleted && pos != null) {
-            final coords = js_util.getProperty(pos, 'coords');
-            final lat = js_util.getProperty(coords, 'latitude') as double;
-            final lng = js_util.getProperty(coords, 'longitude') as double;
-            completer.complete([lat, lng]);
+      geoObj.getCurrentPosition(
+        ((web.GeolocationPosition pos) {
+          if (!completer.isCompleted) {
+            completer.complete([
+              pos.coords.latitude,
+              pos.coords.longitude,
+            ]);
           }
-        }),
-        js_util.allowInterop((dynamic err) {
+        }).toJS,
+        ((web.GeolocationPositionError err) {
           if (!completer.isCompleted) completer.complete(null);
-        }),
-      ]);
+        }).toJS,
+      );
       return completer.future.timeout(Duration(seconds: 15));
     } catch (_) {
       return null;
@@ -983,6 +1014,7 @@ class ChatProvider extends ChangeNotifier {
         final filePoster = resp['file_poster'] as String? ?? '';
         final rawContent = _sanitizeAssistantText(
           resp['response'] as String? ?? '',
+          allowThirdParty: userAskedAboutThirdParty(text),
         );
         final respType = resp['type'] as String? ?? 'chat';
         if (respType == 'error') {
@@ -1116,6 +1148,24 @@ class ChatProvider extends ChangeNotifier {
         _processQueue();
         return;
       } catch (e) {
+        // Paywall (HTTP 402): free quota exhausted — show the upgrade message
+        // as the reply. NEVER retry (each attempt would burn another quota unit
+        // on endpoints that count before responding).
+        if (ApiClient.isPaywall(e)) {
+          _finishGenerationProgress();
+          _currentConversation!.messages.add(
+            ChatMessage(
+              role: 'assistant',
+              content: ApiClient.paywallMessage(e),
+            ),
+          );
+          _isTakingLong = false;
+          _isLoading = false;
+          _prefs.saveConversations(_conversations).catchError((_) {});
+          notifyListeners();
+          _processQueue();
+          return;
+        }
         // Remove any streaming placeholder that may have been added
         if (canStream && _currentConversation!.messages.isNotEmpty) {
           final lastMsg = _currentConversation!.messages.last;
@@ -1734,7 +1784,10 @@ class ChatProvider extends ChangeNotifier {
             'type': respType == 'image_gen' ? respType : 'chat',
           };
         }
-      } catch (_) {
+      } catch (e) {
+        // Paywall must surface immediately — falling through to the legacy
+        // flow would burn another quota unit and minutes of pointless retries.
+        if (ApiClient.isPaywall(e)) rethrow;
         // Smart-edit failed, fall through to legacy flow
       }
 
@@ -2103,7 +2156,8 @@ class ChatProvider extends ChangeNotifier {
         if (event.content.isNotEmpty) {
           accumulated += event.content;
           // Sanitize live to prevent backend-detail leaks in the streaming bubble
-          final sanitized = _sanitizeAssistantText(accumulated);
+          final sanitized = _sanitizeAssistantText(accumulated,
+              allowThirdParty: userAskedAboutThirdParty(text));
           // Update the last assistant message in-place for live streaming effect
           if (_currentConversation != null &&
               _currentConversation!.messages.isNotEmpty &&

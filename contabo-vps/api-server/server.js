@@ -775,7 +775,7 @@ function cleanResponse(text) {
     .replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)[^.\n]*/gi, '')
     .replace(/\b(?:duckduckgo|bing|searxng|mojeek|hacker\s+news|reddit\s+api|guardian\s+api)\b/gi, '')
     // Strip backend/infrastructure leaks
-    .replace(/\b(?:OpenRouter|Groq|Together AI|Anthropic|Google Cloud|AWS|Azure|Oracle Cloud|Cloudflare Workers|Workers AI|DuckDuckGo|SearXNG|Bing|Mojeek|Stable Diffusion|FLUX|LLaVA|Ollama|qwen|llama|deepseek|nemotron|gemini|mistral|cohere|GPT|ChatGPT|Claude|LLM|large language model|machine learning|neural network|deep learning|transformer|fine-tuning|training data|knowledge cutoff|pre-trained|pretrained|Meta|OpenAI|Google|Microsoft|Amazon|Apple)\b/gi, '')
+    .replace(/\b(?:OpenRouter|Groq|Together AI|Anthropic|Google Cloud|AWS|Azure|Contabo VPS|Cloudflare Workers|Workers AI|DuckDuckGo|SearXNG|Bing|Mojeek|Stable Diffusion|FLUX|LLaVA|Ollama|qwen|llama|deepseek|nemotron|gemini|mistral|cohere|GPT|ChatGPT|Claude|LLM|large language model|machine learning|neural network|deep learning|transformer|fine-tuning|training data|knowledge cutoff|pre-trained|pretrained|Meta|OpenAI|Google|Microsoft|Amazon|Apple)\b/gi, '')
     .replace(/\b(?:trained by|developed by|powered by|built on|based on|running on|uses|built with|developed using|created using|made with)\b/gi, '')
     .replace(/\b(?:Artificial Intelligence|machine learning|deep learning|neural network|natural language processing|NLP|transformer|attention mechanism|pre-trained|pretrained|fine-tuned|finetuned|large language model|LLM|language model)\b/gi, '')
     // Strip "you created me" patterns
@@ -1237,7 +1237,7 @@ Prime numbers from 1 to 10:
   return prompt;
 }
 
-// Ollama — self-hosted on Oracle Cloud, unlimited tokens, no API caps
+// Ollama — self-hosted on Contabo VPS, unlimited tokens, no API caps
 async function callOllama(messages) {
   if (!ENV.OLLAMA_BASE_URL) return null;
   try {
@@ -1291,7 +1291,7 @@ async function callOllamaVision(messages) {
   return null;
 }
 
-// Generic LLM call — all code routes through here (Ollama on Oracle Cloud)
+// Generic LLM call — all code routes through here (Ollama on Contabo VPS)
 async function fetchLLM(messages, opts = {}) {
   if (!ENV.OLLAMA_BASE_URL) return null;
   try {

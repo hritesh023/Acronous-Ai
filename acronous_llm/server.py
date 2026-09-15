@@ -58,6 +58,8 @@ def get_brain():
             _brain = AcronousAgentEngine(neural, core)
             # Start autonomous internet learning in the background.
             _start_internet_learning(_brain)
+            # Start self-training loop (dataset distill every 6h + opportunistic LoRA).
+            _start_self_train(_brain)
         return _brain
 
 
@@ -68,6 +70,63 @@ def _start_internet_learning(agent):
         logger.info("autonomous internet learning started (interval=%ss, 3-phase cycle)", interval)
     except Exception as exc:
         logger.warning("internet learner not started: %s", exc)
+
+
+def _get_self_trainer(agent):
+    """Build (or reuse) the SelfTrainer bound to this brain's stores."""
+    if getattr(agent, "_self_trainer", None) is not None:
+        return agent._self_trainer
+    try:
+        from acronous_llm.core.self_trainer import SelfTrainer
+        from acronous_llm.config import AcronousConfig
+        core = getattr(agent, "core", None)
+        trainer = SelfTrainer(
+            AcronousConfig(),
+            memory=getattr(core, "memory", None),
+            rag=getattr(core, "rag", None),
+            internet_learner=getattr(core, "internet_learner", None),
+            llm=getattr(core, "llm", None),
+        )
+        agent._self_trainer = trainer
+        return trainer
+    except Exception as exc:
+        logger.warning("self trainer not available: %s", exc)
+        return None
+
+
+def _start_self_train(agent):
+    """Background daemon: runs a self-train cycle every SELF_TRAIN_INTERVAL.
+
+    Tier 1 RAG learning is already continuous; this handles Tier 2 dataset
+    distillation + Tier 3 opportunistic LoRA without blocking requests.
+    """
+    import threading as _th
+    import time as _time
+
+    def _loop():
+        _time.sleep(120)  # let internet learner warm up first
+        while True:
+            try:
+                trainer = _get_self_trainer(agent)
+                if trainer is not None and trainer.should_run_cycle():
+                    logger.info("self-train cycle starting (Contabo brain)")
+                    result = trainer.run_cycle()
+                    logger.info("self-train cycle done: dataset=%s eval=%s lora=%s",
+                                result.get("dataset", {}).get("pairs"),
+                                (result.get("eval", {}) or {}).get("gate"),
+                                (result.get("lora", {}) or {}).get("status"))
+            except Exception as exc:
+                logger.warning("self-train cycle failed: %s", exc)
+            try:
+                from acronous_llm.config import AcronousConfig as _Cfg
+                interval = int(getattr(_Cfg(), "SELF_TRAIN_INTERVAL", 21600))
+            except Exception:
+                interval = 21600
+            _time.sleep(min(interval, 3600))  # re-check hourly at most
+
+    th = _th.Thread(target=_loop, daemon=True, name="acronous-self-train")
+    th.start()
+    logger.info("self-train daemon started (dataset cycle + eval-gated LoRA)")
 
 
 # ── Request/response models ──────────────────────────────────────────────
@@ -385,6 +444,61 @@ async def internet_self_evaluate():
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
     return {"ok": True, "gaps_found": gaps, "priorities": learner._learning_priorities[:10]}
+
+
+# ── Self-training endpoints (Contabo brain auto-improvement) ──────────
+@app.get("/v1/brain/train-status")
+async def brain_train_status():
+    """Self-train loop status: dataset size, cycles, eval gate, GPU availability."""
+    brain = get_brain()
+    trainer = _get_self_trainer(brain)
+    if not trainer:
+        return JSONResponse(status_code=500, content={"ok": False, "error": "self trainer not initialized"})
+    return {"ok": True, **trainer.get_status()}
+
+
+@app.post("/v1/brain/self-train")
+async def brain_self_train():
+    """Trigger one self-train cycle now: dataset distill → eval → opportunistic LoRA."""
+    brain = get_brain()
+    trainer = _get_self_trainer(brain)
+    if not trainer:
+        return JSONResponse(status_code=500, content={"ok": False, "error": "self trainer not initialized"})
+    try:
+        result = trainer.run_cycle()
+    except Exception as exc:
+        logger.exception("self-train failed")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, **result}
+
+
+@app.post("/v1/brain/evaluate")
+async def brain_evaluate(sample_n: int = 20):
+    """Run the eval gate (identity + knowledge recall) without training."""
+    brain = get_brain()
+    trainer = _get_self_trainer(brain)
+    if not trainer:
+        return JSONResponse(status_code=500, content={"ok": False, "error": "self trainer not initialized"})
+    try:
+        report = trainer.evaluate(sample_n=int(sample_n or 20))
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)})
+    return {"ok": True, **report}
+
+
+@app.get("/v1/brain/info")
+async def brain_info():
+    """Static brain identity: Contabo VPS + Qwen routing (for clients/monitors)."""
+    return {"ok": True,
+            "brain": "Acronous LLM",
+            "host": "brain.acronous.com",
+            "direct": "http://167.86.104.155:11434",
+            "vps": {"display": "acronous", "host_system": "20010", "region": "EU",
+                    "ip": "167.86.104.155", "user": "root", "disk_gb": 300,
+                    "plan": "Cloud VPS 8 (2026)"},
+            "models": {"chat": "qwen3:8b", "code": "qwen2.5-coder:7b",
+                       "fast": "qwen2.5:3b", "vision": "qwen2.5vl:7b"},
+            "loop": {"internet_quick_scan_s": 300, "self_train_s": 21600}}
 
 
 @app.get("/v1/knowledge/graph")

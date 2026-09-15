@@ -439,7 +439,11 @@ class ApiClient {
       final response = await client.send(request).timeout(_defaultTimeout);
       if (response.statusCode != 200) {
         final body = await response.stream.bytesToString();
-        throw ApiException(response.statusCode, 'Stream failed: $body');
+        Map<String, dynamic>? parsed;
+        try {
+          parsed = jsonDecode(body) as Map<String, dynamic>;
+        } catch (_) {}
+        throw ApiException(response.statusCode, 'Stream failed: $body', parsed);
       }
 
       String buffer = '';
@@ -753,6 +757,40 @@ class ApiClient {
   Future<Map<String, dynamic>> getStatus() => _get('/api/status');
 
   Future<Map<String, dynamic>> healthCheck() => _get('/health');
+
+  // ── Billing (Razorpay paywall) ──────────────────────────────────────
+  // Worker returns HTTP 402 with {type:'paywall',...} when the free daily
+  // quota is exhausted; ApiException carries it (statusCode 402, body = json).
+  static bool isPaywall(Object e) =>
+      e is ApiException &&
+      (e.statusCode == 402 || (e.body?['type'] as String?) == 'paywall');
+
+  static String paywallMessage(Object e, {String fallback = ''}) {
+    if (e is ApiException) {
+      final m = e.body?['response'] as String?;
+      if (m != null && m.isNotEmpty) return m;
+      if (e.message.isNotEmpty) return e.message;
+    }
+    return fallback.isNotEmpty
+        ? fallback
+        : 'You have used your free limit for today. Go Pro for unlimited access.';
+  }
+
+  Future<Map<String, dynamic>> getBillingStatus() => _get('/v1/billing/status');
+
+  Future<Map<String, dynamic>> createBillingOrder({String plan = 'pro_monthly'}) =>
+      _post('/v1/billing/order', {'plan': plan});
+
+  Future<Map<String, dynamic>> verifyBillingPayment({
+    required String orderId,
+    required String paymentId,
+    required String signature,
+  }) =>
+      _post('/v1/billing/verify', {
+        'razorpay_order_id': orderId,
+        'razorpay_payment_id': paymentId,
+        'razorpay_signature': signature,
+      });
 
   Future<Map<String, dynamic>> getConfig() async {
     return _get('/api/config');

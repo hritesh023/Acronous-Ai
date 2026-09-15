@@ -1,0 +1,55 @@
+# Acronous GPU test stack — NOT for Contabo VPS (no GPU there).
+# Purpose: verify the exact CUDA images locally / on a RunPod Pod BEFORE you
+# create the scale-to-zero Serverless endpoints.
+#
+# Usage (needs an NVIDIA GPU + nvidia-container-toolkit):
+#   cd "Acronous Ai"
+#   docker compose -f contabo-vps/docker-compose.gpu.yml build
+#   docker compose -f contabo-vps/docker-compose.gpu.yml up
+#   curl http://localhost:11434/api/tags            # ollama (CUDA)
+#   curl http://localhost:7860/capabilities         # image-service (CUDA)
+#
+# What this proves before you spend on Serverless:
+#   qwen2.5:7b  ~40-60 tok/s  (vs 2.6 tok/s on Contabo CPU)
+#   sd-turbo    ~2-5 s/image  (vs minutes/timeout on Contabo CPU)
+services:
+  ollama-gpu:
+    # Official Ollama image auto-uses CUDA when a GPU is present.
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_gpu_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=1
+    restart: unless-stopped
+
+  image-service-gpu:
+    build:
+      context: ../image-service
+      dockerfile: Dockerfile.gpu
+    ports:
+      - "7860:7860"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      - SD_MODEL_ID=stabilityai/sd-turbo
+      - OLLAMA_BASE_URL=http://ollama-gpu:11434
+      - OLLAMA_VISION_MODEL=llava:7b
+    restart: unless-stopped
+
+volumes:
+  ollama_gpu_data:

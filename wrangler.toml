@@ -9,7 +9,7 @@ routes = [
 ]
 
 [vars]
-# Model sizing measured on Oracle 4-core CPU (2026-08): qwen3:8b=2.35tok/s,
+# Model sizing measured on Contabo 4-core CPU (2026-08): qwen3:8b=2.35tok/s,
 # coder:7b=2.56tok/s, qwen3:4b burns tokens on hidden thinking, qwen2.5:3b=5.6,
 # qwen2.5:1.5b=10.6tok/s with 27tok/s prefill. Small models = snappy UX.
 OLLAMA_MODEL = "qwen2.5:3b"
@@ -24,9 +24,42 @@ ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
-# Python image editing service URL — Cloudflare Tunnel to Oracle Cloud
+# Python image editing service URL — Cloudflare Tunnel to Contabo VPS
 # Tunnel routes image-service.acronous.com → localhost:7860
 EDITOR_SERVICE_URL = "https://image-service.acronous.com"
+
+# ── GPU fast-path (RunPod Serverless, scale-to-zero; all optional) ──
+# Leave empty = pure Contabo CPU behaviour (current, $0). Set these via
+# `npx wrangler secret put GPU_LLM_KEY` / vars to enable GPU-first + CPU fallback.
+# GPU_ENABLED = "true"             # "false" forces CPU-only (kill-switch, no redeploy of code)
+# GPU_LLM_URL = ""                 # e.g. https://api.runpod.ai/v2/<llm-endpoint-id>
+# GPU_LLM_MODEL = "qwen2.5:7b"     # model served by your vLLM serverless template
+# GPU_LLM_TIMEOUT_MS = "60000"     # GPU attempt budget; cold start ~15-30s, warm ~2-5s
+# GPU_IMAGE_URL = ""               # e.g. https://api.runpod.ai/v2/<image-endpoint-id>
+# GPU_IMAGE_TIMEOUT_MS = "110000"  # image cold start can take ~20-40s
+# NOTE: GPU_LLM_KEY / GPU_IMAGE_KEY are secrets — set with:
+#   npx wrangler secret put GPU_LLM_KEY
+#   npx wrangler secret put GPU_IMAGE_KEY
+
+# ── Metering + paywall (Razorpay; all caps per user per day, UTC) ──
+# Full multi-tier catalog lives in code (BILLING_CATALOG in cloudflare-worker.js,
+# mirrored in Acronous-landing-page/billing/plans.json):
+#   AI: starter 149 / plus 449* / pro 999 / ultra 2499 | Nav AI: 99 / 299* / 699 / 1499
+#   Equyvo: plus 49 / premium 149* / creator 399* / creator_pro 799 | One bundle 699
+#   API packs (one-time credits): 99->1k / 499->6k / 999->14k / 2499->40k
+FREE_CHAT_PER_DAY = "20"
+FREE_IMAGE_PER_DAY = "3"
+FREE_VIDEO_PER_DAY = "1"
+# When "true" (default), the RunPod GPU fast-path serves Pro users only.
+# Free-tier traffic stays on the $0 Contabo CPU box no matter what.
+GPU_PRO_ONLY = "true"
+# Legacy single-plan price in INR (old `pro_monthly` clients only).
+# New tiers carry their own prices in BILLING_CATALOG; this stays for back-compat.
+PRO_PRICE_INR = "299"
+# Razorpay Key ID (public; secret goes via `npx wrangler secret put RAZORPAY_KEY_SECRET`).
+# Leave empty until you have keys — billing endpoints return 503 and all usage stays free-tier.
+RAZORPAY_KEY_ID = "rzp_test_TbYHbib4Lvnemr"
+#   npx wrangler secret put RAZORPAY_KEY_SECRET
 
 [[kv_namespaces]]
 binding = "AUTH_USERS"

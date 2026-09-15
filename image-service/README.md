@@ -1,8 +1,8 @@
 # Acronous AI Image Editing Service
 
-## Deploy to Oracle Cloud (Recommended)
+## Deploy to Contabo VPS (Recommended)
 
-See `oracle-cloud/DEPLOYMENT.md` for full Docker Compose setup on Oracle Cloud.
+See `contabo-vps/DEPLOYMENT.md` for full Docker Compose setup on Contabo VPS.
 
 ## Local Test
 ```bash

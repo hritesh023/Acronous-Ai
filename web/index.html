@@ -23,6 +23,39 @@
   </style>
 </head>
 <body>
+  <script>
+  /* AcronousPay — web bridge for in-app Razorpay checkout (called from Dart
+     via dart:js_interop; checkout.js is loaded lazily so normal page loads
+     stay fast). Secrets never appear here: the server created the order. */
+  window.AcronousPay = {
+    ensure: function (cb) {
+      if (window.Razorpay) { cb(null); return; }
+      var s = document.createElement('script');
+      s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      s.onload = function () { cb(null); };
+      s.onerror = function () { cb(new Error('load')); };
+      document.head.appendChild(s);
+    },
+    open: function (opts, onOk, onErr) {
+      this.ensure(function (e) {
+        if (e || !window.Razorpay) { onErr({ message: 'Could not load the payment gateway. Check your connection and retry.' }); return; }
+        try {
+          var rzp = new window.Razorpay({
+            key: opts.key, amount: opts.amount, currency: opts.currency || 'INR',
+            name: 'Acronous', description: opts.description || 'Plan',
+            order_id: opts.order_id, theme: { color: opts.color || '#6366f1' },
+            modal: { ondismiss: function () { onErr({ cancelled: true }); } },
+            handler: function (r) { onOk(r); }
+          });
+          rzp.on('payment.failed', function (r) {
+            onErr({ message: (r && r.error && r.error.description) || 'Payment failed. No money was deducted for a failed payment.' });
+          });
+          rzp.open();
+        } catch (err) { onErr({ message: String(err) }); }
+      });
+    }
+  };
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

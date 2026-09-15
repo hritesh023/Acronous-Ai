@@ -5,10 +5,28 @@ import os
 logger = logging.getLogger(__name__)
 
 CLOUD_PROVIDERS = {
-    "oracle": {
+    # ── Acronous LLM brain — Contabo Cloud VPS 8 (EU, 167.86.104.155) ──
+    # Runs Ollama locally on the VPS (CPU-only, no GPU). Reachable via:
+    #   in-docker : http://ollama:11434/v1
+    #   direct IP: http://167.86.104.155:11434/v1
+    #   tunnel   : https://brain.acronous.com/v1
+    # Override with ACRONOUS_LLM_API_URL env var.
+    # Base model: Qwen3 8B (latest smart open-source that fits CPU VPS).
+    #   qwen3:8b          main brain — best reasoning / chat (default)
+    #   qwen2.5-coder:7b  code specialist
+    #   qwen2.5:7b        balanced fallback
+    #   qwen2.5:3b        fast path — greetings / simple Q&A (~5-6 tok/s CPU)
+    #   qwen2.5:1.5b      ultra-fast, weak — avoid for chat
+    #   qwen2.5vl:7b      vision-language
+    #   llava:7b          vision fallback
+    "contabo": {
         "base_url": "http://ollama:11434/v1",
-        "models": ["qwen2.5:14b", "qwen2.5:7b", "qwen2.5-coder:7b", "qwen2.5:3b", "qwen2.5:1.5b", "qwen3:4b", "llama3.1", "llava:7b"],
-        "default_model": "qwen2.5-coder:7b",
+        "models": ["qwen3:8b", "qwen2.5-coder:7b", "qwen2.5:7b", "qwen2.5:3b", "qwen2.5:1.5b", "qwen3:4b", "qwen2.5vl:7b", "llava:7b", "llama3.1"],
+        "default_model": "qwen3:8b",
+        "chat_model": "qwen3:8b",
+        "code_model": "qwen2.5-coder:7b",
+        "fast_model": "qwen2.5:3b",
+        "vision_model": "qwen2.5vl:7b",
     },
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
@@ -43,15 +61,15 @@ class LocalLLM:
 
     def _init_cloud(self):
         api_key = os.getenv("ACRONOUS_LLM_API_KEY", "")
-        provider = os.getenv("ACRONOUS_LLM_PROVIDER", "oracle").lower()
-        if provider == "oracle":
-            # Acronous Oracle runs locally and does not require an API key.
+        provider = os.getenv("ACRONOUS_LLM_PROVIDER", "contabo").lower()
+        if provider == "contabo":
+            # Acronous Contabo runs locally and does not require an API key.
             try:
                 from openai import OpenAI
-                info = CLOUD_PROVIDERS["oracle"]
+                info = CLOUD_PROVIDERS["contabo"]
                 base_url = os.getenv("ACRONOUS_LLM_API_URL", info["base_url"])
                 self._openai_client = OpenAI(
-                    api_key=api_key or "acronous-oracle",
+                    api_key=api_key or "acronous-contabo",
                     base_url=base_url,
                 )
                 self.available_models = info["models"]
@@ -63,10 +81,10 @@ class LocalLLM:
                 elif self.config.LLM_MODEL not in self.available_models:
                     self.config.LLM_MODEL = info["default_model"]
                 self.backend = "openai_compat"
-                logger.info(f"[LLM INIT] Oracle initialized (model: {self.config.LLM_MODEL})")
+                logger.info(f"[LLM INIT] Contabo initialized (model: {self.config.LLM_MODEL})")
                 return
             except Exception as e:
-                logger.error(f"[LLM INIT] Failed to initialize oracle: {type(e).__name__}: {e}")
+                logger.error(f"[LLM INIT] Failed to initialize contabo: {type(e).__name__}: {e}")
         if not api_key:
             logger.warning(f"[LLM INIT] No API key found for provider '{provider}'. Set ACRONOUS_LLM_API_KEY environment variable.")
             return
@@ -104,6 +122,25 @@ class LocalLLM:
 
     def list_models(self):
         return self.available_models
+
+    def model_for_task(self, task="chat"):
+        """Pick the smartest Contabo-served model for a task.
+
+        chat/code/fast/vision route to Qwen variants on the Contabo VPS.
+        Falls back to the configured default when env overrides are set.
+        """
+        import os as _os
+        task = (task or "chat").lower()
+        if task in ("code", "coder", "programming"):
+            return _os.getenv("ACRONOUS_LLM_CODE_MODEL",
+                              getattr(self.config, "LLM_CODE_MODEL", "qwen2.5-coder:7b"))
+        if task in ("fast", "simple", "greeting", "classify"):
+            return _os.getenv("ACRONOUS_LLM_FAST_MODEL",
+                              getattr(self.config, "LLM_FAST_MODEL", "qwen2.5:3b"))
+        if task in ("vision", "image", "vl"):
+            return _os.getenv("ACRONOUS_VISION_MODEL", "qwen2.5vl:7b")
+        return _os.getenv("ACRONOUS_LLM_CHAT_MODEL",
+                          getattr(self.config, "LLM_CHAT_MODEL", "qwen3:8b"))
 
     def generate(self, prompt, system_prompt=None, stream=False, max_tokens=None):
         if system_prompt is None:

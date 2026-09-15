@@ -6,7 +6,7 @@ param(
     [string]$IP
 )
 
-$KEY = "$env:USERPROFILE\.ssh\oracle_acronous"
+$KEY = "$env:USERPROFILE\.ssh\contabo_acronous"
 $USER = "ubuntu"
 $REMOTE = "$USER@$IP"
 
@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) {
 # Upload project
 Write-Host "Uploading files..." -ForegroundColor Yellow
 $root = "C:\Users\Hritesh\Hritesh-apps\Acronous Ai"
-$deploy = "$root\oracle-cloud"
+$deploy = "$root\contabo-vps"
 
 scp -i $KEY -r "$deploy" "${REMOTE}:/home/$USER/" 2>$null
 scp -i $KEY -r "$root\image-service" "${REMOTE}:/home/$USER/" 2>$null
@@ -64,13 +64,13 @@ export PATH=/opt/flutter/bin:\$PATH
 cd /home/$USER
 flutter pub get
 flutter build web --release --dart-define=\"API_BASE_URL=http://\$(curl -s ifconfig.me)\"
-mkdir -p oracle-cloud/web-build
-cp -r build/web/* oracle-cloud/web-build/
+mkdir -p contabo-vps/web-build
+cp -r build/web/* contabo-vps/web-build/
 '"
 
 Write-Host "Building Docker images..." -ForegroundColor Yellow
 ssh -i $KEY $REMOTE "bash -c '
-cd /home/$USER/oracle-cloud
+cd /home/$USER/contabo-vps
 if [ ! -d image-service ]; then cp -r /home/$USER/image-service .; fi
 docker compose build
 docker compose up -d

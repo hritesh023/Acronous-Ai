@@ -75,7 +75,6 @@ class MarkdownRenderer extends StatelessWidget {
     return text.replaceAllMapped(
       RegExp(r'```(\w*)\n([\s\S]*?)```', multiLine: true),
       (match) {
-        final lang = match.group(1) ?? '';
         final code = match.group(2) ?? '';
         final trimmed = code.trim();
         if (trimmed.isEmpty) return match.group(0)!;

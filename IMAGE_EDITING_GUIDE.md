@@ -42,10 +42,10 @@ A FastAPI service that provides:
 - **Voice editing** — pydub + soundfile (trim, speed, volume)
 - **Video frames** — MoviePy assembly from SD-generated frames
 
-### Deploy to Oracle Cloud
+### Deploy to Contabo VPS
 
 ```bash
-cd oracle-cloud
+cd contabo-vps
 # Set EDITOR_SERVICE_URL in .env
 cp .env.example .env
 nano .env

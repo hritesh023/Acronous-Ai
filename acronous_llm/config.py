@@ -20,9 +20,37 @@ class AcronousConfig:
         self.CLASSIFIER_PATH = self.MODELS_DIR / "classifier.pt"
         self.EMBEDDER_PATH = self.MODELS_DIR / "embedder.pt"
 
-        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "qwen2.5:14b")
+        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "qwen3:8b")
         self.LLM_BACKEND = os.getenv("ACRONOUS_LLM_BACKEND", "auto")
-        self.LLM_PROVIDER = os.getenv("ACRONOUS_LLM_PROVIDER", "oracle")
+        self.LLM_PROVIDER = os.getenv("ACRONOUS_LLM_PROVIDER", "contabo")
+        # ── Contabo VPS brain (Cloud VPS 8, EU) ──
+        # Display: acronous | Host: 20010 | IP: 167.86.104.155 | user: root
+        # VNC: 5.189.136.10:63080 | Disk: 300 GB | IPv6: 2a02:c207:2358:1966::1/64
+        self.BRAIN_HOST = os.getenv("ACRONOUS_BRAIN_HOST", "brain.acronous.com")
+        self.BRAIN_URL = os.getenv(
+            "ACRONOUS_BRAIN_URL", "https://brain.acronous.com")
+        self.BRAIN_DIRECT_URL = os.getenv(
+            "ACRONOUS_BRAIN_DIRECT_URL", "http://167.86.104.155:11434")
+        # Model routing — smartest model per task (all served by Contabo Ollama)
+        self.LLM_CHAT_MODEL = os.getenv("ACRONOUS_LLM_CHAT_MODEL", "qwen3:8b")
+        self.LLM_CODE_MODEL = os.getenv("ACRONOUS_LLM_CODE_MODEL", "qwen2.5-coder:7b")
+        self.LLM_FAST_MODEL = os.getenv("ACRONOUS_LLM_FAST_MODEL", "qwen2.5:3b")
+        # ── Self-training (auto-learn from internet + self fine-tune loop) ──
+        # Resource-safe by design: 24GB RAM / 300GB disk caps are ENFORCED.
+        # The brain gets smarter daily via bounded RAG/memory/JSONL growth
+        # with pruning — storage never grows unbounded.
+        self.SELF_TRAIN_ENABLED = os.getenv("ACRONOUS_SELF_TRAIN", "true").lower() == "true"
+        self.SELF_TRAIN_INTERVAL = int(os.getenv("ACRONOUS_SELF_TRAIN_INTERVAL", "21600"))  # 6h dataset cycle
+        self.SELF_TRAIN_MIN_FACTS = int(os.getenv("ACRONOUS_SELF_TRAIN_MIN_FACTS", "500"))
+        self.TRAINING_DIR_NAME = "training"
+        # ── Resource caps (never fill the VPS) ──
+        self.SELF_TRAIN_MAX_RAM_PCT = float(os.getenv("ACRONOUS_SELF_TRAIN_MAX_RAM_PCT", "85"))  # pause if system RAM above this
+        self.SELF_TRAIN_MIN_FREE_GB = float(os.getenv("ACRONOUS_SELF_TRAIN_MIN_FREE_GB", "10"))  # pause if data-disk free below this (VPS: set 40)
+        self.SELF_TRAIN_MAX_TRAIN_GB = float(os.getenv("ACRONOUS_SELF_TRAIN_MAX_TRAIN_GB", "25"))  # training dir quota
+        self.SELF_TRAIN_MAX_PAIRS_PER_CYCLE = int(os.getenv("ACRONOUS_SELF_TRAIN_MAX_PAIRS_PER_CYCLE", "400"))  # small CPU-friendly batches
+        self.SELF_TRAIN_MAX_MERGED_PAIRS = int(os.getenv("ACRONOUS_SELF_TRAIN_MAX_MERGED_PAIRS", "20000"))  # merged file cap (~100MB)
+        self.SELF_TRAIN_RETAIN_DAYS = int(os.getenv("ACRONOUS_SELF_TRAIN_RETAIN_DAYS", "14"))  # prune snapshots older than this
+        self.SELF_TRAIN_RETAIN_SNAPSHOTS = int(os.getenv("ACRONOUS_SELF_TRAIN_RETAIN_SNAPSHOTS", "7"))  # keep newest N snapshots
         self.LLM_API_KEY = os.getenv("ACRONOUS_LLM_API_KEY", "")
         self.LLM_API_URL = os.getenv("ACRONOUS_LLM_API_URL", "")
         self.EMBED_MODEL = os.getenv("ACRONOUS_EMBED_MODEL", "all-MiniLM-L6-v2")

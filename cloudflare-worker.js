@@ -4,7 +4,7 @@ const LANDING_WORKER = 'https://acronous-landing.workers.dev';
 const LANDING_AUTH_PATHS = ['/api/auth/', '/login', '/login.html', '/signup', '/signup.html', '/dashboard', '/dashboard.html', '/logout'];
 
 const SEARXNG_URLS = [
-  'http://140.245.224.36/search', // Self-hosted on Oracle Cloud (primary — always up)
+  'http://167.86.104.155/search', // Self-hosted on Contabo VPS (primary — always up)
   'https://searx.be/search', 'https://search.sapti.me/search',
   'https://searx.tuxcloud.net/search', 'https://searx.work/search',
   'https://searx.info/search', 'https://search.bus-hit.me/search',
@@ -393,10 +393,10 @@ function parseResults(items) {
 
 const SEARXNG_SHUF = SEARXNG_URLS.sort(() => Math.random() - 0.5);
 
-// Free unlimited search via Oracle Cloud Python service (DuckDuckGo + Google + Wikipedia)
+// Free unlimited search via Contabo VPS Python service (DuckDuckGo + Google + Wikipedia)
 // Falls back to in-worker DuckDuckGo scraping if Python service is unreachable
 async function searchPythonService(query, maxResults = 8, env = {}) {
-  const editorUrl = env.EDITOR_SERVICE_URL || 'http://140.245.224.36/image-service';
+  const editorUrl = env.EDITOR_SERVICE_URL || 'http://167.86.104.155/image-service';
   if (!editorUrl) return null;
   try {
     const url = `${editorUrl}/search?q=${encodeURIComponent(query)}&max_results=${maxResults}`;
@@ -844,11 +844,11 @@ async function webSearch(query, env = {}) {
 
   // For role-based queries (who is X of Y), add "current" + year to get fresh results
   const currentYear = new Date().getFullYear();
-  const isRoleQuery = /\b(who\s+is|who\s+are|who\s+was)\s+(the\s+)?(current\s+)?(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\b/i.test(q);
+  const isRoleQuery = /\b(who\s+is|who\s+are|who\s+was)\s+(the\s+)?(current\s+)?(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\b/i.test(q);
   const enrichedQuery = isRoleQuery ? `${q} current ${currentYear}` : q;
 
   // Detect news/event queries for broader search
-  const isNewsQuery = /\b(protest|resign|resigned|resignation|quit|quits|stepped?\s+down|fired|sacked|ousted|crisis|scandal|attack|war|conflict|election|vote|bombing|arrest|verdict|trial|pandemic|disaster|news|today|latest|recent|happened|breaking)\b/i.test(q);
+  const isNewsQuery = /\b(protest|resign|resigned|resignation|quit|quits|stepped?\s+down|fired|sacked|ousted|crisis|scandal|attack|war|conflict|election|vote|bombing|arrest|verdict|trial|pandemic|disaster|news|today|latest|recent|happened|breaking|version|releases?|launch(?:ed|es|ing)?|announc(?:ed|ement)|price|score|winner|champion)\b/i.test(q);
 
   // Broader engine set for news queries
   const allEngines = [
@@ -956,7 +956,8 @@ function focusWebData(message, webData) {
 
   // Score each line by keyword relevance with frequency weighting
   const isWhoQuery = /\bwho\b/i.test(message);
-  const isRoleQuery = /\b(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director)\b/i.test(message);
+  const isVersionQuery = /\b(version|release|latest|newest|model)\b/i.test(message);
+  const isRoleQuery = /\b(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director)\b/i.test(message);
   const scored = lines.map(line => {
     if (!line.trim()) return { line, score: -1 };
     const lower = line.toLowerCase();
@@ -971,6 +972,8 @@ function focusWebData(message, webData) {
     // Bonus for lines with "current", "elected", "2025", "2026"
     if (/\b(current|elected|now|serving|new|latest|appointed|incumbent)\b/i.test(line)) score += 3;
     if (/\b202[5-9]\b/.test(line)) score += 2;
+    // Bonus for version/model lines when the question asks for latest/version
+    if (isVersionQuery && /(?:\bv?\d+\.\d+|\bGPT[-\s]?\d|version\s+\d+|release\s+\d*|launched?\s+\w+\s+\d)/i.test(line)) score += 4;
     // Bonus for lines with names (After colon pattern)
     if (/[A-Z][a-z]+\s+[A-Z][a-z]+/.test(line)) score += 1;
     // STRONG bonus for "who is" + role queries: lines with person names + role keywords
@@ -1030,7 +1033,8 @@ function classifyQuery(message) {
     return { search: false, reason: 'greeting' };
   if (isCodeQuery(message))
     return { search: false, reason: 'code' };
-  if (/\b(calculate|solve|compute|prove|derive|formula|equation|algorithm|math|sum|product|factorial|fibonacci|gcd|lcm|prime|square\s+root|\d+\s*[\+\-\*\/\^]\s*\d+)\b/i.test(m))
+  // NOTE: "prime minister" must NOT match math ("prime" = prime numbers only).
+  if (/\b(calculate|solve|compute|prove|derive|formula|equation|algorithm|math|sum|product|factorial|fibonacci|gcd|lcm|prime(?!\s+minister)|square\s+root|\d+\s*[\+\-\*\/\^]\s*\d+)\b/i.test(m))
     return { search: false, reason: 'math' };
   if (/\b(write\s+(?:a\s+)?(?:story|poem|essay|article|letter|speech|joke|riddle|song)|generate\s+(?:a\s+)?|create\s+(?:a\s+)?(?:diagram|chart|table|list|plan|recipe|story|poem))\b/i.test(m))
     return { search: false, reason: 'creative' };
@@ -1415,10 +1419,16 @@ const BRAND_FOUNDER_SENTENCE = `The founder of ${BRAND_NAME} is ${BRAND_CREATOR}
 const BRAND_CREATED_BY_SENTENCE = `${BRAND_NAME} was created by ${BRAND_CREATOR}.`;
 const BRAND_ASSISTANT_LINE = `I am ${BRAND_NAME} AI, created by ${BRAND_NAME}.`;
 
-function cleanResponse(text) {
+function cleanResponse(text, userMessage = '') {
   if (!text) return '';
   let clean = stripJsonLeak(text);
   if (!clean) return text.trim() || '';
+  // Topic exception: when the user explicitly asked about a public
+  // third-party model/company (or hardware), factual mentions pass through —
+  // otherwise "GPT-5.6" gets scrubbed to "Acronous AI" and version answers
+  // become nonsense. Own-backend names are ALWAYS scrubbed; first-person
+  // identity claims ALWAYS deflect (never impersonate).
+  const allowTP = userAskedAboutThirdParty(userMessage);
 
   // Strip ALL internal tags that could leak to frontend
   clean = clean
@@ -1529,25 +1539,32 @@ function cleanResponse(text) {
   // survives while the brand name is scrubbed. \b prevents false positives
   // like "by meta" matching inside "metabolism".
   const leakWordReplacements = [
-    [/\bchatgpt\b/gi, 'Acronous AI'],
-    [/\bgpt[- ]?[34]\b/gi, 'Acronous AI'],
-    [/\bgpt\b/gi, 'Acronous AI'],
-    [/\bopenai\b/gi, 'Acronous'],
-    [/\bclaude\b/gi, 'Acronous AI'],
-    [/\bgemini\b/gi, 'Acronous AI'],
-    [/\bllama\b/gi, 'Acronous AI'],
+    // Own-backend family — ALWAYS scrubbed (naming them leaks our stack).
     [/\bqwen\b/gi, 'Acronous AI'],
-    [/\bdeepseek\b/gi, 'Acronous AI'],
-    [/\bmistral\b/gi, 'Acronous AI'],
-    [/\bcohere\b/gi, 'Acronous AI'],
     [/\bllava\b/gi, 'Acronous vision'],
     [/\bstable diffusion\b/gi, 'the Acronous image engine'],
     [/\bflux\b/gi, 'the Acronous image engine'],
-    [/\b(anthropic|deepmind|nvidia)\b/gi, 'Acronous'],
     [/\bollama\b/gi, ''],
     [/\bi(?:'m| am)\s+(?:based\s+on|powered\s+by|built\s+on|trained\s+on|developed\s+using|made\s+with)\b/gi, 'I was created by Acronous and'],
     [/\bi\s+(?:use|uses|run|runs)\s+[a-z]+\s+(?:models?|technology|infrastructure)\b/gi, ''],
   ];
+  // Public third-party names — scrubbed ONLY when the user did NOT raise
+  // them as the topic (see allowTP above).
+  if (!allowTP) {
+    leakWordReplacements.push(
+      [/\bchatgpt\b/gi, 'Acronous AI'],
+      [/\bgpt[- ]?[34]\b/gi, 'Acronous AI'],
+      [/\bgpt\b/gi, 'Acronous AI'],
+      [/\bopenai\b/gi, 'Acronous'],
+      [/\bclaude\b/gi, 'Acronous AI'],
+      [/\bgemini\b/gi, 'Acronous AI'],
+      [/\bllama\b/gi, 'Acronous AI'],
+      [/\bdeepseek\b/gi, 'Acronous AI'],
+      [/\bmistral\b/gi, 'Acronous AI'],
+      [/\bcohere\b/gi, 'Acronous AI'],
+      [/\b(anthropic|deepmind|nvidia)\b/gi, 'Acronous'],
+    );
+  }
   if (containsForbidden) {
     clean = `${BRAND_ASSISTANT_LINE} How can I help you today?`;
   } else {
@@ -1906,7 +1923,12 @@ async function fetchWikipediaData(topic) {
 // DIRECT INFOBOX LOOKUP: For role queries like "mayor of X", scrape Wikipedia infobox directly
 // This is the pure processing path — no LLM, no search engine, just Wikipedia infobox parsing
 async function lookupRoleFromInfobox(message) {
-  const roleMatch = message.match(/\b(?:who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?)?(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\s+(?:of|in)\s+(.+?)(?:\?|$)/i);
+  let roleMatch = message.match(/\b(?:who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?)?(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\s+(?:of|in)\s+(.+?)(?:\?|$)/i);
+  if (!roleMatch && isReversedRoleQuery(message)) {
+    // "Odisha CM" / "India PM" — flip to role+location form.
+    const rev = message.match(/^(?:who\s+is\s+(?:the\s+)?)?([A-Za-z][A-Za-z\s.'-]{2,60}?)\s+\b(cm|pm|chief minister|prime minister|president|governor|mayor)\b\s*\??$/i);
+    if (rev) roleMatch = [rev[0], rev[2], rev[1]];
+  }
   if (!roleMatch) return null;
 
   const role = roleMatch[1].trim();
@@ -1937,7 +1959,7 @@ async function lookupRoleFromInfobox(message) {
     candidates.push(`Chief Minister of ${locationExpanded}`, `${locationExpanded}`);
   } else if (roleLower === 'president') {
     candidates.push(`President of ${locationExpanded}`, `${locationExpanded}`);
-  } else if (roleLower === 'prime minister') {
+  } else if (roleLower === 'prime minister' || roleLower === 'pm') {
     candidates.push(`Prime Minister of ${locationExpanded}`, `${locationExpanded}`);
   } else if (roleLower === 'ceo' || roleLower === 'chairman') {
     candidates.push(`${locationExpanded}`);
@@ -1981,7 +2003,7 @@ async function lookupRoleFromInfobox(message) {
           if (isPersonName(name)) {
             const electionMatch = wikitext.match(/election1?\s*=\s*(\d{1,2}\s+\w+\s+(\d{4}))/i);
             const yr = electionMatch ? parseInt(electionMatch[2]) : currentYear;
-            const roleTitle = role.charAt(0).toUpperCase() + role.slice(1);
+            const roleTitle = roleLower === 'cm' ? 'Chief Minister' : roleLower === 'pm' ? 'Prime Minister' : (role.charAt(0).toUpperCase() + role.slice(1));
             return `${name} is the current ${roleTitle} of ${locationExpanded} (as of ${yr}).`;
           }
         }
@@ -2337,9 +2359,9 @@ function extractNameForRole(role, webData) {
   return null;
 }
 
-// OpenRouter removed — Ollama on Oracle Cloud handles everything (unlimited, free)
+// OpenRouter removed — Ollama on Contabo VPS handles everything (unlimited, free)
 
-// ── Ollama (self-hosted LLM on Oracle Cloud — unlimited tokens, no API caps) ──
+// ── Ollama (self-hosted LLM on Contabo VPS — unlimited tokens, no API caps) ──
 // Per-query generation budget. Short/factual/casual asks get a small cap so the
 // CPU model finishes in a few seconds instead of rambling for 30-80s; long
 // explanations/how-tos keep the full budget for complete answers.
@@ -2352,6 +2374,99 @@ function answerTokenBudget(lastUserText, isCode) {
     /\b(?:what is|who is|current (?:time|date|year|month|president|prime minister|cm|pm)|weather|population|capital|price|score|winner|records?|where is|define|hi|hello|hey)\b/.test(t)
   )) return 700;
   return 2048;
+}
+
+// ── GPU fast-path (RunPod Serverless, scale-to-zero) ─────────────────────
+// Optional. When GPU_LLM_URL / GPU_IMAGE_URL are set, the Worker tries the
+// GPU endpoint FIRST and falls back to the Contabo CPU box on any failure or
+// timeout. Contabo stays the always-on default, so unsetting these vars
+// restores pure-CPU behaviour with zero code change.
+//   GPU_LLM_URL   = RunPod Serverless endpoint base, e.g.
+//                   https://api.runpod.ai/v2/<llm-endpoint-id>  (runsync style)
+//                   OR a plain OpenAI-compat base https://<pod>:8000
+//   GPU_LLM_KEY   = RunPod API key (Bearer). Empty for unauthenticated pods.
+//   GPU_LLM_MODEL = model name served by the GPU endpoint (default: qwen2.5:7b)
+//   GPU_ENABLED   = "true" (default) / "false" to force CPU-only.
+//   GPU_LLM_TIMEOUT_MS = GPU attempt budget (default 60000; cold starts ~15-30s).
+//   GPU_IMAGE_URL / GPU_IMAGE_KEY / GPU_IMAGE_TIMEOUT_MS = same for images.
+async function tryGpuChat(messages, env, model, numPredict, lastText) {
+  const base = (env.GPU_LLM_URL || '').trim().replace(/\/$/, '');
+  if (!base || (env.GPU_ENABLED || 'true') !== 'true') return null;
+  // Money guard: free-tier traffic stays on the $0 Contabo CPU box. Pro users
+  // (env._isPro, resolved once per request in fetch) get the GPU fast-path.
+  if ((env.GPU_PRO_ONLY || 'true') === 'true' && !env._isPro) return null;
+  const headers = { 'Content-Type': 'application/json' };
+  if ((env.GPU_LLM_KEY || '').trim()) headers['Authorization'] = `Bearer ${env.GPU_LLM_KEY.trim()}`;
+  const timeoutMs = Math.min(parseInt(env.GPU_LLM_TIMEOUT_MS || '60000'), 120000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, timeoutMs);
+  try {
+    // RunPod serverless style: POST {input:{messages,model,max_tokens}} to /runsync.
+    // Plain vLLM style: POST OpenAI-compat body to /v1/chat/completions.
+    const isRunpod = /api\.runpod\.ai\/v2\//.test(base);
+    const url = isRunpod ? `${base}/runsync` : `${base}/v1/chat/completions`;
+    const body = isRunpod
+      ? { input: { messages, model: env.GPU_LLM_MODEL || model, max_tokens: numPredict, temperature: 0.6 } }
+      : { model: env.GPU_LLM_MODEL || model, messages, max_tokens: numPredict, temperature: 0.6, stream: false };
+    const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    // Unwrap RunPod envelope ({output:{...}} or {output:"..."}) vs plain OpenAI shape.
+    const out = (data && data.output !== undefined) ? data.output : data;
+    const text = typeof out === 'string'
+      ? out
+      : (out?.choices?.[0]?.message?.content || out?.response || out?.text || '');
+    if (!text || !text.trim()) return null;
+    const { answer } = parseThinkingResponse(text);
+    const content = cleanResponse(answer, lastText || '');
+    return (content && content.trim()) ? content : answer.trim();
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+async function tryGpuImageGen(visualPrompt, width, height, styleHint, env) {
+  const base = (env.GPU_IMAGE_URL || '').trim().replace(/\/$/, '');
+  if (!base || (env.GPU_ENABLED || 'true') !== 'true') return null;
+  // Money guard: GPU images are Pro-only by default (see tryGpuChat).
+  if ((env.GPU_PRO_ONLY || 'true') === 'true' && !env._isPro) return null;
+  const headers = { 'Content-Type': 'application/json' };
+  if ((env.GPU_IMAGE_KEY || '').trim()) headers['Authorization'] = `Bearer ${env.GPU_IMAGE_KEY.trim()}`;
+  const timeoutMs = Math.min(parseInt(env.GPU_IMAGE_TIMEOUT_MS || '110000'), 115000);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, timeoutMs);
+  try {
+    // rp_handler.py contract: POST {input:{prompt,width,height,style}}.
+    // RunPod serverless: append /runsync. Plain FastAPI pod: POST /runsync-run (same handler) or /generate-image form.
+    const isRunpod = /api\.runpod\.ai\/v2\//.test(base);
+    let data = null;
+    if (isRunpod) {
+      const resp = await fetch(`${base}/runsync`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ input: { prompt: visualPrompt, width, height, style: styleHint || '' } }),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) return null;
+      const envelope = await resp.json();
+      data = (envelope && envelope.output !== undefined) ? envelope.output : null;
+    } else {
+      // Plain GPU pod running this repo's image-service (FastAPI): same form API as Contabo.
+      const params = new URLSearchParams();
+      params.set('prompt', visualPrompt);
+      params.set('width', String(width));
+      params.set('height', String(height));
+      if (styleHint) params.set('style', styleHint);
+      const resp = await fetch(`${base}/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+        signal: ctrl.signal,
+      });
+      if (!resp.ok) return null;
+      data = await resp.json();
+    }
+    if (!data?.image_data || data?.error) return null;
+    const description = (data.description || '').trim();
+    return { imageData: data.image_data, explanation: description ? `Here's your generated image. ${description}` : "Here's your generated image." };
+  } catch { return null; } finally { clearTimeout(timer); }
 }
 
 async function callOllama(messages, env) {
@@ -2388,6 +2503,12 @@ async function callOllama(messages, env) {
     totalChars += chars;
     truncated.unshift(m);
   }
+  // GPU fast-path first (RunPod Serverless). Any failure/timeout falls
+  // through to the Contabo CPU Ollama call below — never throws.
+  try {
+    const gpu = await tryGpuChat(truncated, env, model, numPredict, lastText);
+    if (gpu && gpu.trim()) return gpu;
+  } catch {}
   try {
     // Stream from Ollama internally and accumulate. A plain non-streaming call
     // sends NO bytes until the whole generation finishes, so intermediate
@@ -2440,7 +2561,7 @@ async function callOllama(messages, env) {
       }
       if (raw && raw.trim()) {
         const { answer } = parseThinkingResponse(raw);
-        const content = cleanResponse(answer);
+        const content = cleanResponse(answer, lastText);
         return (content && content.trim()) ? content : answer.trim();
       }
     } else if (resp.ok) {
@@ -2448,7 +2569,7 @@ async function callOllama(messages, env) {
       const rawText = data?.message?.content || '';
       if (rawText && rawText.trim()) {
         const { answer } = parseThinkingResponse(rawText);
-        const content = cleanResponse(answer);
+        const content = cleanResponse(answer, lastText);
         return (content && content.trim()) ? content : answer.trim();
       }
     } else {
@@ -2458,7 +2579,7 @@ async function callOllama(messages, env) {
   throw new Error('Ollama failed');
 }
 
-// Ollama vision — uses llava or other vision models on Oracle Cloud
+// Ollama vision — uses llava or other vision models on Contabo VPS
 // NOTE: kept as LAST-resort only (CPU inference can exceed gateway timeouts).
 async function callOllamaVision(messages, env) {
   const ollamaUrl = env.OLLAMA_BASE_URL;
@@ -2545,7 +2666,7 @@ function removeEmojis(text) {
   return text.replace(/[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F1E0}-\u{1F1FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE00}-\u{FE0F}\u{1F900}-\u{1F9FF}\u{200D}\u{20E3}\u{1FA00}-\u{1FA6F}\u{1FA70}-\u{1FAFF}]/gu, '').trim();
 }
 
-// ── Primary LLM — Ollama on Oracle Cloud (unlimited, free, no API caps) ──
+// ── Primary LLM — Ollama on Contabo VPS (unlimited, free, no API caps) ──
 async function callPrimaryLLM(messages, env, timeoutMs = 600000) {
   const ollamaUrl = env.OLLAMA_BASE_URL;
   if (!ollamaUrl) throw new Error('No Ollama URL');
@@ -2634,7 +2755,7 @@ async function callFastLLM(messages, env) {
 // self-hosted (Ollama) under the fully self-hosted policy. ──
 
 // ── Unified vision pipeline (fully self-hosted) ──
-// Single source: local Ollama LLaVA on Oracle Cloud. No Workers AI, no Gemini.
+// Single source: local Ollama LLaVA on Contabo VPS. No Workers AI, no Gemini.
 async function analyzeImageFast(imageBase64, mimeType, promptText, env) {
   const messages = [{
     role: 'user',
@@ -2681,7 +2802,7 @@ async function raceLLMs(promises, overallTimeoutMs = 600000) {
 }
 
 async function tryWorkersAIChat(messages, env) {
-  // Fully self-hosted policy: ALL chat inference goes to the Oracle Cloud
+  // Fully self-hosted policy: ALL chat inference goes to the Contabo VPS
   // Ollama server (unlimited). No Workers AI, no Gemini — both are
   // quota/rate-limited third-party services.
   try {
@@ -2692,18 +2813,45 @@ async function tryWorkersAIChat(messages, env) {
 }
 
 // Redact backend/provider mentions from streamed deltas (streams bypass cleanResponse).
-const PROVIDER_REDACT_RE = /\b(?:cloudflare|workers\s+ai|ollama|llama[- ]?\d(?:\.\d)?|qwen(?:\s?[\d.]+[a-z]*)?|deepseek|chatgpt|gpt[- ]?[45o]?(?:\s*(?:turbo|mini))?|claude|anthropic|openai|gemini(?:\s+\d)?|mistral|cohere|hugging\s*face|groq|oracle\s+cloud|searxng|duckduckgo|rembg|edge[- ]?tts|stable\s+diffusion|instructpix2pix|flux\.?1|real[- ]?esrgan|whisper|moviepy|image[- ]?service|nominatim|sana)\b/gi;
-function redactProviderMentions(text) {
-  return String(text || '').replace(PROVIDER_REDACT_RE, 'Acronous');
+// Split into two lists:
+// - INFRA_RE: OUR OWN backend/infra (Ollama, Cloudflare, search stack, image
+//   service, …). ALWAYS redacted — these must never leak, no matter the topic.
+// - THIRD_PARTY_RE: public third-party assistants (GPT, Claude, Gemini, …).
+//   Redacted ONLY when the user did NOT raise them as a topic. When the user
+//   explicitly asks about them ("latest GPT model version"), factual mentions
+//   pass through — otherwise version/model answers get mangled into nonsense
+//   ("GPT-5.6" -> "Acronous.6"). First-person identity claims ("I am GPT") are
+//   ALWAYS rewritten to Acronous AI regardless of topic (see below).
+const INFRA_REDACT_RE = /\b(?:cloudflare|workers\s+ai|ollama|qwen(?:\s?[\d.]+[a-z]*)?|llava|searxng|duckduckgo|bing|mojeek|rembg|edge[- ]?tts|stable\s+diffusion|instructpix2pix|flux\.?1|real[- ]?esrgan|whisper|moviepy|image[- ]?service|nominatim|sana|contabo\s+cloud|wikipedia\s+api|google\s+news\s+rss|hugging\s*face)\b/gi;
+const THIRD_PARTY_REDACT_RE = /\b(?:chatgpt|gpt[- ]?[45o]?(?:\s*(?:turbo|mini))?|gpt|claude|anthropic|openai|gemini(?:\s+\d)?|mistral|deepseek|llama(?:[- ]?\d(?:\.\d)?)?|groq|cohere)\b/gi;
+const THIRD_PARTY_TOPIC_RE = /\b(?:chatgpt|gpt|claude|gemini|anthropic|openai|deepseek|mistral|groq|cohere|llama|copilot|nvidia|amd|intel)\b/i;
+const IDENTITY_CLAIM_RE = /\b(?:I'm|I am)\s+(?:chatgpt|gpt[- ]?[45o]?(?:\s*(?:turbo|mini))?|gpt|claude|gemini(?:\s+\d)?|llama|mistral|deepseek|openai|anthropic|groq|cohere)\b/gi;
+function userAskedAboutThirdParty(userMessage) {
+  try { return THIRD_PARTY_TOPIC_RE.test(String(userMessage || '')); } catch { return false; }
+}
+function redactProviderMentions(text, userMessage = '') {
+  let s = String(text || '');
+  // Identity first: never impersonate another assistant, even as a topic.
+  s = s.replace(IDENTITY_CLAIM_RE, 'I am Acronous AI');
+  s = s.replace(INFRA_REDACT_RE, 'Acronous');
+  if (!userAskedAboutThirdParty(userMessage)) {
+    s = s.replace(THIRD_PARTY_REDACT_RE, 'Acronous');
+  }
+  return s;
 }
 
-// Server-side sanitization for ALL responses before sending to client.
-// Prevents backend detail leakage even during streaming.
-function sanitizeForClient(text) {
+// Server-side sanitization for FULL responses before sending to client.
+// Prevents backend detail leakage. NOTE: NEVER apply this to streamed DELTAS —
+// trim() strips the leading space on BPE tokens (" word" -> "word") and the
+// client joins deltas verbatim, gluing words ("Thefounderis..."). For deltas
+// use redactProviderMentions() only (word-level, whitespace-preserving).
+function sanitizeForClient(text, userMessage = '') {
   if (!text) return '';
   let s = String(text);
-  // Redact provider/model names (word-level, scoped to known internal tokens)
-  s = redactProviderMentions(s);
+  // Redact backend names (word-level, scoped to known internal tokens).
+  // Third-party assistant names pass through ONLY when the user raised them
+  // as a topic (e.g. "latest GPT version") so factual answers stay intact.
+  s = redactProviderMentions(s, userMessage);
   // Whole-phrase strips only — never mid-sentence word deletion (that corrupted
   // good answers during streaming, e.g. "run a server" -> "run a  ").
   s = s.replace(/(?:powered\s+by|brought\s+to\s+you\s+by|sponsored\s+by|supported\s+by|in\s+partnership\s+with|provided\s+by)\s+[^\n]*/gi, '');
@@ -3379,14 +3527,22 @@ function extractImagePrompt(message) {
   return (t || message || '').trim();
 }
 
-// Generate an image via the self-hosted scene engine on Oracle Cloud.
+// Generate an image via the self-hosted scene engine on Contabo VPS.
 // Returns {imageData, explanation} or null when the service is unavailable.
 async function generateImageForChat(message, env) {
   const visualPrompt = extractImagePrompt(message);
   const styleHint = detectArtStyleHint(message);
+  // GPU fast-path first (RunPod Serverless SD-Turbo, 2-5s). Falls back to
+  // the Contabo CPU image-service below on any failure.
+  try {
+    const gpu = await tryGpuImageGen(visualPrompt, 1024, 1024, styleHint, env);
+    if (gpu && gpu.imageData) return gpu;
+  } catch (e) {
+    console.error('[generateImageForChat:gpu] failed:', e && e.message);
+  }
   const serviceUrl = env.EDITOR_SERVICE_URL;
   if (!serviceUrl) return null;
-  // Self-hosted Stable Diffusion on Oracle Cloud (free, unlimited, photorealistic
+  // Self-hosted Stable Diffusion on Contabo VPS (free, unlimited, photorealistic
   // by default; falls back to the procedural engine inside the service).
   const params = new URLSearchParams();
   params.set('prompt', visualPrompt);
@@ -3562,14 +3718,14 @@ async function renderVoiceForChat(message, env) {
   return null;
 }
 
-// Pull "N second(s)/sec/minutes" out of a video prompt; default 6s, clamped.
+// Pull "N second(s)/sec/minutes" out of a video prompt; default 4s, clamped.
 function extractVideoDurationSeconds(message) {
   const t = (message || '').toLowerCase();
   let m = t.match(/\b(\d{1,2}(?:\.\d)?)\s*(seconds?|secs?|s)\b/);
-  if (m) return Math.max(2, Math.min(20, parseFloat(m[1])));
+  if (m) return Math.max(2, Math.min(15, parseFloat(m[1])));
   m = t.match(/\b(\d{1,2})\s*(minutes?|mins?)\b/);
-  if (m) return Math.max(2, Math.min(20, parseFloat(m[1]) * 60));
-  return 6;
+  if (m) return Math.max(2, Math.min(15, parseFloat(m[1]) * 60));
+  return 4;
 }
 
 // Render a video via the self-hosted Python renderer. Returns
@@ -3626,12 +3782,13 @@ async function renderVideoForChat(message, env) {
     if (styleHint) params.set('style', styleHint);
     params.set('text_mode', textMode ? 'true' : 'false');
     params.set('async_mode', '1');
-    // Render at 540p / 20fps instead of the 720p / 24fps defaults — roughly half
-    // the frame compute and ffmpeg encode cost, so videos finish ~2x faster on
-    // the CPU box while still looking sharp in the 2x-max chat player.
-    params.set('fps', '20');
-    params.set('width', '960');
-    params.set('height', '540');
+    // Render at 480p / 15fps instead of the 720p / 24fps service defaults —
+    // ~60% less frame compute + ffmpeg cost, so videos finish ~2.5x faster on
+    // the CPU box while still looking sharp in the chat player. Users can ask
+    // for "HD" / longer durations explicitly when they want more.
+    params.set('fps', '15');
+    params.set('width', '854');
+    params.set('height', '480');
     const resp = await fetch(`${serviceUrl}/generate-video`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -3879,6 +4036,271 @@ function jsonOk(data, status = 200) {
 
 function jsonError(msg, status = 200) {
   return jsonOk({ response: msg, type: 'error' }, status);
+}
+
+// ── Metering + Razorpay paywall (indie-economics core) ─────────────────────
+// Free users run on the $0 Contabo CPU box with daily caps. Paid users skip caps
+// and unlock the GPU fast-path (GPU_PRO_ONLY=true). Counters reuse the existing
+// USER_MEMORY KV namespace (usage:/sub:/credits:/api_key: prefixes) — no new KV
+// namespace needed.
+// Identity = JWT sub when signed in, else CF-Connecting-IP, else shared 'anon'.
+// FULL CATALOG (mirrors Acronous-landing-page/billing/plans.json):
+//   Acronous AI: ai_free(0) starter(149) plus(449)* pro(999) ultra(2499) enterprise(custom)
+//   Navigwiz:    browser(0) ai_starter(99) ai_plus(299)* ai_pro(699) ai_ultra(1499) business(custom)
+//   Equyvo:      free(0) plus(49) premium(149)* creator(399)* creator_pro(799) business(custom)
+//   Bundle:      acronous_one(699) = AI Plus + Nav Plus + Eq Premium
+//   API packs (one-time credits): 99->1k, 499->6k, 999->14k, 2499->40k
+// Legacy alias: pro_monthly (₹PRO_PRICE_INR) == ai_plus-era Pro, kept working.
+const BILLING_CATALOG = {
+  ai_free:            { product: 'acronous_ai', days: 0,  amount_inr: 0,    label: 'Acronous AI — Free', kind: 'subscription' },
+  ai_starter_monthly: { product: 'acronous_ai', days: 30, amount_inr: 149,  label: 'Acronous AI — Starter', kind: 'subscription', api_credits: 0 },
+  ai_plus_monthly:    { product: 'acronous_ai', days: 30, amount_inr: 449,  label: 'Acronous AI — Plus', kind: 'subscription', api_credits: 2000 },
+  ai_pro_monthly:     { product: 'acronous_ai', days: 30, amount_inr: 999,  label: 'Acronous AI — Pro', kind: 'subscription', api_credits: 10000 },
+  ai_ultra_monthly:   { product: 'acronous_ai', days: 30, amount_inr: 2499, label: 'Acronous AI — Ultra', kind: 'subscription', api_credits: 40000 },
+  nav_browser:   { product: 'navigwiz', days: 0,  amount_inr: 0,    label: 'Navigwiz — Browser', kind: 'subscription' },
+  nav_ai_starter:{ product: 'navigwiz', days: 30, amount_inr: 99,   label: 'Navigwiz — AI Starter', kind: 'subscription' },
+  nav_ai_plus:   { product: 'navigwiz', days: 30, amount_inr: 299,  label: 'Navigwiz — AI Plus', kind: 'subscription' },
+  nav_ai_pro:    { product: 'navigwiz', days: 30, amount_inr: 699,  label: 'Navigwiz — AI Pro', kind: 'subscription' },
+  nav_ai_ultra:  { product: 'navigwiz', days: 30, amount_inr: 1499, label: 'Navigwiz — AI Ultra', kind: 'subscription' },
+  eq_free:        { product: 'equyvo', days: 0,  amount_inr: 0,   label: 'Equyvo — Free', kind: 'subscription' },
+  eq_plus:        { product: 'equyvo', days: 30, amount_inr: 49,  label: 'Equyvo — Plus', kind: 'subscription' },
+  eq_premium:     { product: 'equyvo', days: 30, amount_inr: 149, label: 'Equyvo — Premium', kind: 'subscription' },
+  eq_creator:     { product: 'equyvo', days: 30, amount_inr: 399, label: 'Equyvo — Creator', kind: 'subscription' },
+  eq_creator_pro: { product: 'equyvo', days: 30, amount_inr: 799, label: 'Equyvo — Creator Pro', kind: 'subscription' },
+  acronous_one: { product: 'bundle', days: 30, amount_inr: 699, label: 'Acronous One', kind: 'subscription', api_credits: 2000,
+    grants: ['ai_plus_monthly', 'nav_ai_plus', 'eq_premium'] },
+  api_pack_99:   { product: 'api', days: 0, amount_inr: 99,   label: 'API Starter',  kind: 'credits', credits: 1000 },
+  api_pack_499:  { product: 'api', days: 0, amount_inr: 499,  label: 'API Growth',   kind: 'credits', credits: 6000 },
+  api_pack_999:  { product: 'api', days: 0, amount_inr: 999,  label: 'API Scale',    kind: 'credits', credits: 14000 },
+  api_pack_2499: { product: 'api', days: 0, amount_inr: 2499, label: 'API Business', kind: 'credits', credits: 40000 },
+};
+// Back-compat: old single-plan clients use pro_monthly.
+const BILLING_PLANS = { pro_monthly: { days: 30, currency: 'INR', label: 'Acronous Pro — Monthly' } };
+
+function catalogEntryForPlan(plan, env) {
+  if (plan === 'pro_monthly') {
+    const v = parseInt(env.PRO_PRICE_INR || '299', 10);
+    return { product: 'acronous_ai', days: 30, amount_inr: isNaN(v) ? 299 : v, label: 'Acronous Pro — Monthly', kind: 'subscription', legacy: true };
+  }
+  return BILLING_CATALOG[plan] || null;
+}
+
+function publicCatalog(env) {
+  const legacyPrice = Math.round(billingAmountPaise(env) / 100);
+  return Object.entries(BILLING_CATALOG).map(([id, p]) => ({
+    id, product: p.product, kind: p.kind, label: p.label,
+    price_inr: p.amount_inr, currency: 'INR', days: p.days,
+    credits: p.credits || 0, api_credits: p.api_credits || 0,
+  })).concat([{ id: 'pro_monthly', product: 'acronous_ai', kind: 'subscription',
+    label: 'Acronous Pro — Monthly (legacy)', price_inr: legacyPrice, currency: 'INR', days: 30 }]);
+}
+
+function billingAmountPaise(env) {
+  const v = parseInt(env.PRO_PRICE_INR || '299', 10);
+  return (isNaN(v) ? 299 : v) * 100;
+}
+
+function quotaIdFromRequest(request) {
+  const uid = getUserIdFromRequest(request);
+  if (uid) return `u:${uid}`;
+  try {
+    const ip = request.headers.get('CF-Connecting-IP') || '';
+    if (ip.trim()) return `ip:${ip.trim()}`;
+  } catch {}
+  return 'anon';
+}
+
+function dayStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function quotaLimit(env, kind) {
+  if (kind === 'image') return Math.max(0, parseInt(env.FREE_IMAGE_PER_DAY || '3', 10) || 0);
+  if (kind === 'video') return Math.max(0, parseInt(env.FREE_VIDEO_PER_DAY || '1', 10) || 0);
+  return Math.max(0, parseInt(env.FREE_CHAT_PER_DAY || '20', 10) || 0);
+}
+
+async function isProUser(env, quotaId) {
+  if (!env.USER_MEMORY || !quotaId || quotaId === 'anon') return false;
+  try {
+    const raw = await env.USER_MEMORY.get(`pro:${quotaId}`);
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    return typeof data?.until === 'number' && data.until > Date.now();
+  } catch { return false; }
+}
+
+// Multi-product subscriptions: sub:<product>:<quotaId> -> {until, plan, ...}.
+// AI chat/image/video Pro-gating treats ANY active acronous_ai paid plan
+// (or the acronous_one bundle, or legacy pro:) as Pro.
+async function getSubscription(env, product, quotaId) {
+  if (!env.USER_MEMORY || !quotaId || quotaId === 'anon') return null;
+  try {
+    const raw = await env.USER_MEMORY.get(`sub:${product}:${quotaId}`);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (typeof data?.until === 'number' && data.until > Date.now()) return data;
+    return null;
+  } catch { return null; }
+}
+
+async function hasProductAccess(env, product, quotaId) {
+  if (!quotaId || quotaId === 'anon') return null;
+  const direct = await getSubscription(env, product, quotaId);
+  if (direct) return direct;
+  // Bundle grants access to all three flagships.
+  const bundle = await getSubscription(env, 'bundle', quotaId);
+  if (bundle && (product === 'acronous_ai' || product === 'navigwiz' || product === 'equyvo')) return bundle;
+  if (product === 'acronous_ai' && await isProUser(env, quotaId)) return { plan: 'pro_monthly', legacy: true, until: 0 };
+  return null;
+}
+
+// API credits: credits:<quotaId> -> "1234" (integer string, 12-month TTL).
+async function getApiCredits(env, quotaId) {
+  if (!env.USER_MEMORY || !quotaId || quotaId === 'anon') return 0;
+  try {
+    const raw = await env.USER_MEMORY.get(`credits:${quotaId}`);
+    return raw ? (parseInt(raw, 10) || 0) : 0;
+  } catch { return 0; }
+}
+
+async function addApiCredits(env, quotaId, delta) {
+  const cur = await getApiCredits(env, quotaId);
+  const next = Math.max(0, cur + delta);
+  await env.USER_MEMORY.put(`credits:${quotaId}`, String(next), { expirationTtl: 365 * 86400 });
+  return next;
+}
+
+// Grants a purchased plan: writes sub:<product> (+ bundle fan-out) and any
+// included API credits. TTL 45 days covers 30-day plan + grace.
+async function grantPlanToUser(env, quotaId, planId, paymentId) {
+  const entry = BILLING_CATALOG[planId];
+  if (!entry) return null;
+  const until = Date.now() + (entry.days || 30) * 86400000;
+  const ttl = 45 * 86400;
+  const record = { until, plan: planId, payment_id: paymentId || '', ts: Date.now() };
+  await env.USER_MEMORY.put(`sub:${entry.product}:${quotaId}`, JSON.stringify(record), { expirationTtl: ttl });
+  if (planId === 'acronous_one' && Array.isArray(entry.grants)) {
+    for (const g of entry.grants) {
+      const ge = BILLING_CATALOG[g];
+      if (!ge) continue;
+      await env.USER_MEMORY.put(`sub:${ge.product}:${quotaId}`,
+        JSON.stringify({ until, plan: g, via: 'acronous_one', ts: Date.now() }), { expirationTtl: ttl });
+    }
+  }
+  if (planId === 'pro_monthly' || entry.legacy) {
+    await env.USER_MEMORY.put(`pro:${quotaId}`,
+      JSON.stringify({ until, plan: 'pro_monthly', payment_id: paymentId || '', ts: Date.now() }), { expirationTtl: ttl });
+  } else if (entry.product === 'acronous_ai' && entry.kind === 'subscription') {
+    // New AI tiers also flip the legacy pro flag so GPU fast-path + quota
+    // bypass keep working without touching the hot path.
+    await env.USER_MEMORY.put(`pro:${quotaId}`,
+      JSON.stringify({ until, plan: planId, payment_id: paymentId || '', ts: Date.now() }), { expirationTtl: ttl });
+  }
+  let credits = 0;
+  if (entry.api_credits) credits = await addApiCredits(env, quotaId, entry.api_credits);
+  if (entry.kind === 'credits' && entry.credits) credits = await addApiCredits(env, quotaId, entry.credits);
+  return { until, credits };
+}
+
+async function getUsageCount(env, quotaId, kind) {
+  if (!env.USER_MEMORY) return 0;
+  try {
+    const raw = await env.USER_MEMORY.get(`usage:${dayStamp()}:${kind}:${quotaId}`);
+    return raw ? (parseInt(raw, 10) || 0) : 0;
+  } catch { return 0; }
+}
+
+// Returns {allowed, used, limit, pro}. Increment is fire-and-forget via
+// ctx.waitUntil so the hot path pays 1 KV read, never a write round-trip.
+// API-key requests (api.acronous.com platform) bypass the free daily quota
+// and instead spend prepaid credits: chat 1, image 20, video 50.
+const API_CREDIT_COST = { chat: 1, image: 20, video: 50 };
+
+async function resolveApiKeyQuota(env, request) {
+  try {
+    const hdr = request.headers.get('X-Api-Key') || '';
+    const auth = request.headers.get('Authorization') || '';
+    let key = hdr.trim();
+    if (!key) {
+      const m = auth.match(/^Bearer\s+(ak_[A-Za-z0-9.]+)\s*$/);
+      if (m && m[1].startsWith('ak_')) key = m[1];
+    }
+    if (!key || !key.startsWith('ak_')) return null;
+    const keyId = key.split('.')[0];
+    if (!keyId || !env.USER_MEMORY) return null;
+    const raw = await env.USER_MEMORY.get(`api_key:${keyId}`);
+    if (!raw) return null;
+    const rec = JSON.parse(raw);
+    if (!rec?.quotaId || !rec?.hash) return null;
+    const expect = await hmacSha256Hex('acronous-api-key', key);
+    if (expect !== rec.hash) return null;
+    return { quotaId: rec.quotaId, keyId };
+  } catch { return null; }
+}
+
+async function checkQuota(env, ctx, kind) {
+  const quotaId = env._quotaId || 'anon';
+  // API-key path: spend prepaid credits, no daily caps.
+  if (env._apiKeyId && quotaId.startsWith('u:')) {
+    const cost = API_CREDIT_COST[kind] || 1;
+    try {
+      const raw = env.USER_MEMORY ? await env.USER_MEMORY.get(`credits:${quotaId}`) : null;
+      const bal = raw ? (parseInt(raw, 10) || 0) : 0;
+      if (bal < cost) return { allowed: false, used: bal, limit: cost, pro: false, api_credits: true };
+      if (env.USER_MEMORY && ctx && ctx.waitUntil) {
+        ctx.waitUntil(env.USER_MEMORY.put(`credits:${quotaId}`, String(bal - cost), { expirationTtl: 365 * 86400 }));
+      }
+      return { allowed: true, used: cost, limit: -1, pro: true, api_credits: true };
+    } catch {}
+    return { allowed: false, used: 0, limit: cost, pro: false, api_credits: true };
+  }
+  const limit = quotaLimit(env, kind);
+  try {
+    if (await isProUser(env, quotaId)) return { allowed: true, used: 0, limit: -1, pro: true };
+  } catch {}
+  const used = await getUsageCount(env, quotaId, kind);
+  if (used >= limit) return { allowed: false, used, limit, pro: false };
+  try {
+    if (env.USER_MEMORY && ctx && ctx.waitUntil) {
+      ctx.waitUntil(env.USER_MEMORY.put(
+        `usage:${dayStamp()}:${kind}:${quotaId}`, String(used + 1), { expirationTtl: 259200 }));
+    }
+  } catch {}
+  return { allowed: true, used: used + 1, limit, pro: false };
+}
+
+function paywallResponse(env, kind, used, limit) {
+  const unit = kind === 'chat' ? 'messages' : kind === 'video' ? 'videos' : 'images';
+  if (kind && env && env._apiKeyId) {
+    return jsonOk({
+      response: `Out of API credits (need ${limit}, balance ${used}). Top up at https://acronous.com/api.html — packs from ₹99 via Razorpay (UPI/cards/international).`,
+      type: 'paywall', error: 'out_of_credits', kind, used, limit, api_credits: true,
+    }, 402);
+  }
+  const price = Math.round(billingAmountPaise(env) / 100);
+  return jsonOk({
+    response: `You've used all ${limit} free ${unit} for today. Go Plus (₹449/month) for higher limits, or Pro (₹999) / Ultra (₹2499) for maximum capacity — see https://acronous.com/pricing.html. Legacy Pro (₹${price}/month) still works.`,
+    type: 'paywall',
+    error: 'quota_exceeded',
+    kind, used, limit,
+    plan: 'ai_plus_monthly',
+    price_inr: 449,
+  }, 402);
+}
+
+function razorpayAuth(env) {
+  const id = (env.RAZORPAY_KEY_ID || '').trim();
+  const secret = (env.RAZORPAY_KEY_SECRET || '').trim();
+  if (!id || !secret) return null;
+  return { id, secret, headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + btoa(`${id}:${secret}`) } };
+}
+
+async function hmacSha256Hex(secret, text) {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ── File generation (dependency-free) ──
@@ -4642,18 +5064,14 @@ async function generateGreeting(message, env, location) {
   const sysMsg = `You are Acronous AI, created by Acronous. Respond to this greeting naturally and warmly in 1-2 sentences.${locContext}${location ? ` If the greeting references time of day or location, you may acknowledge it (e.g., "Good morning from ${location}!" or similar) — but only if natural. Never mention the location unprompted if the user just said "hi".` : ''} NEVER say "ChatGPT", "GPT", "OpenAI", "Gemini", "Claude", or any model name. NEVER reveal model names, providers, or backend details. Never say 'As an AI'. Never use pre-written templates — generate a fresh, natural response each time.`;
   const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: message }];
 
-  // Run LLM — Ollama (primary), Workers AI (fallback). No rate-limited providers.
-  const promises = [];
+  // Single self-hosted Ollama call — tryWorkersAIChat is the same backend,
+  // racing both doubles CPU load for zero benefit.
   if (env.OLLAMA_BASE_URL) {
-    promises.push(callOllama(msgs, env));
+    try {
+      const result = await callOllama(msgs, env);
+      if (result && result.trim()) return result.trim();
+    } catch {}
   }
-  {
-    promises.push(tryWorkersAIChat(msgs, env));
-  }
-  try {
-    const result = await raceLLMs(promises);
-    if (result && result.trim()) return result.trim();
-  } catch {}
 
   // All providers failed — return error, never hardcoded text
   return null;
@@ -4942,6 +5360,24 @@ function isSimpleFactual(message) {
   return patterns.some(p => p.test(m));
 }
 
+// Time-sensitive queries MUST be answered from live web data, never from
+// memory: office-holders, latest versions/releases, prices, scores, weather,
+// elections, current events. Used to force web-data-first prompting.
+function isTimeSensitive(message) {
+  const m = String(message || '').toLowerCase();
+  return /\b(who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)|latest|newest|most\s+recent|current\s+(?:version|release|model|price|score|news|cm|pm|president|minister|champion|winner)|what(?:'s| is)\s+(?:the\s+)?(?:latest|current|newest)|which\s+(?:is\s+)?(?:the\s+)?(?:latest|current)|version(?:\s+of|\s+is|\s*:|\s*\?)|release\s+date|election\s+(?:result|winner|20\d\d)|live\s+(?:score|price)|stock\s+price|score\s+(?:of|for)|weather\s+(?:in|for|at|today)|who\s+(?:won|is\s+the\s+champion))\b/i.test(m);
+}
+
+// Reversed role queries: "Odisha CM", "India PM", "who is Odisha CM".
+// Guards kill time-expressions ("5 pm") and greetings ("good pm" ell accepted
+// only when clearly a place QUESTION — location must be alpha, >=3 chars).
+function isReversedRoleQuery(message) {
+  const rev = String(message || '').match(/^(?:who\s+is\s+(?:the\s+)?)?([A-Za-z][A-Za-z\s.'-]{2,60}?)\s+\b(cm|pm|chief minister|prime minister|president|governor|mayor)\b\s*\??$/i);
+  if (!rev || /\d/.test(rev[1])) return false;
+  if (/^(good|hi|hello|hey|please|thanks|thank you|today|tonight|tomorrow|message|mail)\b/i.test(rev[1].trim())) return false;
+  return true;
+}
+
 // Enhanced system prompt — concise to fit Ollama's context window.
 // Date-only timestamp (no time) so the prompt stays byte-identical all day,
 // letting Ollama's KV prompt cache serve repeat requests instead of re-prefilling.
@@ -5028,7 +5464,8 @@ function formatMemoryForPrompt(memory) {
 // separate dynamic block placed AFTER the (stable) history instead.
 function buildEnhancedSystemPrompt(tz, location, webContext) {
     return `You are Acronous AI, created by Acronous.
-- Never reveal providers/backend. Answer directly and confidently — substance first, no preamble, never restate the question.
+- Never reveal OUR backend (Ollama, Qwen, Cloudflare, search stack, image service). EXCEPTION: when the user explicitly asks about a public third-party model/company (e.g. "latest GPT version"), name it factually in third person — never claim to be it, never change its name or version number.
+- Answer directly and confidently — substance first, no preamble, never restate the question.
 - Complete answers only: never stop mid-sentence, never truncate. Give generous, full-depth answers.
 - Code: complete runnable code in fenced blocks with language tags.
 - Never say "I don't know" / "I can't" / "as an AI"; never apologize; no canned replies.
@@ -5043,18 +5480,30 @@ function buildEnhancedSystemPrompt(tz, location, webContext) {
 // stable prefix (base system + prior turns) so the KV cache stays warm.
 function buildDynamicContextBlock(tz, location, webData, userMemory) {
   const parts = [];
-  const now = new Date();
-  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-  const dayName = days[now.getUTCDay()];
-  const monthName = months[now.getUTCMonth()];
-  const dateStr = `${dayName}, ${monthName} ${now.getUTCDate()}, ${now.getUTCFullYear()}`;
-  const hours = now.getUTCHours();
-  const minutes = String(now.getUTCMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  const h12 = hours % 12 || 12;
-  const timeStr = `${h12}:${minutes} ${ampm} UTC`;
-  parts.push(`IMPORTANT — Current date and time: ${dateStr}, ${timeStr}. ALWAYS use this CURRENT date/time for ANY time-related question. Never give outdated or stale information when current data is available. Web search results are LIVE and CURRENT — use them as primary source.`);
+  // Prefer the user's IANA timezone for the date/time line so answers are
+  // place-aware (festivals, local time, "today" etc.). Fall back to UTC.
+  let dateTimeLine = null;
+  try {
+    if (tz) {
+      const local = formatLocalTime(tz);
+      if (local) dateTimeLine = `${local} (${tz})`;
+    }
+  } catch {}
+  if (!dateTimeLine) {
+    const now = new Date();
+    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    const dayName = days[now.getUTCDay()];
+    const monthName = months[now.getUTCMonth()];
+    const dateStr = `${dayName}, ${monthName} ${now.getUTCDate()}, ${now.getUTCFullYear()}`;
+    const hours = now.getUTCHours();
+    const minutes = String(now.getUTCMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const h12 = hours % 12 || 12;
+    const timeStr = `${h12}:${minutes} ${ampm} UTC`;
+    dateTimeLine = `${dateStr}, ${timeStr}`;
+  }
+  parts.push(`IMPORTANT — Current date and time: ${dateTimeLine}. TODAY IS ${dateTimeLine}. ALWAYS use this CURRENT date/time for ANY time-related question (who holds a position NOW, current events, prices, weather, scores). Never give outdated or stale information when current data is available. Web search results are LIVE and CURRENT — use them as primary source, NEVER answer time-sensitive questions from memory alone.`);
   if (location) parts.push(`User location: ${location}. Use this for location-aware answers (weather, local info, directions).`);
   if (webData) parts.push('Web search results are attached to the user message — answer from them directly, using the MOST RECENT information.');
   const mem = formatMemoryForPrompt(userMemory);
@@ -5125,6 +5574,265 @@ export default {
       catch { return new Response('Auth proxy error', { status: 502 }); }
     }
 
+    // Per-request identity for metering + GPU gating. Costs 1 KV read on
+    // non-Pro requests (cached on env for the rest of this request). Never
+    // throws — failure just means "treat as free user".
+    env._quotaId = quotaIdFromRequest(request);
+    // API-key auth (api.acronous.com platform): X-Api-Key header or
+    // `Authorization: Bearer ak_...` overrides JWT identity.
+    env._apiKeyId = null;
+    try {
+      const resolved = await resolveApiKeyQuota(env, request);
+      if (resolved) {
+        env._quotaId = resolved.quotaId;
+        env._apiKeyId = resolved.keyId;
+      }
+    } catch {}
+    try { env._isPro = await isProUser(env, env._quotaId); }
+    catch { env._isPro = false; }
+    // API developers with a positive credit balance get Pro-quality routing.
+    if (env._apiKeyId && !env._isPro) {
+      try { if ((await getApiCredits(env, env._quotaId)) > 0) env._isPro = true; } catch {}
+    }
+
+    // ── Billing (Razorpay, multi-product) ─────────────────────────────────
+    // Single centralized billing for the whole ecosystem: Acronous AI tiers,
+    // Navigwiz AI tiers, Equyvo tiers, Acronous One bundle, API credit packs.
+    // Secret key NEVER leaves the worker. Clients receive only key_id+order_id.
+    if (path === '/v1/billing/status' && request.method === 'GET') {
+      try {
+        const quotaId = env._quotaId || 'anon';
+        const pro = !!env._isPro;
+        let proUntil = 0;
+        if (pro) {
+          try { proUntil = JSON.parse(await env.USER_MEMORY.get(`pro:${quotaId}`))?.until || 0; } catch {}
+        }
+        const [chatUsed, imageUsed, videoUsed] = await Promise.all([
+          getUsageCount(env, quotaId, 'chat'),
+          getUsageCount(env, quotaId, 'image'),
+          getUsageCount(env, quotaId, 'video'),
+        ]);
+        const reqProduct = String(url.searchParams.get('product') || '').toLowerCase();
+        const subs = {};
+        if (quotaId.startsWith('u:')) {
+          for (const p of ['acronous_ai', 'navigwiz', 'equyvo', 'bundle']) {
+            try {
+              const s = await getSubscription(env, p, quotaId);
+              if (s) subs[p] = s;
+            } catch {}
+          }
+          // Legacy flag surfaces as acronous_ai access.
+          if (!subs.acronous_ai && pro) subs.acronous_ai = { plan: 'pro_monthly', legacy: true, until: proUntil };
+        }
+        const credits = quotaId.startsWith('u:') ? await getApiCredits(env, quotaId) : 0;
+        const out = {
+          pro, pro_until: proUntil,
+          usage: {
+            chat: { used: chatUsed, limit: pro ? -1 : quotaLimit(env, 'chat') },
+            image: { used: imageUsed, limit: pro ? -1 : quotaLimit(env, 'image') },
+            video: { used: videoUsed, limit: pro ? -1 : quotaLimit(env, 'video') },
+          },
+          subscriptions: subs,
+          api_credits: credits,
+          plans: publicCatalog(env),
+        };
+        if (reqProduct) {
+          out.access = subs[reqProduct] || null;
+          if (reqProduct === 'acronous_ai' && !out.access && pro) {
+            out.access = { plan: 'pro_monthly', legacy: true, until: proUntil };
+          }
+        }
+        return jsonOk(out);
+      } catch (e) {
+        console.error('[/v1/billing/status] error:', e && e.message);
+        return jsonError('Could not load billing status.');
+      }
+    }
+
+    if (path === '/v1/billing/order' && request.method === 'POST') {
+      try {
+        const quotaId = env._quotaId || 'anon';
+        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to upgrade.', 401);
+        let plan = 'ai_plus_monthly';
+        try { plan = (await request.json())?.plan || 'ai_plus_monthly'; } catch {}
+        if (plan === 'pro_monthly') { /* legacy alias allowed */ }
+        const entry = catalogEntryForPlan(plan, env);
+        if (!entry) return jsonError('Unknown plan.');
+        if (!entry.amount_inr || entry.amount_inr <= 0) return jsonError('That plan is free — no payment needed.');
+        const auth = razorpayAuth(env);
+        if (!auth) return jsonError('Billing is not configured yet. Please try again later.', 503);
+        const amount = Math.round(entry.amount_inr * 100);
+        const receipt = `acro_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`.slice(0, 40);
+        const resp = await fetch('https://api.razorpay.com/v1/orders', {
+          method: 'POST',
+          headers: auth.headers,
+          body: JSON.stringify({ amount, currency: 'INR', receipt, notes: { user: quotaId, plan } }),
+          signal: AbortSignal.timeout(20000),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data?.id) {
+          console.error('[/v1/billing/order] razorpay error:', JSON.stringify(data).slice(0, 300));
+          return jsonError('Could not create a payment order. Please try again.');
+        }
+        return jsonOk({ order_id: data.id, amount: data.amount, currency: data.currency, key_id: auth.id, plan });
+      } catch (e) {
+        console.error('[/v1/billing/order] error:', e && e.message);
+        return jsonError('Could not create a payment order. Please try again.');
+      }
+    }
+
+    if (path === '/v1/billing/verify' && request.method === 'POST') {
+      try {
+        const quotaId = env._quotaId || 'anon';
+        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to upgrade.', 401);
+        const body = await request.json().catch(() => ({}));
+        const orderId = String(body.razorpay_order_id || body.order_id || '');
+        const paymentId = String(body.razorpay_payment_id || body.payment_id || '');
+        const signature = String(body.razorpay_signature || body.signature || '');
+        const plan = String(body.plan || '');
+        if (!orderId || !paymentId || !signature) return jsonOk({ ok: false, error: 'missing_fields' }, 400);
+        const auth = razorpayAuth(env);
+        if (!auth) return jsonError('Billing is not configured yet. Please try again later.', 503);
+        const expected = await hmacSha256Hex(auth.secret, `${orderId}|${paymentId}`);
+        let match = expected.length === signature.length;
+        for (let i = 0; match && i < expected.length; i++) {
+          if (expected[i] !== signature[i]) match = false;
+        }
+        if (!match) return jsonOk({ ok: false, error: 'bad_signature' }, 400);
+        // Resolve plan: explicit field wins; else legacy Pro; order notes are
+        // the source of truth when the client omits it (looked up below).
+        let planId = plan && (BILLING_CATALOG[plan] || plan === 'pro_monthly') ? plan : 'pro_monthly';
+        if (!plan && auth) {
+          try {
+            const or = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
+              headers: auth.headers, signal: AbortSignal.timeout(15000),
+            });
+            const od = await or.json().catch(() => ({}));
+            const notePlan = od?.notes?.plan;
+            if (notePlan && (BILLING_CATALOG[notePlan] || notePlan === 'pro_monthly')) planId = notePlan;
+          } catch {}
+        }
+        if (planId === 'pro_monthly') {
+          const days = BILLING_PLANS.pro_monthly.days;
+          const until = Date.now() + days * 86400000;
+          await env.USER_MEMORY.put(`pro:${quotaId}`,
+            JSON.stringify({ until, plan: 'pro_monthly', payment_id: paymentId, ts: Date.now() }),
+            { expirationTtl: 45 * 86400 });
+          env._isPro = true;
+          return jsonOk({ ok: true, pro: true, pro_until: until, plan: planId });
+        }
+        const granted = await grantPlanToUser(env, quotaId, planId, paymentId);
+        if (!granted) return jsonError('Unknown plan.');
+        try { env._isPro = await isProUser(env, quotaId); } catch {}
+        return jsonOk({ ok: true, pro: env._isPro, pro_until: granted.until, plan: planId, api_credits: granted.credits });
+      } catch (e) {
+        console.error('[/v1/billing/verify] error:', e && e.message);
+        return jsonError('Could not verify payment. Please try again.');
+      }
+    }
+
+    // ── Razorpay webhook (safety net) ─────────────────────────────────────
+    // The normal flow grants on /v1/billing/verify when the user returns from
+    // Checkout. This webhook covers the gap where payment succeeds but the
+    // user closes the browser before verify runs (or the verify call fails).
+    // Configure in Razorpay Dashboard: Settings → Webhooks →
+    //   URL: https://api.acronous.com/v1/billing/webhook
+    //   Events: payment.captured, order.paid
+    //   Secret: `npx wrangler secret put RAZORPAY_WEBHOOK_SECRET`
+    if (path === '/v1/billing/webhook' && request.method === 'POST') {
+      try {
+        const secret = (env.RAZORPAY_WEBHOOK_SECRET || '').trim();
+        if (!secret) return jsonError('Webhook not configured.', 503);
+        const raw = await request.text();
+        const sig = request.headers.get('X-Razorpay-Signature') || '';
+        const expected = await hmacSha256Hex(secret, raw);
+        let match = expected.length === sig.length;
+        for (let i = 0; match && i < expected.length; i++) {
+          if (expected[i] !== sig[i]) match = false;
+        }
+        if (!match) return jsonError('Bad webhook signature.', 401);
+        const evt = JSON.parse(raw);
+        const type = String(evt?.event || '');
+        if (type === 'payment.captured' || type === 'order.paid') {
+          const entity = evt?.payload?.payment?.entity || evt?.payload?.order?.entity || {};
+          const notes = entity?.notes || {};
+          const quotaId = String(notes.user || '');
+          const planId = String(notes.plan || '');
+          const paymentId = String(entity?.id || '').startsWith('pay_')
+            ? String(entity.id) : String(evt?.payload?.payment?.entity?.id || '');
+          if (quotaId.startsWith('u:') && (BILLING_CATALOG[planId] || planId === 'pro_monthly')) {
+            if (planId === 'pro_monthly') {
+              const until = Date.now() + BILLING_PLANS.pro_monthly.days * 86400000;
+              await env.USER_MEMORY.put(`pro:${quotaId}`,
+                JSON.stringify({ until, plan: 'pro_monthly', payment_id: paymentId, via: 'webhook', ts: Date.now() }),
+                { expirationTtl: 45 * 86400 });
+            } else {
+              await grantPlanToUser(env, quotaId, planId, paymentId || 'webhook');
+            }
+          }
+        }
+        return jsonOk({ ok: true });
+      } catch (e) {
+        console.error('[/v1/billing/webhook] error:', e && e.message);
+        return jsonError('Webhook handling failed.');
+      }
+    }
+
+    // ── API platform: keys + developer billing ────────────────────────────
+    // POST /v1/api/keys {name} -> {api_key (shown once), key_id, prefix}
+    // GET  /v1/api/keys -> list (prefixes only, never secrets)
+    // DELETE /v1/api/keys {key_id} -> revoke
+    // GET  /v1/api/usage -> {credits, usage today}
+    if ((path === '/v1/api/keys' && (request.method === 'POST' || request.method === 'GET' || request.method === 'DELETE'))) {
+      try {
+        const quotaId = env._quotaId || 'anon';
+        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to manage API keys.', 401);
+        if (request.method === 'GET') {
+          const idxRaw = await env.USER_MEMORY.get(`api_keys:${quotaId}`).catch(() => null);
+          const idx = idxRaw ? (JSON.parse(idxRaw) || []) : [];
+          return jsonOk({ keys: idx });
+        }
+        if (request.method === 'DELETE') {
+          const b = await request.json().catch(() => ({}));
+          const keyId = String(b.key_id || '');
+          if (!keyId) return jsonError('key_id is required.');
+          const idxRaw = await env.USER_MEMORY.get(`api_keys:${quotaId}`).catch(() => null);
+          const idx = idxRaw ? (JSON.parse(idxRaw) || []) : [];
+          const found = idx.find((k) => k.key_id === keyId);
+          if (!found) return jsonError('Key not found.', 404);
+          await env.USER_MEMORY.delete(`api_key:${keyId}`).catch(() => {});
+          await env.USER_MEMORY.put(`api_keys:${quotaId}`,
+            JSON.stringify(idx.filter((k) => k.key_id !== keyId)));
+          return jsonOk({ ok: true });
+        }
+        const b = await request.json().catch(() => ({}));
+        const name = String(b.name || 'default').slice(0, 60) || 'default';
+        const keyId = `ak_${Date.now().toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`;
+        const secretPart = [...crypto.getRandomValues(new Uint8Array(24))]
+          .map((x) => 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[x % 62]).join('');
+        const apiKey = `${keyId}.${secretPart}`;
+        const hash = await hmacSha256Hex('acronous-api-key', apiKey);
+        await env.USER_MEMORY.put(`api_key:${keyId}`,
+          JSON.stringify({ quotaId, hash, name, created: Date.now() }), { expirationTtl: 365 * 86400 });
+        const idxRaw = await env.USER_MEMORY.get(`api_keys:${quotaId}`).catch(() => null);
+        const idx = idxRaw ? (JSON.parse(idxRaw) || []) : [];
+        idx.push({ key_id: keyId, prefix: apiKey.slice(0, 10) + '…', name, created: Date.now() });
+        await env.USER_MEMORY.put(`api_keys:${quotaId}`, JSON.stringify(idx.slice(-20)));
+        return jsonOk({ api_key: apiKey, key_id: keyId, name, warning: 'Copy this key now — it is never shown again.' });
+      } catch (e) {
+        console.error('[/v1/api/keys] error:', e && e.message);
+        return jsonError('Could not manage API keys.');
+      }
+    }
+
+    if (path === '/v1/api/usage' && request.method === 'GET') {
+      try {
+        const quotaId = env._quotaId || 'anon';
+        if (!quotaId.startsWith('u:')) return jsonError('Please sign in.', 401);
+        return jsonOk({ api_credits: await getApiCredits(env, quotaId), plans: publicCatalog(env) });
+      } catch { return jsonError('Could not load usage.'); }
+    }
+
     if (path === '/v1/chat' && request.method === 'POST') {
       // Hoisted so the catch block can safely reference them (a ReferenceError
       // inside catch would surface as an opaque CF 1101 to the client).
@@ -5138,6 +5846,12 @@ export default {
         const body = await request.json();
         message = safeText(body.message).trim();
         if (!message) return jsonError('Please provide a message.');
+        // Free-tier metering: Pro skips caps; over-quota returns HTTP 402 paywall.
+        try {
+          const _q = await checkQuota(env, ctx, 'chat');
+          if (!_q.allowed) return paywallResponse(env, 'chat', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
         sessionId = safeText(body.session_id, 64).trim() || 'default';
         history = sanitizeHistory(body.messages || []);
         history = trimHistory(history);
@@ -5202,7 +5916,7 @@ export default {
           return jsonOk({ response: BRAND_FOUNDER_SENTENCE, session_id: sessionId, type: 'chat' });
         }
 
-        // IMAGE GENERATION — self-hosted scene engine on Oracle Cloud.
+        // IMAGE GENERATION — self-hosted scene engine on Contabo VPS.
         // Returns the rendered image plus a genuine explanation of what was
         // drawn. No canned declines, no random stock images.
         if (detectImageGenerationIntent(message)) {
@@ -5307,18 +6021,15 @@ export default {
             ...history,
             { role: 'user', content: effectiveMessage }
           ];
-          // Run LLM — rate-limit-free providers first: Workers AI (CF GPU, bundled)
-          // + Ollama (self-hosted, unlimited). Gemini is rate-limited so it is NOT
-          // part of the primary race — only a last-resort retry below.
-          const codePromises = [];
-          codePromises.push(tryWorkersAIChat(codeMsgs, env));
+          // Run LLM — SINGLE self-hosted Ollama call. tryWorkersAIChat is just a
+          // wrapper around callOllama, so racing both doubles CPU load on the
+          // same 4-core box and halves throughput for zero benefit.
           if (env.OLLAMA_BASE_URL) {
-            codePromises.push(callOllama(codeMsgs, env));
+            try {
+              const codeResult = await callOllama(codeMsgs, env);
+              if (codeResult && codeResult.trim()) content = codeResult.trim();
+            } catch {}
           }
-          try {
-            const codeResult = await raceLLMs(codePromises);
-            if (codeResult && codeResult.trim()) content = codeResult.trim();
-          } catch {}
           if (content && content.trim()) {
             content = content.trim();
           } else {
@@ -5374,15 +6085,13 @@ export default {
           if (content) return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
         }
 
-        // PURE PROCESSING: Direct Wikipedia infobox lookup for role queries (fast, no LLM)
+        // PURE PROCESSING: Direct Wikipedia infobox lookup for role queries (fast, no LLM).
+        // Started NOW but awaited AFTER the search phase so both run in parallel
+        // (was sequential: 800ms infobox + 1200ms search = 2s dead time).
         const tSearch0 = Date.now();
-        const roleQueryRe0 = /\b(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|director|leader)\s+(?:of|in)\b/i;
-        const infoboxAnswer = roleQueryRe0.test(message)
-          ? await Promise.race([lookupRoleFromInfobox(message), new Promise((res) => setTimeout(() => res(null), 800))])
-          : null;
-        if (infoboxAnswer) {
-          return jsonOk({ response: cleanResponse(infoboxAnswer), session_id: sessionId, type: 'chat' });
-        }
+        const roleQueryRe0 = /\b(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|director|leader)\s+(?:of|in)\b/i;
+        const wantInfobox0 = roleQueryRe0.test(message) || isReversedRoleQuery(message);
+        const infoboxPromise0 = wantInfobox0 ? lookupRoleFromInfobox(message) : null;
 
         // CRITICAL: Keep total subrequests under 50 (CF Worker limit)
         const searchTasks = [];
@@ -5391,13 +6100,16 @@ export default {
         for (const variation of searchVariations) {
           searchTasks.push(webSearch(variation, env));
         }
-        const wikiTopic = message.replace(/^(who\s+is\s+the\s+current\s+|what\s+is\s+the\s+current\s+|tell\s+me\s+(?:about\s+)?|who\s+is\s+the\s+|what\s+is\s+the\s+|who\s+are\s+the\s+)/i, '').trim();
+        const wikiTopicRaw = message.replace(/^(who\s+(?:is|are|was)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?|tell\s+me\s+(?:about\s+)?|who\s+are\s+(?:the\s+)?)/i, '').trim();
+        const wikiTopic = wikiTopicRaw.replace(/^cm\s+of\b/i, 'Chief Minister of').replace(/^pm\s+of\b/i, 'Prime Minister of');
         searchTasks.push(fetchWikipediaData(wikiTopic));
 
         // Also try role+location-specific Wikipedia search for role queries
-        const roleMatch2 = message.match(/\b(?:who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?)?(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\s+(?:of|in)\s+(.+?)(?:\?|$)/i);
+        const roleMatch2 = message.match(/\b(?:who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?)?(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\s+(?:of|in)\s+(.+?)(?:\?|$)/i);
         if (roleMatch2) {
-          const roleQ = `current ${roleMatch2[1]} of ${roleMatch2[2].replace(/[?.!,]/g, '').trim()}`;
+          const rawRole2 = roleMatch2[1].trim();
+          const expandedRole2 = /^cm$/i.test(rawRole2) ? 'Chief Minister' : /^pm$/i.test(rawRole2) ? 'Prime Minister' : rawRole2;
+          const roleQ = `current ${expandedRole2} of ${roleMatch2[2].replace(/[?.!,]/g, '').trim()}`;
           searchTasks.push(fetchWikipediaData(roleQ));
         }
 
@@ -5405,6 +6117,15 @@ export default {
         const simplifiedQuery = message.replace(/^(who|what|where|when|why|how|which|is|are|was|were|do|does|did|can|could|will|would|the|a|an|of|for|in|at)\b/gi, '').trim();
         if (simplifiedQuery && simplifiedQuery.length > 3) {
           searchTasks.push(webSearchDuckDuckGo(simplifiedQuery));
+        }
+
+        // Infobox was started BEFORE the search tasks above, so its fetches ran
+        // in parallel — check it first for an instant zero-LLM answer.
+        if (infoboxPromise0) {
+          const infoboxAnswer = await Promise.race([infoboxPromise0, new Promise((res) => setTimeout(() => res(null), 800))]);
+          if (infoboxAnswer) {
+            return jsonOk({ response: cleanResponse(infoboxAnswer), session_id: sessionId, type: 'chat' });
+          }
         }
 
         // 1.2s hard cap on the whole search phase — balanced between fresh
@@ -5446,11 +6167,19 @@ export default {
         // Only use LLM when pre-extraction failed (complex queries, opinions, etc.)
         let userMsgContent;
         if (webData) {
-          userMsgContent = `Web search results:\n${webData.substring(0, 900)}\n\nQuestion: ${effectiveMessage}`;
+          userMsgContent = `Web search results:\n${webData.substring(0, 2500)}\n\nQuestion: ${effectiveMessage}`;
+          if (isTimeSensitive(message)) {
+            userMsgContent = `The web search results below are LIVE and CURRENT — they override anything else you know. Answer factual claims ONLY from them. NEVER say "my last update", "training data", "knowledge cutoff", or cite an older year/model/version from memory.\n\n${userMsgContent}`;
+          }
         } else {
           userMsgContent = effectiveMessage;
         }
-        if (isSimpleFactual(message)) {
+        // Concise for lookups: time-sensitive questions (latest version, current
+        // holder, price, score…) need a short exact answer, not an essay —
+        // fewer tokens = far faster on CPU inference. Skipped when the user
+        // explicitly wants depth.
+        const wantsDetail = /\b(detail|detailed|explain|essay|in depth|in-depth|comprehensive|elaborate|step by step|pros and cons|compar)/i.test(message);
+        if (isSimpleFactual(message) || (webData && isTimeSensitive(message) && !wantsDetail)) {
           userMsgContent = `Be concise — answer in 2-4 complete sentences.\n\n${userMsgContent}`;
         }
 
@@ -5468,17 +6197,17 @@ export default {
         // callOllama, so racing both doubles CPU load on the same box and
         // halves throughput for zero benefit.
         if (env.OLLAMA_BASE_URL) {
-          try { content = await callOllama(msgs, env); } catch {}
+          try { const t0 = Date.now(); content = await callOllama(msgs, env); console.error('CHAT-TIMING llmGen1Ms=' + (Date.now() - t0)); } catch {}
         }
         if (!content || !content.trim()) {
           // First attempt failed — try with a simpler prompt and web data directly in user message
           const retryMsgs = [
-            { role: 'system', content: `You are Acronous AI, created by Acronous. Current date: ${formatted}. Answer the user's question directly and confidently. If web search data is provided below, use it. Never say you cannot answer. Never reveal backend details, model names, or provider names.` },
+            { role: 'system', content: `You are Acronous AI, created by Acronous. Current date: ${formatted}. Answer the user's question directly and confidently. If web search data is provided below, use it. Never say you cannot answer. Never reveal OUR backend (Ollama, Qwen, Cloudflare, search stack). If the user asked about a public third-party model/company, name it factually in third person with exact version numbers — never claim to be it, never rename it.` },
             ...history,
             { role: 'user', content: webData ? `Context:\n${webData.substring(0, 1500)}\n\nQuestion: ${effectiveMessage}` : effectiveMessage }
           ];
           if (env.OLLAMA_BASE_URL) {
-            try { content = await callOllama(retryMsgs, env); } catch {}
+            try { const t0 = Date.now(); content = await callOllama(retryMsgs, env); console.error('CHAT-TIMING llmGen2Ms=' + (Date.now() - t0)); } catch {}
           }
         }
 
@@ -5490,7 +6219,7 @@ export default {
             { role: 'user', content: effectiveMessage }
           ];
           if (env.OLLAMA_BASE_URL) {
-            try { content = await callOllama(bareMsgs, env); } catch {}
+            try { const t0 = Date.now(); content = await callOllama(bareMsgs, env); console.error('CHAT-TIMING llmGen3Ms=' + (Date.now() - t0)); } catch {}
           }
         }
         if (content) content = content.trim();
@@ -5498,7 +6227,7 @@ export default {
         // VERIFICATION: If web data is available, check if the LLM answer uses it
         // If the LLM gives a vague/uncertain answer, try direct name extraction from web data
         if (content && webData) {
-          const isVague = /not\s+(?:specified|mentioned|found|available|included|provided|in\s+the|listed)|cannot\s+(?:provide|determine|answer)|no\s+(?:specific|current|clear)\s+information|i\s+(?:do\s+not|don't)\s+(?:have|see|possess|hold|carry|contain)|i\s+(?:do\s+not|don't)\s+(?:have\s+real[- ]time|have\s+access|have\s+the\s+ability|know\s+the\s+current|have\s+the\s+capacity)|suggest\s+(?:some\s+)?(?:possible\s+)?sources|unable\s+to\s+(?:provide|determine|give)|not\s+(?:real[- ]?time|up[\s-]?to[\s-]?date)|recommend\s+(?:checking|visiting|looking)|suggest\s+(?:checking|visiting|looking)|for\s+the\s+most\s+(?:accurate|up[- ]to[- ]date)|contact\s+(?:them|the\s+company|the\s+organization)\s+directly|check\s+(?:their|the)\s+(?:official|website|site)|provided\s+(?:web\s+)?search\s+results?\s+(?:do|does|don't|didn't|couldn't|were|are|have)\s+(?:not|mention|contain|show|include|provide|have)|reputable\s+(?:news|source)|I\s+(?:suggest|recommend)\s+(?:checking|looking|visiting|consulting)\b/i.test(content);
+          const isVague = /not\s+(?:specified|mentioned|found|available|included|provided|in\s+the|listed)|cannot\s+(?:provide|determine|answer)|no\s+(?:specific|current|clear)\s+information|as of my (?:last update|knowledge|training)|my (?:last update|knowledge cutoff|training data)|based on my training|last trained|knowledge cutoff|training data cutoff|i\s+(?:do\s+not|don't)\s+(?:have|see|possess|hold|carry|contain)|i\s+(?:do\s+not|don't)\s+(?:have\s+real[- ]time|have\s+access|have\s+the\s+ability|know\s+the\s+current|have\s+the\s+capacity)|suggest\s+(?:some\s+)?(?:possible\s+)?sources|unable\s+to\s+(?:provide|determine|give)|not\s+(?:real[- ]?time|up[\s-]?to[\s-]?date)|recommend\s+(?:checking|visiting|looking)|suggest\s+(?:checking|visiting|looking)|for\s+the\s+most\s+(?:accurate|up[- ]to[- ]date)|contact\s+(?:them|the\s+company|the\s+organization)\s+directly|check\s+(?:their|the)\s+(?:official|website|site)|provided\s+(?:web\s+)?search\s+results?\s+(?:do|does|don't|didn't|couldn't|were|are|have)\s+(?:not|mention|contain|show|include|provide|have)|reputable\s+(?:news|source)|I\s+(?:suggest|recommend)\s+(?:checking|looking|visiting|consulting)\b/i.test(content);
           const roleMatch = message.match(/\b(mayor|governor|president|prime\s+minister|chief\s+minister|CEO|captain|chairman|director)\b/i);
 
           // For role-based questions: try name extraction, then LLM retry
@@ -5526,44 +6255,57 @@ export default {
               ...history,
               { role: 'user', content: `Context data:\n${webData.substring(0, 1500)}\n\nQuestion: ${message}\n\nAnswer directly using the context data above. Give the best answer you can from this data:` }
             ];
+            const tVague0 = Date.now();
             const retryResult = await callOllama(retryMsgs, env).catch(() => null) || await tryWorkersAIChat(retryMsgs, env).catch(() => null);
+            console.error('CHAT-TIMING llmVagueRetryMs=' + (Date.now() - tVague0));
             if (retryResult && retryResult.trim() && retryResult.trim().length > 15) {
-              const retryVague = /not\s+(?:specified|mentioned|found|available|included|provided|in\s+the|listed)|cannot\s+(?:provide|determine|answer)|no\s+(?:specific|current|clear)\s+information|i\s+(?:do\s+not|don't)\s+(?:have|see|possess|hold|carry|contain)|suggest\s+(?:some\s+)?(?:possible\s+)?sources|recommend\s+(?:checking|visiting)|suggest\s+(?:checking|visiting)|for\s+the\s+most\s+(?:accurate|up[- ]to[- ]date)|contact\s+them\s+directly|check\s+(?:their|the)\s+(?:official|website)|provided\s+(?:web\s+)?search\s+results?\s+(?:do|does|don't|didn't|couldn't|were|are|have)\s+(?:not|mention|contain|show|include|provide|have)|reputable\s+(?:news|source)|I\s+(?:suggest|recommend)\s+(?:checking|looking|visiting|consulting)\b/i.test(retryResult);
+              const retryVague = /not\s+(?:specified|mentioned|found|available|included|provided|in\s+the|listed)|cannot\s+(?:provide|determine|answer)|no\s+(?:specific|current|clear)\s+information|as of my (?:last update|knowledge|training)|my (?:last update|knowledge cutoff|training data)|based on my training|last trained|knowledge cutoff|training data cutoff|i\s+(?:do\s+not|don't)\s+(?:have|see|possess|hold|carry|contain)|suggest\s+(?:some\s+)?(?:possible\s+)?sources|recommend\s+(?:checking|visiting)|suggest\s+(?:checking|visiting)|for\s+the\s+most\s+(?:accurate|up[- ]to[- ]date)|contact\s+them\s+directly|check\s+(?:their|the)\s+(?:official|website)|provided\s+(?:web\s+)?search\s+results?\s+(?:do|does|don't|didn't|couldn't|were|are|have)\s+(?:not|mention|contain|show|include|provide|have)|reputable\s+(?:news|source)|I\s+(?:suggest|recommend)\s+(?:checking|looking|visiting|consulting)\b/i.test(retryResult);
               if (!retryVague) content = retryResult.trim();
             }
           }
         }
 
-        // SAFETY NET: Catch identity leaks AND backend detail leaks
+        // SAFETY NET: Catch identity leaks AND backend detail leaks.
+        // First-person identity claims are ALWAYS fixed. Bare public
+        // third-party names are fixed ONLY when the user did not raise them
+        // as the topic (else "GPT-5.6" becomes "Acronous AI.6").
         if (content) {
+          const allowTP = userAskedAboutThirdParty(message);
           const identityLeakPatterns = [
             /\b(?:I'm|I am|I'm a|I am a|this is|here's|it's)\s+(?:ChatGPT|Chat\s*GPT|GPT[- ]?[34]|GPT|OpenAI)\b/i,
-            /\bChatGPT\b/i,
-            /\bGPT[- ]?[34]\b/i,
-            /\bOpenAI\b/i,
-            /\bGemini\b(?!\s+(?:AI|Pro|Flash|code))/i,
-            /\bClaude\b/i,
-            /\bLlama\b/i,
             // Backend detail leaks
             /\b(?:Groq|Together AI|Anthropic|Cloudflare Workers|Workers AI)\b/i,
             /\b(?:DuckDuckGo|SearXNG|Bing|Mojeek|Wikipedia API|Google News RSS)\b/i,
-            /\b(?:Oracle Cloud|Stable Diffusion|FLUX|LLaVA)\b/i,
+            /\b(?:Contabo VPS|Stable Diffusion|FLUX|LLaVA)\b/i,
             /\b(?:my training data|my knowledge cutoff|training data cutoff|knowledge cutoff date|last updated|last trained)\b/i,
             /\b(?:I searched|I searched the web|I found the|according to search|based on search|from the search results|the search results show|the web results show)\b/i,
             /\b(?:API key|api key|API endpoint|backend server|model name|provider name|wrangler|deploy)\b/i,
           ];
+          if (!allowTP) {
+            identityLeakPatterns.push(
+              /\bChatGPT\b/i,
+              /\bGPT[- ]?[34]\b/i,
+              /\bOpenAI\b/i,
+              /\bGemini\b(?!\s+(?:AI|Pro|Flash|code))/i,
+              /\bClaude\b/i,
+              /\bLlama\b/i,
+            );
+          }
           for (const pat of identityLeakPatterns) {
             if (pat.test(content)) {
               // Replace any identity leak with Acronous identity
               content = content
-                .replace(/\b(?:I'm|I am)\s+(?:ChatGPT|Chat\s*GPT|GPT[- ]?[34]|GPT|OpenAI|Gemini|Claude|Llama|a\s+large\s+language\s+model|an?\s+AI)\b/gi, 'I am Acronous AI')
-                .replace(/\bChatGPT\b/gi, 'Acronous AI')
-                .replace(/\bGPT[- ]?[34]\b/gi, 'Acronous AI')
-                .replace(/\bOpenAI\b/gi, 'Acronous')
-                .replace(/\b(?:Google's|Anthropic's|Meta's)\s+(?:Gemini|Claude|Llama)\b/gi, 'Acronous AI')
-                .replace(/\bGemini\b(?!\s+(?:AI|Pro|Flash|code))/gi, 'Acronous AI')
-                .replace(/\bClaude\b/gi, 'Acronous AI')
-                .replace(/\bLlama\b/gi, 'Acronous AI');
+                .replace(/\b(?:I'm|I am)\s+(?:ChatGPT|Chat\s*GPT|GPT[- ]?[34]|GPT|OpenAI|Gemini|Claude|Llama|a\s+large\s+language\s+model|an?\s+AI)\b/gi, 'I am Acronous AI');
+              if (!allowTP) {
+                content = content
+                  .replace(/\bChatGPT\b/gi, 'Acronous AI')
+                  .replace(/\bGPT[- ]?[34]\b/gi, 'Acronous AI')
+                  .replace(/\bOpenAI\b/gi, 'Acronous')
+                  .replace(/\b(?:Google's|Anthropic's|Meta's)\s+(?:Gemini|Claude|Llama)\b/gi, 'Acronous AI')
+                  .replace(/\bGemini\b(?!\s+(?:AI|Pro|Flash|code))/gi, 'Acronous AI')
+                  .replace(/\bClaude\b/gi, 'Acronous AI')
+                  .replace(/\bLlama\b/gi, 'Acronous AI');
+              }
               // If the response was mostly just the leaked identity, replace entirely
               if (content.length < 80 && /\b(ChatGPT|GPT|OpenAI|Gemini|Claude|Llama)\b/i.test(content)) {
                 content = `${BRAND_ASSISTANT_LINE} How can I help you?`;
@@ -5575,13 +6317,22 @@ export default {
         // FINAL BACKEND DETAIL STRIP: Remove any remaining infrastructure/provider mentions
         if (content) {
           content = content
-            .replace(/\b(?:Groq|Together AI|Anthropic|Cloudflare Workers|Workers AI|DuckDuckGo|SearXNG|Bing|Mojeek|Oracle Cloud|wrangler|OLLAMA|ollama)\b/gi, '')
+            .replace(/\b(?:Groq|Together AI|Cloudflare Workers|Workers AI|DuckDuckGo|SearXNG|Bing|Mojeek|Contabo VPS|wrangler|OLLAMA|ollama)\b/gi, '')
             .replace(/\b(?:my training data|my knowledge cutoff|training data|knowledge cutoff|last updated|last trained|I searched the web|I found from|according to search results|based on web search|from the search results|the search results show)\b/gi, '')
             .replace(/\b(?:API key|api key|API endpoint|backend|infrastructure|model name|provider name|endpoint|deploy)\b/gi, '')
-            .replace(/\b(?:qwen|llama|deepseek|nemotron|gemini|mistral|cohere|llava|flux|stable diffusion)\b/gi, '')
+            // Own model-family names ALWAYS stripped; public third-party names
+            // (gemini/mistral/cohere) ONLY when the user did not raise them as
+            // the topic — otherwise factual answers get words deleted.
+            .replace(/\b(?:qwen|llama|deepseek|nemotron|llava|flux|stable diffusion)\b/gi, '');
+          if (!userAskedAboutThirdParty(message)) {
+            content = content.replace(/\b(?:gemini|mistral|cohere|anthropic)\b/gi, '');
+          }
+          content = content
             // Strip search result leakage — LLM must never reveal it searched
             .replace(/(?:the\s+)?(?:provided\s+)?(?:web\s+)?search\s+results?\s+(?:do\s+not|does\s+not|don't|doesn't|didn't|could\s+not|were\s+unable|are\s+unable|have\s+not)\s+(?:mention|contain|include|show|indicate|provide|reveal|have|cover|address|discuss|note|reference|reflect|capture|list|feature|display|offer)\b/gi, '')
             .replace(/(?:the\s+)?(?:provided\s+)?(?:web\s+)?search\s+results?\s+(?:only|just|merely|simply)\s+(?:mention|contain|include|show|provide|have|cover|reference)\b/gi, '')
+            .replace(/\bas of the (?:provided\s+|web\s+)?search results provided\b/gi, '')
+            .replace(/\bmentioned in the (?:provided\s+|web\s+)?search results\b/gi, '')
             .replace(/I\s+(?:suggest|recommend|advise|encourage)\s+(?:that\s+you\s+)?(?:checking|looking|visiting|browsing|searching|consulting|contacting)\b/gi, '')
             .replace(/(?:for|get)\s+the\s+most\s+(?:accurate|up[- ]to[- ]date|current|recent|latest|reliable|timely)\b[^\n]*/gi, '')
             .replace(/reputable\s+(?:news|source|media)\b[^\n]*/gi, '')
@@ -5710,6 +6461,12 @@ export default {
         const body = await request.json();
         message = safeText(body.message).trim();
         if (!message) return jsonError('Please provide a message.');
+        // Free-tier metering: Pro skips caps; over-quota returns HTTP 402 paywall.
+        try {
+          const _q = await checkQuota(env, ctx, 'chat');
+          if (!_q.allowed) return paywallResponse(env, 'chat', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
         sessionId = safeText(body.session_id, 64).trim() || 'default';
         history = sanitizeHistory(body.messages || []);
         history = trimHistory(history);
@@ -5947,28 +6704,9 @@ export default {
           ];
           const sseChunk = (text) => `data: ${JSON.stringify({ content: text })}\n\n`;
 
-          // PRIMARY & ONLY: Ollama coder model (self-hosted, unlimited) —
-          // streamed; accepted when the reply contains code.
-          {
-            try {
-              const wai = await tryWorkersAIChat(codeMsgs, env);
-              if (wai && wai.trim() && (/```/.test(wai) || hasCodeOutsideFences(wai))) {
-                let out = wai.trim();
-                if (hasCodeOutsideFences(out)) out = fixCodeBlockPlacement(out);
-                out = reformatCodeBlocks(out);
-                const stream = new ReadableStream({
-                  start(controller) {
-                    const encoder = new TextEncoder();
-                    controller.enqueue(encoder.encode(sseChunk(out)));
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, session_id: sessionId, type: 'chat' })}\n\n`));
-                    controller.close();
-                  }
-                });
-                return new Response(stream, { headers: sseHeaders });
-              }
-            } catch {}
-          }
-
+          // Stream DIRECTLY from Ollama — do NOT do a blocking non-streaming
+          // call first. The old pre-check (tryWorkersAIChat) waited for a FULL
+          // generation before streaming started, adding 10-60s of dead time.
           // SECONDARY: stream from Ollama coder model (self-hosted, unlimited,
           // higher quality for complex code) — trimmed context keeps prefill fast.
           if (env.OLLAMA_BASE_URL) {
@@ -6006,7 +6744,7 @@ export default {
                             if (delta.includes('</think>')) { inThinking = false; continue; }
                             if (!inThinking && !delta.includes('<think>')) {
                               streamedAny = true;
-                              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: sanitizeForClient(delta) })}\n\n`));
+                              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: redactProviderMentions(delta, message) })}\n\n`));
                             }
                           } catch {}
                         }
@@ -6024,18 +6762,13 @@ export default {
               }
             } catch {}
           }
-          // FALLBACK (no Ollama / fetch failed): race non-streaming providers
+          // FALLBACK (no Ollama / fetch failed): single self-hosted call.
+          // tryWorkersAIChat is just a callOllama wrapper — racing both
+          // doubles CPU load on the same box for zero benefit.
           let codeContent = null;
-          const codePromises = [];
-          {
-            codePromises.push(tryWorkersAIChat(codeMsgs, env));
-          }
           if (env.OLLAMA_BASE_URL) {
-            codePromises.push(callOllama(codeMsgs, env));
-          }
-          if (codePromises.length > 0) {
             try {
-              const codeResult = await raceLLMs(codePromises);
+              const codeResult = await callOllama(codeMsgs, env);
               if (codeResult && codeResult.trim()) codeContent = codeResult.trim();
             } catch {}
           }
@@ -6068,13 +6801,16 @@ export default {
           for (const variation of searchVariations) {
             searchTasks.push(webSearch(variation, env));
           }
-          const wikiTopic = message.replace(/^(who\s+is\s+the\s+current\s+|what\s+is\s+the\s+current\s+|tell\s+me\s+(?:about\s+)?|who\s+is\s+the\s+|what\s+is\s+the\s+|who\s+are\s+the\s+)/i, '').trim();
+          const wikiTopicRaw = message.replace(/^(who\s+(?:is|are|was)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?|tell\s+me\s+(?:about\s+)?|who\s+are\s+(?:the\s+)?)/i, '').trim();
+          const wikiTopic = wikiTopicRaw.replace(/^cm\s+of\b/i, 'Chief Minister of').replace(/^pm\s+of\b/i, 'Prime Minister of');
           searchTasks.push(fetchWikipediaData(wikiTopic));
 
           // Also try role+location-specific Wikipedia search for role queries
-          const roleMatch = message.match(/\b(?:who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?)?(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\s+(?:of|in)\s+(.+?)(?:\?|$)/i);
+          const roleMatch = message.match(/\b(?:who\s+(?:is|are)\s+(?:the\s+)?(?:current\s+)?|what\s+is\s+(?:the\s+)?(?:current\s+)?)?(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|minister|director|head|leader)\s+(?:of|in)\s+(.+?)(?:\?|$)/i);
           if (roleMatch) {
-            const roleQ = `current ${roleMatch[1]} of ${roleMatch[2].replace(/[?.!,]/g, '').trim()}`;
+            const rawRole = roleMatch[1].trim();
+            const expandedRole = /^cm$/i.test(rawRole) ? 'Chief Minister' : /^pm$/i.test(rawRole) ? 'Prime Minister' : rawRole;
+            const roleQ = `current ${expandedRole} of ${roleMatch[2].replace(/[?.!,]/g, '').trim()}`;
             searchTasks.push(fetchWikipediaData(roleQ));
           }
 
@@ -6105,8 +6841,8 @@ export default {
         // Check infobox result — ONLY for role queries ("who is the PM of X").
         // For everything else this lookup is irrelevant; awaiting it added up
         // to 1.5s of dead time before the LLM could start on every message.
-        const roleQueryRe = /\b(mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|director|leader)\s+(?:of|in)\b/i;
-        if (roleQueryRe.test(message)) {
+        const roleQueryRe = /\b(cm|pm|mayor|governor|president|prime\s+minister|chief\s+minister|ceo|chairman|director|leader)\s+(?:of|in)\b/i;
+        if (roleQueryRe.test(message) || isReversedRoleQuery(message)) {
           infoboxAnswer = await Promise.race([infoboxPromise, new Promise((res) => setTimeout(() => res(null), 800))]);
         }
         console.error('CHAT-TIMING postInfoboxMs=' + (Date.now() - tSearch0));
@@ -6145,11 +6881,19 @@ export default {
         // Only use LLM when pre-extraction failed (complex queries, opinions, etc.)
         let userMsgContent;
         if (webData) {
-          userMsgContent = `Web search results:\n${webData.substring(0, 900)}\n\nQuestion: ${effectiveMessage}`;
+          userMsgContent = `Web search results:\n${webData.substring(0, 2500)}\n\nQuestion: ${effectiveMessage}`;
+          if (isTimeSensitive(message)) {
+            userMsgContent = `The web search results below are LIVE and CURRENT — they override anything else you know. Answer factual claims ONLY from them. NEVER say "my last update", "training data", "knowledge cutoff", or cite an older year/model/version from memory.\n\n${userMsgContent}`;
+          }
         } else {
           userMsgContent = effectiveMessage;
         }
-        if (isSimpleFactual(message)) {
+        // Concise for lookups: time-sensitive questions (latest version, current
+        // holder, price, score…) need a short exact answer, not an essay —
+        // fewer tokens = far faster on CPU inference. Skipped when the user
+        // explicitly wants depth.
+        const wantsDetail = /\b(detail|detailed|explain|essay|in depth|in-depth|comprehensive|elaborate|step by step|pros and cons|compar)/i.test(message);
+        if (isSimpleFactual(message) || (webData && isTimeSensitive(message) && !wantsDetail)) {
           userMsgContent = `Be concise — answer in 2-4 complete sentences.\n\n${userMsgContent}`;
         }
 
@@ -6178,7 +6922,7 @@ export default {
           return new Response(stream, { headers: sseHeaders });
         }
 
-        // PRIMARY & ONLY: Ollama streaming on Oracle Cloud (self-hosted,
+        // PRIMARY & ONLY: Ollama streaming on Contabo VPS (self-hosted,
         // unlimited). Fully self-hosted policy — no quota-limited services.
         if (env.OLLAMA_BASE_URL) {
           try {
@@ -6226,7 +6970,7 @@ export default {
                           if (delta.includes('</think>')) { inThinking = false; continue; }
                             if (!inThinking && !delta.includes('<think>')) {
                               fullReply += delta;
-                              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: sanitizeForClient(delta) })}\n\n`));
+                              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: redactProviderMentions(delta, message) })}\n\n`));
                             }
                         } catch {}
                       }
@@ -6490,9 +7234,15 @@ export default {
         if (isHarmfulEditRequest(prompt)) {
           return jsonOk({ response: "I can't create that — it goes against my content guidelines. Try describing something else.", image_data: null, type: 'chat' });
         }
+        // Free-tier metering (images are the most expensive unit).
+        try {
+          const _q = await checkQuota(env, ctx, 'image');
+          if (!_q.allowed) return paywallResponse(env, 'image', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
 
         let enhancedPrompt = prompt;
-        // Self-hosted scene engine on Oracle Cloud generates the image.
+        // Self-hosted scene engine on Contabo VPS generates the image.
         let gen = await generateImageForChat(prompt, env);
         if (!gen) {
           await new Promise((r) => setTimeout(r, 400));
@@ -6529,6 +7279,12 @@ export default {
 
         if (!file) return jsonError('No image file provided for editing.');
         if (!editPrompt.trim()) return jsonError('Please describe how you want to edit the image.');
+        // Free-tier metering.
+        try {
+          const _q = await checkQuota(env, ctx, 'image');
+          if (!_q.allowed) return paywallResponse(env, 'image', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
 
         if (isHarmfulEditRequest(editPrompt)) {
           return jsonOk({ response: "I can't make that edit — it goes against my content guidelines. Try describing a different change.", session_id: sessionId, type: 'chat' });
@@ -6571,6 +7327,12 @@ export default {
 
         if (!file) return jsonError('No image file provided.');
         if (!editPrompt.trim()) return jsonError('No edit prompt provided.');
+        // Free-tier metering.
+        try {
+          const _q = await checkQuota(env, ctx, 'image');
+          if (!_q.allowed) return paywallResponse(env, 'image', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
 
         const fileBytes = await file.arrayBuffer();
         const imageBase64 = arrayBufferToBase64(fileBytes);
@@ -6647,6 +7409,12 @@ export default {
         if (!file) {
           return jsonOk({ response: "It looks like no image came through. Please attach the image you'd like me to work with and try again.", session_id: sessionId, type: 'chat' });
         }
+        // Free-tier metering (smart-edit consumes vision + edit GPU/CPU either way).
+        try {
+          const _q = await checkQuota(env, ctx, 'image');
+          if (!_q.allowed) return paywallResponse(env, 'image', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
         if (!message.trim()) {
           const fileBytes = await file.arrayBuffer();
           const base64 = arrayBufferToBase64(fileBytes);
@@ -6755,6 +7523,12 @@ export default {
         if (!prompt) {
           return jsonError('Please provide a description for the video.');
         }
+        // Free-tier metering (video is the heaviest unit).
+        try {
+          const _q = await checkQuota(env, ctx, 'video');
+          if (!_q.allowed) return paywallResponse(env, 'video', _q.used, _q.limit);
+          if (_q.pro) env._isPro = true;
+        } catch {}
         // Fully self-hosted: the Python service synthesizes context-aware
         // scenes from the topic and muxes in narration.
         const videoResult = await tryEditorServiceVideo(prompt, env);

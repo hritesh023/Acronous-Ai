@@ -2,11 +2,22 @@
 
 ## Policy: FULLY SELF-HOSTED
 - **Zero external/rate-limited model services.** No Workers AI, no Gemini, no OpenRouter in any request path.
-- All LLM inference → Oracle Cloud Ollama (`OLLAMA_BASE_URL` secret). All image ops → Oracle image-service (`EDITOR_SERVICE_URL`), including `/generate-image` (procedural scene engine) and `/generate-video` (multi-shot scenes + narration).
+- All LLM inference → Contabo VPS Ollama (`OLLAMA_BASE_URL` secret). All image ops → Contabo image-service (`EDITOR_SERVICE_URL`), including `/generate-image` (procedural scene engine) and `/generate-video` (multi-shot scenes + narration).
 - Internet data is fine (DuckDuckGo/Wikipedia search runs in-worker) — that's data fetching, not a model service.
 - The Workers AI `[ai]` binding has been REMOVED from wrangler.toml; never re-add it.
+- Payments exception: Razorpay (orders + HMAC verify) is allowed — it's billing, not a model service. Keys via secrets only (`RAZORPAY_KEY_SECRET`), never in code.
 
-## Models (Oracle 24GB, 4-core Ampere CPU — measured)
+## Billing / paywall (Razorpay + KV quotas — do not regress)
+- Free caps (vars): `FREE_CHAT_PER_DAY=20`, `FREE_IMAGE_PER_DAY=3`, `FREE_VIDEO_PER_DAY=1`. Counters in USER_MEMORY KV (`usage:<day>:<kind>:<id>`, 3-day TTL); Pro flag `pro:<id>` (`{until,...}`, 45-day TTL). Identity = JWT sub → `u:<id>`, else `CF-Connecting-IP` → `ip:<x>`, else shared `anon`.
+- `checkQuota(env, ctx, kind)` = 1 KV read hot path, increment via `ctx.waitUntil`. Over-quota → HTTP 402 `{type:'paywall',...}` via `paywallResponse`. Enforced in: `/v1/chat`, `/v1/chat/stream`, `/v1/image/generate|edit|ultra-edit|smart-edit`, `/v1/video/generate`.
+- GPU money guard: `tryGpuChat`/`tryGpuImageGen` serve Pro only when `GPU_PRO_ONLY=true` (default). `env._isPro` resolved once per request at top of `fetch`. Kill-switches: `GPU_ENABLED=false` or unset GPU URLs.
+- Billing routes: `GET /v1/billing/status[?product=]`, `POST /v1/billing/order {plan}` (401 unless signed in, 503 until Razorpay keys set), `POST /v1/billing/verify` (WebCrypto HMAC-SHA256 of `order|payment`), `POST /v1/billing/webhook` (HMAC of raw body with RAZORPAY_WEBHOOK_SECRET; grants from order notes), API keys `POST|GET|DELETE /v1/api/keys` + `GET /v1/api/usage`.
+- Catalog = BILLING_CATALOG (mirrors Acronous-landing-page/billing/plans.json): AI starter 149 / plus 449* / pro 999 / ultra 2499; Nav 99 / 299* / 699 / 1499; Equyvo 49 / 149* / 399* / 799; One bundle 699 (fans out to ai_plus+nav_plus+eq_premium); API packs 99→1k/499→6k/999→14k/2499→40k. `pro_monthly` + PRO_PRICE_INR=299 kept as legacy alias only.
+- Entitlements: `sub:<product>:<quotaId>` (+ legacy `pro:` flipped for every AI tier so GPU gating + quota bypass work untouched); API credits `credits:<quotaId>`; keys `api_key:<id>` (hash) + index `api_keys:<quotaId>`. API-key requests (X-Api-Key or Bearer ak_…) resolve identity in fetch handler, get Pro routing with balance>0, and spend credits inside checkQuota (chat 1 / image 20 / video 50) — out-of-credit → 402 out_of_credits.
+- Flutter: `ApiClient.isPaywall/paywallMessage` + billing methods in `lib/api/client.dart`; `chat_provider` short-circuits 402 (no retry — retries burn quota) and rethrows 402 from smart-edit instead of legacy fallback.
+- Full economics + setup: `contabo-vps/BILLING.md`. GPU deploy: `contabo-vps/RUNPOD_SERVERLESS.md`.
+
+## Models (Contabo 24GB, 4-core Ampere CPU — measured)
 | Model | tok/s | Use |
 |---|---|---|
 | qwen2.5:1.5b | 10.5 | too weak — refuses despite system prompt; avoid |
@@ -22,6 +33,7 @@
 - `buildEnhancedSystemPrompt()` is **STATIC and COMPRESSED** (~150 tokens; every token costs CPU prefill) → Ollama prefix KV-cache stays warm. Per-request context goes through `buildDynamicContextBlock(tz, location, webData, userMemory)` injected as a system message AFTER stable history: `[sys(static)] + history + [sys(dynamic)] + [user]`.
 - Prompt length rule: simple questions get 2-4 sentences, no preamble — cuts generation time ~5x on casual asks. Long answers reserved for explanations/how-tos/research/code.
 - `classifyQuery()` skips the search phase for greetings/code/math/creative/advice.
+- `isTimeSensitive()` forces web-data-first prompting for role/latest/version/price/score/weather/election queries; stale-memory tells ("my last update", "knowledge cutoff") trigger the vague-answer retry. `isReversedRoleQuery()` covers "Odisha CM" / "India PM" word order.
 - Search phase hard-capped at **900ms** (`settleWithCap`). Wikipedia infobox lookup is gated to role queries only ("X of Y" pattern), 800ms cap — it used to add up to 1.5s to EVERY message.
 - Measured warm TTFC ≈ **2.9s** (search 0.9s + fetch/prefill ~1.7s); first request after idle pays connection+cache cost (~6-17s if a long generation overlaps). Direct Ollama TTFT: 0.45s warm / 1.8s cold-cache with full prompt.
 - Never race tryWorkersAIChat against callOllama — same box, doubles CPU load, halves throughput for zero benefit.
@@ -57,9 +69,14 @@
 - `isHarmfulEditRequest` guards `/v1/image/generate`, `tryGenerateEndpoint` (explicit guideline refusal) and `renderVideoForChat` (falls back to chat path). List includes violence/gore/drugs/bomb terms + 'violence' spelling.
 - Verified abuse matrix: malformed JSON → graceful 200 apology (was 1101); non-string message types coerced; 13MB upload → graceful error; harmful gen prompt → refusal; identity/chat regression unaffected.
 
+## Redaction policy (scoped exception — do not "fix" back to blanket)
+- Own infra tokens (ollama/qwen/llava/cloudflare/searxng/duckduckgo/rembg/edge-tts/…) are ALWAYS redacted server-side (`INFRA_REDACT_RE`) and client-side (`_ownInfraPattern`).
+- Public third-party assistant names (GPT/Claude/Gemini/…) pass through ONLY when the user raised them as the topic (`userAskedAboutThirdParty` / `_thirdPartyTopicPattern`) — otherwise factual answers ("latest GPT is 5.6") get mangled into nonsense. First-person identity claims ("I am GPT") are ALWAYS rewritten to Acronous AI on both sides.
+- Streaming deltas use `redactProviderMentions(delta, message)` — NEVER `sanitizeForClient` (its trim() glues BPE tokens: "Thefounderis…").
+
 ## Chat endpoints
 - `/v1/chat` (JSON), `/v1/chat/stream` (SSE). SSE done event may carry `file_data`/`file_name`/`file_type` (video) or `image_data` (generated image) — Flutter client persists into the message as attachment.
-- Video intent (`detectVideoGenerationIntent`) → self-hosted renderer with synthesized scenes + edge-tts narration; caption uses the parsed topic. Image-gen intent (`detectImageGenerationIntent`) → `generateImageForChat()` (Oracle scene engine) returning explanation + image; on failure returns type 'chat' with IMAGE_GEN_UNAVAILABLE (never type 'image_gen' with empty data).
+- Video intent (`detectVideoGenerationIntent`) → self-hosted renderer with synthesized scenes + edge-tts narration; caption uses the parsed topic. Image-gen intent (`detectImageGenerationIntent`) → `generateImageForChat()` (Contabo scene engine) returning explanation + image; on failure returns type 'chat' with IMAGE_GEN_UNAVAILABLE (never type 'image_gen' with empty data).
 - Identity queries (`detectIdentityQuery`) answered deterministically via IDENTITY_ANSWER — checked BEFORE greeting regex in BOTH handlers.
 - callOllama uses stream:true internally and accumulates (non-streaming sends zero bytes → CF edge/nginx idle-kill long generations, which caused response:null). Never race tryWorkersAIChat against callOllama — same box, doubles CPU load.
 - Non-streaming chat num_predict capped at 2048 (~6 min @5.7 tok/s < client's 10-min timeout); streaming path uses full OLLAMA_CHAT_MAX_TOKENS=8192 since chunks flow.
@@ -68,8 +85,8 @@
 ## Generation UX (Flutter)
 - Image gen / video gen / file gen / attached-image edit requests show a skeleton preview bubble with context-aware cycling status labels ("Changing background…", "Recording narration…", "Applying final touches…") derived from the user's text (`_buildProgressSteps`). Fields: ChatMessage.progressLabel/progressKind (transient). Widget: lib/widgets/generation_skeleton.dart. Engine: _startGenerationProgress/_finishGenerationProgress in ChatProvider.
 
-## Python Image Service (Oracle Cloud)
-- URL: `EDITOR_SERVICE_URL=https://image-service.acronous.com`; compose dir `~/oracle-cloud`, build context `~/image-service/`.
+## Python Image Service (Contabo VPS)
+- URL: `EDITOR_SERVICE_URL=https://image-service.acronous.com`; compose dir `~/contabo-vps`, build context `~/image-service/`.
 - Torch-free image (rembg onnx + Pillow + OpenCV + edge-tts). rembg models re-download on fresh container start (~minutes) — consider baking into image/volume later.
 - `/generate-video`: multipart prompt/duration(6, clamp 2–20)/fps/width/height/images[] → Ken Burns slideshow or animated gradient title card (Pillow frames → ffmpeg h264). Returns `{video_data b64 mp4,...}`. `/capabilities.video = ffmpeg present`.
 - **ffmpeg quirks**: pipe output needs `-f mp4` BUT mp4 muxer needs seekable output → write temp file, read bytes, delete in `finally`. Never `stdin.close()` then `communicate()` ("flush of closed file") → feeder thread pattern.
@@ -117,13 +134,13 @@ flutter build web --dart-define="API_BASE_URL=https://ai.acronous.com"
 Copy-Item -LiteralPath "web/_worker.js" -Destination "build/web/_worker.js" -Force
 npx wrangler pages deploy build/web --project-name=acronous-ai
 
-# Oracle hot-patch app.py
-scp -i "$env:USERPROFILE\.ssh\oracle_key" image-service/app.py ubuntu@140.245.224.36:~/image-service/app.py
-ssh -i "$env:USERPROFILE\.ssh\oracle_key" ubuntu@140.245.224.36 "docker cp ~/image-service/app.py oracle-cloud-image-service-1:/app/app.py && docker restart oracle-cloud-image-service-1"
+# Contabo hot-patch app.py
+scp -i "$env:USERPROFILE\.ssh\contabo_key" image-service/app.py ubuntu@167.86.104.155:~/image-service/app.py
+ssh -i "$env:USERPROFILE\.ssh\contabo_key" ubuntu@167.86.104.155 "docker cp ~/image-service/app.py contabo-vps-image-service-1:/app/app.py && docker restart contabo-vps-image-service-1"
 
-# Oracle full rebuild (slow; loses /root/.rembg cache)
-scp -i "$env:USERPROFILE\.ssh\oracle_key" -r image-service/* ubuntu@140.245.224.36:~/image-service/
-ssh -i "$env:USERPROFILE\.ssh\oracle_key" ubuntu@140.245.224.36 "cd ~/oracle-cloud && docker compose build image-service && docker compose up -d image-service"
+# Contabo full rebuild (slow; loses /root/.rembg cache)
+scp -i "$env:USERPROFILE\.ssh\contabo_key" -r image-service/* ubuntu@167.86.104.155:~/image-service/
+ssh -i "$env:USERPROFILE\.ssh\contabo_key" ubuntu@167.86.104.155 "cd ~/contabo-vps && docker compose build image-service && docker compose up -d image-service"
 
 # Logs / KV / tail
 npx wrangler tail acronous-ai --format json
@@ -131,4 +148,6 @@ npx wrangler kv key get --namespace-id 245e81f7a70c448d840cc399be821633 "memory:
 ```
 
 ## Known analyzer noise (pre-existing, ignore)
-- `dart:js_util` import (chat_provider.dart:3), unused `lang` (markdown_renderer.dart:78).
+- None currently — `flutter analyze` is clean. Web geolocation uses
+  `dart:js_interop` + `package:web` typed API (`GeolocationPosition.coords`);
+  do NOT reintroduce `dart:js_util` (removed in Dart 3.10).

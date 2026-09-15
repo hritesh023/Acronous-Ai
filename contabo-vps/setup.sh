@@ -1,12 +1,12 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────
-# Acronous AI — Oracle Cloud Deployment Script
-# Run this ON the Oracle Cloud VM after SSH-ing in
+# Acronous AI — Contabo VPS Deployment Script
+# Run this ON the Contabo VPS VM after SSH-ing in
 # ─────────────────────────────────────────────────────────────
 set -e
 
 echo "═══════════════════════════════════════════════════"
-echo "  Acronous AI — Oracle Cloud Setup"
+echo "  Acronous AI — Contabo VPS Setup"
 echo "═══════════════════════════════════════════════════"
 
 # ── 1. System updates ──
@@ -51,16 +51,16 @@ else
     echo "Flutter already installed."
 fi
 
-# ── 5. Ensure image-service is in oracle-cloud ──
+# ── 5. Ensure image-service is in contabo-vps ──
 echo ""
 echo "[5/8] Checking project structure..."
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 
-if [ ! -d "oracle-cloud/image-service" ]; then
+if [ ! -d "contabo-vps/image-service" ]; then
     if [ -d "image-service" ]; then
-        echo "Copying image-service into oracle-cloud..."
-        cp -r image-service oracle-cloud/image-service
+        echo "Copying image-service into contabo-vps..."
+        cp -r image-service contabo-vps/image-service
     else
         echo "WARNING: image-service directory not found!"
     fi
@@ -75,9 +75,9 @@ if [ -f "pubspec.yaml" ]; then
     flutter pub get
     flutter build web --release --dart-define="API_BASE_URL=http://$(hostname -I | awk '{print $1}')"
     
-    # Copy build to oracle-cloud
-    mkdir -p oracle-cloud/web-build
-    cp -r build/web/* oracle-cloud/web-build/
+    # Copy build to contabo-vps
+    mkdir -p contabo-vps/web-build
+    cp -r build/web/* contabo-vps/web-build/
     echo "Flutter web build complete!"
 else
     echo "pubspec.yaml not found. Skipping Flutter build."

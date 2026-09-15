@@ -1,19 +1,19 @@
-# Acronous AI — Oracle Cloud Deployment Guide
+# Acronous AI — Contabo VPS Deployment Guide
 
 ## Prerequisites
-- Oracle Cloud Free Tier account (activated)
+- Contabo Cloud VPS 8 account (activated)
 - SSH key pair generated
 
 ---
 
-## STEP 1: Create VM Instance in Oracle Cloud Console
+## STEP 1: Create VM Instance in Contabo VPS Console
 
-1. Go to **Oracle Cloud Console** → https://cloud.oracle.com
+1. Go to **Contabo VPS Console** → https://cloud.contabo.com
 2. Click **Create a VM instance** (or Compute → Instances → Create Instance)
 3. Configure:
    - **Name**: `acronous-ai`
-   - **Image**: Oracle Linux 8 or Ubuntu 22.04 (Canonical)
-   - **Shape**: `VM.Standard.A1.Flex` (Burstable, up to 4 OCPUs, 24 GB RAM)
+   - **Image**: Contabo Linux 8 or Ubuntu 22.04 (Canonical)
+   - **Shape**: `Cloud VPS 8` (Burstable, up to 4 OCPUs, 24 GB RAM)
      - Click **Change shape** → Select **Ampere** → Set **4 OCPUs** and **24 GB RAM**
    - **VPU**: 50 (for boot volume, gives ~200GB storage)
 4. **Networking**:
@@ -44,7 +44,7 @@
 
 ```bash
 # From your local machine
-ssh -i ~/.ssh/your_private_key.pem opc@<PUBLIC_IP>
+ssh -i ~/.ssh/your_private_key.pem root@<PUBLIC_IP>
 
 # Or for Ubuntu:
 ssh -i ~/.ssh/your_private_key.pem ubuntu@<PUBLIC_IP>
@@ -58,10 +58,10 @@ ssh -i ~/.ssh/your_private_key.pem ubuntu@<PUBLIC_IP>
 
 ```bash
 # On your LOCAL machine, from the project root:
-scp -i ~/.ssh/your_private_key.pem -r "Acronous Ai/oracle-cloud" opc@<PUBLIC_IP>:/tmp/acronous-deploy
+scp -i ~/.ssh/your_private_key.pem -r "Acronous Ai/contabo-vps" root@<PUBLIC_IP>:/tmp/acronous-deploy
 
 # On the VM:
-ssh opc@<PUBLIC_IP>
+ssh root@<PUBLIC_IP>
 sudo cp -r /tmp/acronous-deploy/* /opt/
 cd /opt
 ```
@@ -69,10 +69,10 @@ cd /opt
 ### Option B: Git clone (if repo is on GitHub)
 
 ```bash
-ssh opc@<PUBLIC_IP>
+ssh root@<PUBLIC_IP>
 sudo mkdir -p /opt/acronous-ai && cd /opt/acronous-ai
 git clone https://github.com/YOUR_USER/Hritesh-apps.git .
-cd "Acronous Ai/oracle-cloud"
+cd "Acronous Ai/contabo-vps"
 ```
 
 ---
@@ -81,7 +81,7 @@ cd "Acronous Ai/oracle-cloud"
 
 ```bash
 # On the VM
-cd /opt/oracle-cloud
+cd /opt/contabo-vps
 
 # Make script executable
 chmod +x setup.sh
@@ -137,8 +137,8 @@ docker compose stop nginx
 sudo certbot certonly --standalone -d ai.acronous.com
 
 # Copy certs to project
-sudo cp /etc/letsencrypt/live/ai.acronous.com/fullchain.pem /opt/oracle-cloud/data/certbot/conf/
-sudo cp /etc/letsencrypt/live/ai.acronous.com/privkey.pem /opt/oracle-cloud/data/certbot/conf/
+sudo cp /etc/letsencrypt/live/ai.acronous.com/fullchain.pem /opt/contabo-vps/data/certbot/conf/
+sudo cp /etc/letsencrypt/live/ai.acronous.com/privkey.pem /opt/contabo-vps/data/certbot/conf/
 
 # Update nginx config for SSL (add 443 server block)
 # Restart
@@ -151,7 +151,7 @@ docker compose up -d
 
 ```
 ┌─────────────────────────────────────────┐
-│            Oracle Cloud VM              │
+│            Contabo VPS VM              │
 │            (24GB RAM)                   │
 │                                         │
 │  ┌─────────┐  ┌──────────┐  ┌────────┐ │

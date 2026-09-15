@@ -1,7 +1,7 @@
 """
 Acronous AI — Multimedia Service
 
-Fully self-hosted processing on Oracle Cloud (24GB RAM). No external model
+Fully self-hosted processing on Contabo VPS (24GB RAM). No external model
 services, no HuggingFace, no rate-limited APIs — every output is produced by
 deterministic local processing or the self-hosted Ollama server:
 - Image Editing: rembg + Pillow + OpenCV (recolor, content-aware removal,
@@ -582,11 +582,31 @@ def _add_suit_details(image: Image.Image, mask: Image.Image, suit_color: tuple) 
         ty1 = collar_y + int((y1 - y0) * 0.34)
         draw.rectangle([tx0, ty0, tx1, ty1], fill=(48, 48, 62))
 
-    # Jacket sleeves — shade the outer bands so the garment reads as a jacket
-    # with sleeves instead of a flat painted torso.
-    sleeve_w = int((x1 - x0) * 0.14)
-    draw.rectangle([x0, y0, x0 + sleeve_w, y1], fill=dark_tone)
-    draw.rectangle([x1 - sleeve_w, y0, x1, y1], fill=dark_tone)
+    # Jacket sleeves — SUBTLE shade on the outer bands only (never flat fill):
+    # blend the suit tone 35% with the underlying photo so arms/background keep
+    # their texture instead of becoming flat painted bars (the old flat fill is
+    # what read as "shaky/ugly" at photo resolution).
+    try:
+        base_arr = np.asarray(image.convert("RGB"), dtype=np.float32)
+        detail_arr = np.asarray(out, dtype=np.float32)
+        sleeve_w = int((x1 - x0) * 0.14)
+        sleeve_mask = np.zeros((h, w), dtype=np.float32)
+        sleeve_mask[y0:y1, x0:x0 + sleeve_w] = 0.35
+        sleeve_mask[y0:y1, x1 - sleeve_w:x1] = 0.35
+        # Restrict to garment mask so sleeves never bleed onto background.
+        gm = (m > 60).astype(np.float32)
+        sleeve_mask = sleeve_mask * gm
+        suit_np = np.array(suit_color, dtype=np.float32).reshape(1, 1, 3)
+        shaded = base_arr * (1 - sleeve_mask[:, :, None] * 0.5) + suit_np * (sleeve_mask[:, :, None] * 0.5)
+        # Write shading into the detail layer (lapels/shirt/tie stay opaque).
+        out_shaded = detail_arr.copy()
+        sleeve_bool = sleeve_mask > 0.01
+        out_shaded[sleeve_bool] = shaded[sleeve_bool]
+        out = Image.fromarray(out_shaded.astype(np.uint8))
+    except Exception:
+        pass
+    # Rebind draw (sleeve shading replaced the image object above).
+    draw = ImageDraw.Draw(out)
     # Single-breasted button line down the chest centre, below the tie.
     if (x1 - x0) > 40 and (y1 - y0) > 80:
         btn_rad = max(1, int((y1 - y0) * 0.012))
@@ -759,6 +779,32 @@ def _face_neck_protection_mask(image: Image.Image) -> Image.Image:
     y0, y1 = int(h * 0.02), int(h * 0.42)
     ImageDraw.Draw(m).ellipse([x0, y0, x1, y1], fill=255)
     return m.filter(ImageFilter.GaussianBlur(radius=7))
+
+
+def _paste_original_face_back(orig: Image.Image, edited: Image.Image, face_mask: Image.Image) -> Image.Image:
+    """Hard identity guarantee: paste ORIGINAL face/neck pixels back over ANY
+    edit result. Uses a tight threshold (>100) on the protection mask so only
+    the true head zone is restored (feathered edge is NOT restored, avoiding
+    halos). This makes face distortion impossible regardless of which branch
+    (SD / painter / recolor) produced the edit."""
+    try:
+        if orig is None or edited is None or face_mask is None:
+            return edited
+        o = orig.convert("RGB")
+        e = edited.convert("RGB").resize(o.size, Image.LANCZOS) if edited.size != o.size else edited.convert("RGB")
+        fm = face_mask.convert("L").resize(o.size, Image.NEAREST)
+        fa = np.array(fm)
+        # Tight core (>100) = definite head; feather band (40-100) stays edited
+        # so the chin/collar seam blends naturally.
+        core = (fa > 100)
+        if not np.any(core):
+            return e
+        o_np = np.array(o)
+        e_np = np.array(e)
+        e_np[core] = o_np[core]
+        return Image.fromarray(e_np)
+    except Exception:
+        return edited
 
 
 def _garment_default_tone(desc: str) -> tuple:
@@ -1748,12 +1794,16 @@ def edit_image(image_bytes: bytes, prompt: str, precomputed_mask=None, edit_scop
             else:
                 tone_desc = region or tgt or "outfit"
             suit_tone = _garment_default_tone(tone_desc)
-            if HAS_DIFFUSERS and not formal_suit:
+            # Prefer REAL SD regeneration for ALL garment swaps INCLUDING formal
+            # suits: the deterministic painter draws flat polygons that read as
+            # "shaky/ugly" at photo resolution. sd-turbo single-step at LOW
+            # strength (0.35) regenerates fabric realistically while keeping pose.
+            if HAS_DIFFUSERS:
                 try:
-                    # Lower strength (0.5) so only the garment region regenerates
+                    # Lower strength (0.35) so only the garment region regenerates
                     # without pulling in face, hands, or background details. Higher
                     # values smeared the fabric and bled into the neck/chin.
-                    sd = _apply_masked_sd_edit(image, mask, swap_prompt, style, strength=0.5, match_original=False, seam=20)
+                    sd = _apply_masked_sd_edit(image, mask, swap_prompt, style, strength=0.35, match_original=False, seam=20)
                     if sd is not None:
                         # Cross-verify: the edit must change the GARMENT region
                         # significantly (not a faint ghost), AND the FACE must be
@@ -1762,8 +1812,9 @@ def edit_image(image_bytes: bytes, prompt: str, precomputed_mask=None, edit_scop
                         # Face preservation check: face region should be nearly identical.
                         face_score = _region_mean_diff(image, sd, face_mask) if face_mask is not None else 0.0
                         logging.info(f"garment_swap sd garment_score={score:.2f} face_score={face_score:.2f}")
-                        if score >= 4.0 and face_score < 3.0:
-                            result = sd
+                        if score >= 4.0 and face_score < 1.5:
+                            # Hard identity guarantee even when the gate passes.
+                            result = _paste_original_face_back(image, sd, face_mask) if face_mask is not None else sd
                             strategy = "garment_swap_sd"
                             edited_bytes = img_to_bytes(result)
                             mask_bytes = img_to_bytes(mask, "PNG")
@@ -1778,7 +1829,7 @@ def edit_image(image_bytes: bytes, prompt: str, precomputed_mask=None, edit_scop
                             }
                 except Exception as e:
                     logging.warning(f"SD garment swap failed, using fallback: {e}")
-            # Deterministic painter (primary for formal suits, fallback otherwise):
+            # Deterministic painter (FALLBACK only when SD unavailable/failed):
             # recolor the garment to the requested tone with real fabric texture and
             # OPAQUE tailoring (no translucent overlay). `_garment_default_tone` is
             # fed the exact garment word from the prompt so a "black suit" stays
@@ -1787,6 +1838,12 @@ def edit_image(image_bytes: bytes, prompt: str, precomputed_mask=None, edit_scop
             rec = apply_fabric_texture(rec, mask, tone_desc)
             if formal_suit:
                 rec = _add_suit_details(rec, mask, suit_tone)
+            # Hard identity guarantee on the fallback path too.
+            try:
+                if face_mask is not None:
+                    rec = _paste_original_face_back(image, rec, face_mask)
+            except Exception:
+                pass
             result = rec
             strategy = "garment_swap"
             edited_bytes = img_to_bytes(result)
@@ -3733,7 +3790,8 @@ def edit_sd_img2img(init_image, prompt, style=None, strength=0.6, steps=2, size=
         # killer for region swaps — it crushed the garment crop to a tiny tile,
         # then the upscale back to the crop size dilated every SD artifact into
         # smeary, low-detail distortion (especially around the face/neck).
-        s = max(0.40, min(0.75, float(strength)))
+        # Lower clamp floor 0.30 (was 0.40) so callers can request gentler edits.
+        s = max(0.30, min(0.75, float(strength)))
         init = init_image.convert("RGB").resize((size, size))
         out = pipe(
             p,
@@ -3805,7 +3863,7 @@ def _sd_scene_image(prompt, W, H, style_override=None):
     return _cover_resize(img, W, H).convert("RGB")
 
 
-def _apply_masked_sd_edit(orig, mask, prompt, style=None, strength=0.55, match_original=True, seam=12):
+def _apply_masked_sd_edit(orig, mask, prompt, style=None, strength=0.38, match_original=True, seam=12):
     """Regenerate ONLY the asked-for region with SD img2img, then composite it
     opaquely over the untouched original so the rest of the photo is preserved
     exactly. The edited region fully replaces the original inside the mask (no
@@ -3817,7 +3875,7 @@ def _apply_masked_sd_edit(orig, mask, prompt, style=None, strength=0.55, match_o
     Why this preserves quality:
       - The edit runs ONLY on the tight bounding box of the mask (never the
         whole image) so the background/face are never re-rendered.
-      - Lower strength (0.55) keeps the original pose, fabric folds, shadows and
+      - Lower strength (0.38) keeps the original pose, fabric folds, shadows and
         colour temperature — a gentler edit that reads as "the same photo with
         the garment swapped", not a regen.
       - Histogram matching (per-channel) re-aligns the edited patch colour
@@ -4038,7 +4096,7 @@ async def api_edit_diffusion(
     file: UploadFile = File(...),
     prompt: str = Form(...),
     style: str = Form(""),
-    strength: float = Form(0.45),
+    strength: float = Form(0.32),
 ):
     """Local SD img2img edit — preserves the original composition and applies
     only the requested change. Free and unlimited (no external API)."""
@@ -4046,7 +4104,9 @@ async def api_edit_diffusion(
         raise HTTPException(503, "Local diffusion model unavailable")
     data = await file.read()
     try:
-        init = bytes_to_img(data).convert("RGB").resize((256, 256))
+        # 512 (was 256): 256 destroyed facial identity by design (full-frame
+        # regen at tiny resolution). 512 + low strength keeps the person intact.
+        init = bytes_to_img(data).convert("RGB").resize((512, 512))
     except Exception:
         raise HTTPException(400, "Invalid image")
     style = (style or "").strip() or None
@@ -4819,7 +4879,10 @@ def _render_video_bytes(prompt, images=None, duration=6.0, fps=24,
         # shots. Keyframes are genuine SD renders (not the painterly procedural
         # engine) so the footage reads as a real photograph, never an illustration.
         # text_mode (motion-graphics card) is reserved for explicit text requests.
-        beats = split_prompt_into_shots(topic or prompt, max_shots=3)
+        # 2 shots (was 3): each keyframe costs a full SD render + parallax frames
+        # on CPU — 2 beats cuts render time ~33% with no visible story loss for
+        # short 4s clips.
+        beats = split_prompt_into_shots(topic or prompt, max_shots=2)
         for b in beats:
             img = _sd_scene_image(b, W, H, style_override)
             if img is None:
@@ -4991,10 +5054,10 @@ def _render_video_bytes(prompt, images=None, duration=6.0, fps=24,
 @app.post("/generate-video")
 async def api_generate_video(
     prompt: str = Form(...),
-    duration: float = Form(6.0),
-    fps: int = Form(24),
-    width: int = Form(1280),
-    height: int = Form(720),
+    duration: float = Form(4.0),
+    fps: int = Form(15),
+    width: int = Form(854),
+    height: int = Form(480),
     narrate: bool = Form(True),
     sound_type: str = Form(""),
     topic: str = Form(""),

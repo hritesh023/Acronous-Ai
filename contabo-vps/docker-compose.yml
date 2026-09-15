@@ -1,0 +1,157 @@
+# Acronous LLM brain — Contabo Cloud VPS 8 (24GB RAM / 300GB disk, EU, 167.86.104.155)
+# MEMORY BUDGET (limits sum ≈ 18GB — OS + Docker keep ~6GB headroom, never OOM):
+#   ollama 10g + brain 3g + image-service 3g + api-server 1g + searxng 512m + nginx/cloudflared ~384m
+# DISK BUDGET (300GB): models ~40GB + images ~15GB + data/db ~10GB + training quota 25GB
+#   → ~90GB used, ~200GB+ always free. Self-train enforces its quota + 40GB free floor.
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./web-build:/usr/share/nginx/html:ro
+      - ./data/certbot/conf:/etc/letsencrypt:ro
+      - ./data/certbot/www:/var/www/certbot:ro
+    depends_on:
+      - api-server
+      - brain
+      - image-service
+      - searxng
+    restart: unless-stopped
+    mem_limit: 256m
+    networks:
+      - acronous-net
+
+  api-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      - PORT=3000
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=qwen3:8b
+      - OLLAMA_CODE_MODEL=qwen2.5-coder:7b
+      - OLLAMA_CONTEXT_SIZE=24576
+      - OLLAMA_VISION_MODEL=qwen2.5vl:7b
+      - EDITOR_SERVICE_URL=http://image-service:7860
+      - SEARXNG_URL=http://searxng:8080
+      - ACRONOUS_BRAIN_URL=http://brain:8000
+      - DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+    mem_limit: 1g
+    networks:
+      - acronous-net
+
+  # ── Acronous LLM shared brain (FastAPI): chat/learn + internet learning
+  # (5-min quick-scan) + resource-safe self-train (6h dataset cycle).
+  # Gets smarter daily WITHOUT growing disk: merged dataset capped,
+  # snapshots pruned, RAM/disk guards skip cycles under pressure.
+  brain:
+    build:
+      context: ..
+      dockerfile: acronous_llm/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ACRONOUS_LLM_PROVIDER=contabo
+      - ACRONOUS_LLM_API_URL=http://ollama:11434/v1
+      - ACRONOUS_LLM_MODEL=qwen3:8b
+      - ACRONOUS_LLM_CHAT_MODEL=qwen3:8b
+      - ACRONOUS_LLM_CODE_MODEL=qwen2.5-coder:7b
+      - ACRONOUS_LLM_FAST_MODEL=qwen2.5:3b
+      - ACRONOUS_VISION_MODEL=qwen2.5vl:7b
+      - ACRONOUS_BRAIN_HOST=brain.acronous.com
+      - ACRONOUS_BRAIN_DIRECT_URL=http://167.86.104.155:11434
+      - ACRONOUS_SELF_TRAIN=true
+      - ACRONOUS_SELF_TRAIN_INTERVAL=21600
+      - ACRONOUS_SELF_TRAIN_MIN_FACTS=500
+      - ACRONOUS_SELF_TRAIN_MAX_RAM_PCT=85
+      - ACRONOUS_SELF_TRAIN_MIN_FREE_GB=40
+      - ACRONOUS_SELF_TRAIN_MAX_TRAIN_GB=25
+      - ACRONOUS_SELF_TRAIN_MAX_PAIRS_PER_CYCLE=400
+      - ACRONOUS_SELF_TRAIN_MAX_MERGED_PAIRS=20000
+      - ACRONOUS_SELF_TRAIN_RETAIN_DAYS=14
+      - ACRONOUS_SELF_TRAIN_RETAIN_SNAPSHOTS=7
+      - DATA_DIR=/data/brain
+    volumes:
+      - ./data/brain:/data/brain
+      - ollama_data:/root/.ollama:ro
+    restart: unless-stopped
+    mem_limit: 3g
+    networks:
+      - acronous-net
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8000/v1/brain/info',timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+
+  image-service:
+    build:
+      context: ../image-service
+      dockerfile: Dockerfile
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_VISION_MODEL=llava:7b
+      - PORT=7860
+    ports:
+      - "7860:7860"
+    restart: unless-stopped
+    mem_limit: 3g
+    networks:
+      - acronous-net
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-acronous-searxng-secret-2024}
+    restart: unless-stopped
+    mem_limit: 512m
+    networks:
+      - acronous-net
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    mem_limit: 10g
+    networks:
+      - acronous-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --config /etc/cloudflared/config.yml
+    volumes:
+      - ./cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+    restart: unless-stopped
+    mem_limit: 128m
+    networks:
+      - acronous-net
+
+volumes:
+  ollama_data:
+
+networks:
+  acronous-net:
+    driver: bridge

@@ -1,0 +1,42 @@
+# Acronous image-service — GPU build (RunPod Serverless / any CUDA host).
+# Same FastAPI app as the CPU Dockerfile, but with the CUDA torch wheel so
+# Stable Diffusion actually runs on GPU (2-5s/image) instead of falling back
+# to the procedural Pillow engine.
+#
+# Build + push (from repo root "Acronous Ai/"):
+#   docker build -f image-service/Dockerfile.gpu -t <dockerhub-user>/acronous-image-gpu:latest image-service
+#   docker push <dockerhub-user>/acronous-image-gpu:latest
+# Then use that image as your RunPod Serverless template (container start
+# command stays the default CMD below; RunPod calls rp_handler.handler).
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    HF_HOME=/app/.cache/huggingface \
+    TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;9.0"
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-pip python3-dev ffmpeg libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/bin/python
+
+COPY requirements.txt .
+
+# CUDA torch first (must match cu124), then the rest. runpod SDK added for
+# Serverless mode (harmless when running as plain FastAPI via compose).
+RUN pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir runpod xformers
+
+# Bake SD-Turbo weights so cold starts skip the ~2GB download.
+RUN python -c "from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline; StableDiffusionPipeline.from_pretrained('stabilityai/sd-turbo', safety_checker=None, requires_safety_checker=False); StableDiffusionImg2ImgPipeline.from_pretrained('stabilityai/sd-turbo', safety_checker=None, requires_safety_checker=False); print('SD-Turbo weights cached')"
+
+COPY . .
+
+EXPOSE 7860
+
+# Plain hosting (docker compose --profile gpu): FastAPI.
+# RunPod Serverless: set START_CMD to `python rp_handler.py` in the template.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]

@@ -17,7 +17,7 @@ Advanced AI assistant with LLM, image generation, vision, web search, and memory
 | Variable                   | Value                  |
 |----------------------------|------------------------|
 | `OPENROUTER_API_KEY`       | `sk-or-v1-...`         |
-| `EDITOR_SERVICE_URL`       | Oracle Cloud image-service URL |
+| `EDITOR_SERVICE_URL`       | Contabo VPS image-service URL |
 | `API_BASE_URL`             | *(your server URL)*    |
 
 ## Frontend Connection
