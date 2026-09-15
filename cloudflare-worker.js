@@ -2362,18 +2362,18 @@ function extractNameForRole(role, webData) {
 // OpenRouter removed — Ollama on Contabo VPS handles everything (unlimited, free)
 
 // ── Ollama (self-hosted LLM on Contabo VPS — unlimited tokens, no API caps) ──
-// Per-query generation budget. Short/factual/casual asks get a small cap so the
-// CPU model finishes in a few seconds instead of rambling for 30-80s; long
-// explanations/how-tos keep the full budget for complete answers.
+// Per-query generation budget. Short/factual/casual asks get a smaller cap so the
+// CPU model answers in seconds; everything else gets the full 8192 budget and
+// no fetch timeout — answers always complete, never cut off.
 function answerTokenBudget(lastUserText, isCode) {
   if (isCode) return 8192;
   const t = String(lastUserText || '').trim().toLowerCase();
-  if (!t) return 2048;
+  if (!t) return 8192;
   if (t.length <= 260 && (
     isSimpleFactual(t) ||
     /\b(?:what is|who is|current (?:time|date|year|month|president|prime minister|cm|pm)|weather|population|capital|price|score|winner|records?|where is|define|hi|hello|hey)\b/.test(t)
-  )) return 700;
-  return 2048;
+  )) return 1500;
+  return 8192;
 }
 
 // ── GPU fast-path (RunPod Serverless, scale-to-zero) ─────────────────────
@@ -2533,7 +2533,8 @@ async function callOllama(messages, env) {
           num_parallel: 1,
         }
       }),
-      signal: AbortSignal.timeout(300000),
+      // No fetch timeout: streaming keeps bytes flowing so no proxy idle-kills
+      // the connection; the model stops naturally at EOS. No time limits.
     });
     if (resp.ok && resp.body) {
       const reader = resp.body.getReader();
@@ -2595,11 +2596,11 @@ async function callOllamaVision(messages, env) {
         stream: false,
         keep_alive: '24h',
         options: {
-          num_predict: 2048,
+          num_predict: 4096,
           temperature: 0.3,
         }
       }),
-      signal: AbortSignal.timeout(280000),
+      // No time limit — vision answers complete fully.
     });
     if (resp.ok) {
       const data = await resp.json();
@@ -2629,9 +2630,9 @@ async function analyzeImageWithOllamaVision(imageBase64, mimeType, editPrompt, e
         model,
         messages,
         stream: false,
-        options: { num_predict: 2048, temperature: 0.3 },
+        options: { num_predict: 4096, temperature: 0.3 },
       }),
-      signal: AbortSignal.timeout(90000),
+      // No time limit — vision answers complete fully.
     });
     if (resp.ok) {
       const data = await resp.json();

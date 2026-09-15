@@ -79,7 +79,7 @@
 - Video intent (`detectVideoGenerationIntent`) → self-hosted renderer with synthesized scenes + edge-tts narration; caption uses the parsed topic. Image-gen intent (`detectImageGenerationIntent`) → `generateImageForChat()` (Contabo scene engine) returning explanation + image; on failure returns type 'chat' with IMAGE_GEN_UNAVAILABLE (never type 'image_gen' with empty data).
 - Identity queries (`detectIdentityQuery`) answered deterministically via IDENTITY_ANSWER — checked BEFORE greeting regex in BOTH handlers.
 - callOllama uses stream:true internally and accumulates (non-streaming sends zero bytes → CF edge/nginx idle-kill long generations, which caused response:null). Never race tryWorkersAIChat against callOllama — same box, doubles CPU load.
-- Non-streaming chat num_predict capped at 2048 (~6 min @5.7 tok/s < client's 10-min timeout); streaming path uses full OLLAMA_CHAT_MAX_TOKENS=8192 since chunks flow.
+- Non-streaming chat num_predict is 8192 and Ollama fetches carry NO timeout (streaming keeps bytes flowing, models stop at EOS) — answers complete fully, never cut off. Streaming path uses full OLLAMA_CHAT_MAX_TOKENS=8192 since chunks flow.
 - Anti-refusal: cleanResponse strips "As an AI..." openers and apology lead-ins; system prompt forbids refusals.
 
 ## Generation UX (Flutter)
