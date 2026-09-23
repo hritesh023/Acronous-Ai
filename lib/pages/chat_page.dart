@@ -200,6 +200,13 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _buildWelcomeScreen(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final titleColor =
+        isDark ? const Color(0xFFE8E8F0) : const Color(0xFF1E3A8A);
+    final subColor =
+        isDark ? const Color(0xFF707090) : const Color(0xFF1E40AF);
+    final cardColor =
+        isDark ? const Color(0xFF181830) : const Color(0xFFDBEAFE);
     return Center(
       child: SingleChildScrollView(
         child: Padding(
@@ -225,20 +232,20 @@ class _ChatPageState extends State<ChatPage> {
               ),
             ),
             const SizedBox(height: 20),
-            const Text(
+            Text(
               'How can I help you today?',
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w700,
-                color: Color(0xFFE8E8F0),
+                color: titleColor,
               ),
             ),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               'Ask me anything, I\'m here to assist',
               style: TextStyle(
                 fontSize: 15,
-                color: Color(0xFF707090),
+                color: subColor,
               ),
             ),
             const SizedBox(height: 28),
@@ -249,7 +256,7 @@ class _ChatPageState extends State<ChatPage> {
                 alignment: WrapAlignment.center,
                 children: _suggestions.map((s) {
                   return Material(
-                    color: const Color(0xFF181830),
+                    color: cardColor,
                     borderRadius: BorderRadius.circular(14),
                     child: InkWell(
                       onTap: () => widget.chatProvider.handleSendMessage(
@@ -268,15 +275,15 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                             const SizedBox(height: 6),
                             Text(s.title,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 13,
                                     fontWeight: FontWeight.w600,
-                                    color: Color(0xFFE8E8F0))),
+                                    color: titleColor)),
                             const SizedBox(height: 2),
                             Text(s.desc,
-                                style: const TextStyle(
+                                style: TextStyle(
                                     fontSize: 11,
-                                    color: Color(0xFF707090))),
+                                    color: subColor)),
                           ],
                         ),
                       ),

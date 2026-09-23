@@ -152,6 +152,19 @@ class _SidebarWidgetState extends State<SidebarWidget> {
   }
 
   Widget _buildTopicPopover(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final popColor =
+        isDark ? const Color(0xFF222240) : const Color(0xFFE8F1FE);
+    final chipColor =
+        isDark ? const Color(0xFF1C1C35) : const Color(0xFFD6E7FD);
+    final edgeColor =
+        isDark ? const Color(0x1FFFFFFF) : const Color(0xFFBFDBFE);
+    final titleColor =
+        isDark ? const Color(0xFFE8E8F0) : const Color(0xFF1E3A8A);
+    final subColor =
+        isDark ? const Color(0xFF707090) : const Color(0xFF1E40AF);
+    final labelColor =
+        isDark ? const Color(0xFF505070) : const Color(0xFF1E40AF);
     return Material(
       elevation: 24,
       color: Colors.transparent,
@@ -160,9 +173,9 @@ class _SidebarWidgetState extends State<SidebarWidget> {
         width: 320,
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: const Color(0xFF222240),
+          color: popColor,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0x1FFFFFFF)),
+          border: Border.all(color: edgeColor),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -170,16 +183,16 @@ class _SidebarWidgetState extends State<SidebarWidget> {
           children: [
             Container(
               padding: const EdgeInsets.only(left: 4, bottom: 10),
-              decoration: const BoxDecoration(
-                border: Border(bottom: BorderSide(color: Color(0x14FFFFFF))),
+              decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: edgeColor)),
               ),
-              child: const Text(
+              child: Text(
                 'Start a conversation',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
                   letterSpacing: 0.6,
-                  color: Color(0xFF505070),
+                  color: labelColor,
                 ),
               ),
             ),
@@ -191,7 +204,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                 return SizedBox(
                   width: (320 - 24 - 6) / 2,
                   child: Material(
-                    color: const Color(0xFF1C1C35),
+                    color: chipColor,
                     borderRadius: BorderRadius.circular(10),
                     child: InkWell(
                       onTap: () {
@@ -213,18 +226,18 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                             const SizedBox(height: 4),
                             Text(
                               topic.title,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
-                                color: Color(0xFFE8E8F0),
+                                color: titleColor,
                               ),
                             ),
                             const SizedBox(height: 2),
                             Text(
                               topic.desc,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11,
-                                color: Color(0xFF707090),
+                                color: subColor,
                               ),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
@@ -244,28 +257,39 @@ class _SidebarWidgetState extends State<SidebarWidget> {
   }
 
   Widget _buildSearch(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final fieldColor =
+        isDark ? const Color(0xFF1C1C35) : const Color(0xFFD6E7FD);
+    final edgeColor =
+        isDark ? const Color(0x1FFFFFFF) : const Color(0xFFBFDBFE);
+    final textColor =
+        isDark ? const Color(0xFFE8E8F0) : const Color(0xFF1E3A8A);
+    final hintColor =
+        isDark ? const Color(0xFF505070) : const Color(0xFF1E40AF);
+    final clearColor =
+        isDark ? const Color(0xFF2A2A4A) : const Color(0xFF93C5FD);
     return Container(
       padding: const EdgeInsets.fromLTRB(10, 8, 10, 4),
       child: _showSearch
           ? Container(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               decoration: BoxDecoration(
-                color: const Color(0xFF1C1C35),
+                color: fieldColor,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0x1FFFFFFF)),
+                border: Border.all(color: edgeColor),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.search, size: 14, color: Color(0xFF505070)),
+                  Icon(Icons.search, size: 14, color: hintColor),
                   const SizedBox(width: 8),
                   Expanded(
                     child: TextField(
                       controller: _searchController,
                       focusNode: _searchFocusNode,
-                      style: const TextStyle(fontSize: 13, color: Color(0xFFE8E8F0)),
-                      decoration: const InputDecoration(
+                      style: TextStyle(fontSize: 13, color: textColor),
+                      decoration: InputDecoration(
                         hintText: 'Search conversations...',
-                        hintStyle: TextStyle(color: Color(0xFF505070)),
+                        hintStyle: TextStyle(color: hintColor),
                         border: InputBorder.none,
                         enabledBorder: InputBorder.none,
                         focusedBorder: InputBorder.none,
@@ -286,10 +310,10 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                         width: 20,
                         height: 20,
                         decoration: BoxDecoration(
-                          color: const Color(0xFF2A2A4A),
+                          color: clearColor,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.close, size: 12, color: Color(0xFF505070)),
+                        child: Icon(Icons.close, size: 12, color: textColor),
                       ),
                     ),
                 ],
@@ -302,11 +326,11 @@ class _SidebarWidgetState extends State<SidebarWidget> {
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Row(
                   children: [
-                    const Icon(Icons.search, size: 16, color: Color(0xFF505070)),
+                    Icon(Icons.search, size: 16, color: hintColor),
                     const SizedBox(width: 8),
-                    const Text(
+                    Text(
                       'Search',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF505070)),
+                      style: TextStyle(fontSize: 13, color: hintColor),
                     ),
                   ],
                 ),
