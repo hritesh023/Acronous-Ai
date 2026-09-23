@@ -78,11 +78,10 @@ docker compose up -d --build
 | `getImageDimensions()` | Reads JPEG/PNG/WebP pixel dimensions from binary header |
 | `createEditMask()` | Creates pixel-level grayscale mask at exact image dimensions |
 | `tryEditorService()` | Calls Python microservice (rembg + Pillow + SD) |
-| `analyzeImageWithVision()` | Uses OpenRouter vision model to describe image |
+| `analyzeImageWithVision()` | Uses Contabo Ollama (LLaVA) vision model to describe image |
 | `buildEditPrompt()` | Crafts precise edit instruction with vision context |
 | `parseEditTarget()` | Classifies prompt into clothing/background/face/hair/color/auto |
 | `tryWorkersAIInpaint()` | CF Workers AI inpainting with dimension-matched mask |
-| `tryOpenRouterEdit()` | OpenRouter-based image editing |
 
 ## Working Edit Examples
 

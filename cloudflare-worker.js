@@ -12,6 +12,44 @@ const SEARXNG_URLS = [
   'https://paulgo.io/search', 'https://search.projectsegfau.lt/search',
 ];
 
+// ── Ollama resilience: never fail with "No Ollama URL" ─────────────────────
+// Priority: explicit secret → tunnel hostname → direct Contabo IP.
+// The tunnel (ollama.acronous.com → localhost:11434) survives IP changes;
+// the direct IP survives tunnel outages. Both are tried per request.
+const OLLAMA_FALLBACK_URLS = [
+  'https://ollama.acronous.com',
+  'http://167.86.104.155:11434',
+];
+
+function resolveOllamaBases(env) {
+  const out = [];
+  const seen = new Set();
+  const push = (u) => {
+    const v = String(u || '').trim().replace(/\/$/, '');
+    if (!v || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  };
+  push(env.OLLAMA_BASE_URL);
+  for (const u of OLLAMA_FALLBACK_URLS) push(u);
+  return out;
+}
+
+async function probeOllamaBase(base, timeoutMs = 5000) {
+  try {
+    const resp = await fetch(`${base}/api/tags`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!resp.ok) return { ok: false, base };
+    const data = await resp.json().catch(() => ({}));
+    const models = Array.isArray(data?.models) ? data.models.map((m) => m?.name).filter(Boolean) : [];
+    return { ok: true, base, models };
+  } catch (e) {
+    return { ok: false, base, error: String((e && e.message) || e) };
+  }
+}
+
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 function isApiPath(path) {
@@ -2359,8 +2397,6 @@ function extractNameForRole(role, webData) {
   return null;
 }
 
-// OpenRouter removed — Ollama on Contabo VPS handles everything (unlimited, free)
-
 // ── Ollama (self-hosted LLM on Contabo VPS — unlimited tokens, no API caps) ──
 // Per-query generation budget. Short/factual/casual asks get a smaller cap so the
 // CPU model answers in seconds; everything else gets the full 8192 budget and
@@ -2470,13 +2506,15 @@ async function tryGpuImageGen(visualPrompt, width, height, styleHint, env) {
 }
 
 async function callOllama(messages, env) {
-  const ollamaUrl = (env.OLLAMA_BASE_URL || '').trim();
-  if (!ollamaUrl) throw new Error('No Ollama URL');
+  const bases = resolveOllamaBases(env);
+  if (!bases.length) throw new Error('No Ollama URL');
   // Route code requests to the dedicated coder model when available
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const lastText = typeof lastUser?.content === 'string' ? lastUser.content : '';
   const isCode = isCodeQuery(lastText);
-  const model = (isCode && env.OLLAMA_CODE_MODEL) ? env.OLLAMA_CODE_MODEL : (env.OLLAMA_MODEL || 'qwen2.5:1.5b');
+  // Default to qwen2.5:3b (5.7 tok/s, reliable). qwen2.5:1.5b refuses despite
+  // system prompt; qwen3:8b caused 90s-timeout 500s. Never default to 1.5b.
+  const model = (isCode && env.OLLAMA_CODE_MODEL) ? env.OLLAMA_CODE_MODEL : (env.OLLAMA_MODEL || 'qwen2.5:3b');
   const useThink = shouldUseThinking(messages);
   // Cap context at 4096 for faster CPU prefill — reduces time-to-first-token
   // from ~2s to ~1s on warm cache. History is trimmed to fit.
@@ -2509,136 +2547,154 @@ async function callOllama(messages, env) {
     const gpu = await tryGpuChat(truncated, env, model, numPredict, lastText);
     if (gpu && gpu.trim()) return gpu;
   } catch {}
-  try {
-    // Stream from Ollama internally and accumulate. A plain non-streaming call
-    // sends NO bytes until the whole generation finishes, so intermediate
-    // proxies (Cloudflare edge ↔ origin, nginx) kill the connection on long
-    // generations and the answer is lost. Streaming keeps bytes flowing the
-    // whole time while callers still receive a single completed string.
-    const resp = await fetch(`${ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages: truncated,
-        stream: true,
-        think: useThink,
-        keep_alive: '24h',
-        options: {
-          num_ctx: contextSize,
-          num_predict: numPredict,
-          temperature: isCode ? 0.1 : 0.6,
-          top_p: 0.85,
-          repeat_penalty: 1.1,
-          num_parallel: 1,
+  // Try each Ollama base in order (secret → tunnel → direct IP). Streaming
+  // keeps bytes flowing so no proxy idle-kills the connection; the model
+  // stops naturally at EOS. Per-base watchdog (120s) prevents one dead base
+  // from hanging the whole request — we fail over to the next base.
+  let lastErr = null;
+  for (const ollamaUrl of bases) {
+    try {
+      const ctrl = new AbortController();
+      const watchdog = setTimeout(() => { try { ctrl.abort(); } catch {} }, 120000);
+      let resp;
+      try {
+        resp = await fetch(`${ollamaUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model,
+            messages: truncated,
+            stream: true,
+            think: useThink,
+            keep_alive: '24h',
+            options: {
+              num_ctx: contextSize,
+              num_predict: numPredict,
+              temperature: isCode ? 0.1 : 0.6,
+              top_p: 0.85,
+              repeat_penalty: 1.1,
+              num_parallel: 1,
+            }
+          }),
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(watchdog);
+      }
+      if (resp.ok && resp.body) {
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let raw = '';
+        let inThinking = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const parsed = JSON.parse(line);
+              const delta = parsed.message?.content || '';
+              if (!delta) continue;
+              if (delta.includes('<think>')) { inThinking = true; continue; }
+              if (delta.includes('</think>')) { inThinking = false; continue; }
+              if (!inThinking) raw += delta;
+            } catch {}
+          }
         }
-      }),
-      // No fetch timeout: streaming keeps bytes flowing so no proxy idle-kills
-      // the connection; the model stops naturally at EOS. No time limits.
-    });
-    if (resp.ok && resp.body) {
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let raw = '';
-      let inThinking = false;
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const parsed = JSON.parse(line);
-            const delta = parsed.message?.content || '';
-            if (!delta) continue;
-            if (delta.includes('<think>')) { inThinking = true; continue; }
-            if (delta.includes('</think>')) { inThinking = false; continue; }
-            if (!inThinking) raw += delta;
-          } catch {}
+        if (raw && raw.trim()) {
+          const { answer } = parseThinkingResponse(raw);
+          const content = cleanResponse(answer, lastText);
+          const finalText = (content && content.trim()) ? content : answer.trim();
+          if (finalText) return finalText;
         }
+      } else if (resp && resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        const rawText = data?.message?.content || '';
+        if (rawText && rawText.trim()) {
+          const { answer } = parseThinkingResponse(rawText);
+          const content = cleanResponse(answer, lastText);
+          const finalText = (content && content.trim()) ? content : answer.trim();
+          if (finalText) return finalText;
+        }
+      } else if (resp) {
+        try { await resp.text(); } catch {}
       }
-      if (raw && raw.trim()) {
-        const { answer } = parseThinkingResponse(raw);
-        const content = cleanResponse(answer, lastText);
-        return (content && content.trim()) ? content : answer.trim();
-      }
-    } else if (resp.ok) {
-      const data = await resp.json();
-      const rawText = data?.message?.content || '';
-      if (rawText && rawText.trim()) {
-        const { answer } = parseThinkingResponse(rawText);
-        const content = cleanResponse(answer, lastText);
-        return (content && content.trim()) ? content : answer.trim();
-      }
-    } else {
-      try { await resp.text(); } catch {}
+    } catch (e) {
+      lastErr = e;
+      continue;
     }
-  } catch {}
-  throw new Error('Ollama failed');
+  }
+  throw lastErr || new Error('Ollama failed');
 }
 
 // Ollama vision — uses llava or other vision models on Contabo VPS
 // NOTE: kept as LAST-resort only (CPU inference can exceed gateway timeouts).
 async function callOllamaVision(messages, env) {
-  const ollamaUrl = env.OLLAMA_BASE_URL;
-  if (!ollamaUrl) return null;
+  const bases = resolveOllamaBases(env);
+  if (!bases.length) return null;
   const model = env.OLLAMA_VISION_MODEL || 'llava:7b';
-  try {
-    const resp = await fetch(`${ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: false,
-        keep_alive: '24h',
-        options: {
-          num_predict: 4096,
-          temperature: 0.3,
-        }
-      }),
-      // No time limit — vision answers complete fully.
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      const content = data?.message?.content;
-      if (content && content.trim()) return content;
-    }
-  } catch {}
+  for (const ollamaUrl of bases) {
+    try {
+      const resp = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          keep_alive: '24h',
+          options: {
+            num_predict: 4096,
+            temperature: 0.3,
+          }
+        }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        const content = data?.message?.content;
+        if (content && content.trim()) return content;
+      }
+    } catch {}
+  }
   return null;
 }
 
-// Ollama vision image analysis — uses LLaVA to analyze images without OpenRouter
-// This allows vision analysis even when OpenRouter is unavailable
+// Ollama vision image analysis — uses LLaVA on the Contabo VPS to analyze images
 async function analyzeImageWithOllamaVision(imageBase64, mimeType, editPrompt, env) {
-  const ollamaUrl = env.OLLAMA_BASE_URL;
-  if (!ollamaUrl) return null;
+  const bases = resolveOllamaBases(env);
+  if (!bases.length) return null;
   const model = env.OLLAMA_VISION_MODEL || 'llava:7b';
-  try {
-    const messages = [{
-      role: 'user',
-      content: `Describe this image in detail. Focus on the subject, their clothing/attire, background, colors, and composition. The user wants to edit it: "${editPrompt}"`,
-      images: [imageBase64],
-    }];
-    const resp = await fetch(`${ollamaUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: false,
-        options: { num_predict: 4096, temperature: 0.3 },
-      }),
-      // No time limit — vision answers complete fully.
-    });
-    if (resp.ok) {
-      const data = await resp.json();
-      return data?.message?.content || null;
-    }
-  } catch {}
+  const messages = [{
+    role: 'user',
+    content: `Describe this image in detail. Focus on the subject, their clothing/attire, background, colors, and composition. The user wants to edit it: "${editPrompt}"`,
+    images: [imageBase64],
+  }];
+  for (const ollamaUrl of bases) {
+    try {
+      const resp = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: false,
+          keep_alive: '24h',
+          options: { num_predict: 4096, temperature: 0.3 },
+        }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => ({}));
+        const c = data?.message?.content || null;
+        if (c && String(c).trim()) return c;
+      }
+    } catch {}
+  }
   return null;
 }
 
@@ -2669,9 +2725,10 @@ function removeEmojis(text) {
 
 // ── Primary LLM — Ollama on Contabo VPS (unlimited, free, no API caps) ──
 async function callPrimaryLLM(messages, env, timeoutMs = 600000) {
-  const ollamaUrl = env.OLLAMA_BASE_URL;
-  if (!ollamaUrl) throw new Error('No Ollama URL');
-  const model = env.OLLAMA_MODEL || 'qwen2.5:1.5b';
+  const bases = resolveOllamaBases(env);
+  if (!bases.length) throw new Error('No Ollama URL');
+  const ollamaUrl = bases[0];
+  const model = env.OLLAMA_MODEL || 'qwen2.5:3b';
   const contextSize = parseInt(env.OLLAMA_CONTEXT_SIZE || '16384');
   const maxChars = contextSize * 3;
   let totalChars = 0;
@@ -2723,9 +2780,10 @@ async function callPrimaryLLM(messages, env, timeoutMs = 600000) {
 
 // ── Fast LLM — Ollama with short timeout (same model, fast response) ──
 async function callFastLLM(messages, env) {
-  const ollamaUrl = env.OLLAMA_BASE_URL;
-  if (!ollamaUrl) throw new Error('No Ollama URL');
-  const model = env.OLLAMA_MODEL || 'qwen2.5:1.5b';
+  const bases = resolveOllamaBases(env);
+  if (!bases.length) throw new Error('No Ollama URL');
+  const ollamaUrl = bases[0];
+  const model = env.OLLAMA_MODEL || 'qwen2.5:3b';
   try {
     const resp = await fetch(`${ollamaUrl}/api/chat`, {
       method: 'POST',
@@ -4646,7 +4704,7 @@ async function safeApology(reason, env) {
   const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: userMsg }];
 
   let result = null;
-  if (env.OLLAMA_BASE_URL) {
+  if (resolveOllamaBases(env).length) {
     try { result = await callOllama(msgs, env); } catch {}
   }
 
@@ -5067,7 +5125,7 @@ async function generateGreeting(message, env, location) {
 
   // Single self-hosted Ollama call — tryWorkersAIChat is the same backend,
   // racing both doubles CPU load for zero benefit.
-  if (env.OLLAMA_BASE_URL) {
+  if (resolveOllamaBases(env).length) {
     try {
       const result = await callOllama(msgs, env);
       if (result && result.trim()) return result.trim();
@@ -5650,39 +5708,66 @@ export default {
       }
     }
 
-    if (path === '/v1/billing/order' && request.method === 'POST') {
+    // Standard-checkout alias: POST /api/create-order behaves exactly like
+    // POST /v1/billing/order (same auth, same HMAC model, same KV grants).
+    // Body accepts EITHER {plan} (catalog subscription) OR the generic
+    // {amount (paise), currency, receipt} shape. Minimum amount: 100 paise.
+    if ((path === '/v1/billing/order' || path === '/api/create-order') && request.method === 'POST') {
+      const strict = (path === '/api/create-order');
+      const orderErr = (msg, status) => strict
+        ? jsonOk({ error: msg }, status)
+        : jsonError(msg, status);
       try {
         const quotaId = env._quotaId || 'anon';
-        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to upgrade.', 401);
-        let plan = 'ai_plus_monthly';
-        try { plan = (await request.json())?.plan || 'ai_plus_monthly'; } catch {}
-        if (plan === 'pro_monthly') { /* legacy alias allowed */ }
-        const entry = catalogEntryForPlan(plan, env);
-        if (!entry) return jsonError('Unknown plan.');
-        if (!entry.amount_inr || entry.amount_inr <= 0) return jsonError('That plan is free — no payment needed.');
+        if (!quotaId.startsWith('u:')) return orderErr('Please sign in to upgrade.', 401);
+        let rawBody = {};
+        try { rawBody = (await request.json()) || {}; } catch {}
         const auth = razorpayAuth(env);
-        if (!auth) return jsonError('Billing is not configured yet. Please try again later.', 503);
-        const amount = Math.round(entry.amount_inr * 100);
-        const receipt = `acro_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`.slice(0, 40);
+        if (!auth) return orderErr('Billing is not configured yet. Please try again later.', 503);
+        let amount = 0;
+        let plan = rawBody.plan || 'ai_plus_monthly';
+        let receipt = String(rawBody.receipt || '').slice(0, 40);
+        if (rawBody.amount != null && !(typeof rawBody.plan === 'string' && BILLING_CATALOG[rawBody.plan])) {
+          // Generic amount-based order (paise). Free/plan catalog is bypassed.
+          amount = Math.floor(Number(rawBody.amount));
+          if (!Number.isFinite(amount) || amount < 100) return orderErr('Amount must be an integer >= 100 paise.', 400);
+          plan = (typeof rawBody.plan === 'string' && rawBody.plan) ? String(rawBody.plan).slice(0, 64) : 'one_time';
+        } else {
+          if (plan === 'pro_monthly') { /* legacy alias allowed */ }
+          const entry = catalogEntryForPlan(plan, env);
+          if (!entry) return orderErr('Unknown plan.', strict ? 400 : 200);
+          if (!entry.amount_inr || entry.amount_inr <= 0) return orderErr('That plan is free — no payment needed.', 400);
+          amount = Math.round(entry.amount_inr * 100);
+          if (amount < 100) return orderErr('Amount must be an integer >= 100 paise.', 400);
+        }
+        if (!receipt) receipt = `acro_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`.slice(0, 40);
+        const currency = String(rawBody.currency || 'INR').toUpperCase().slice(0, 3) || 'INR';
         const resp = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: auth.headers,
-          body: JSON.stringify({ amount, currency: 'INR', receipt, notes: { user: quotaId, plan } }),
+          body: JSON.stringify({ amount, currency, receipt, notes: { user: quotaId, plan } }),
           signal: AbortSignal.timeout(20000),
         });
         const data = await resp.json().catch(() => ({}));
+        if (resp.status === 401 || resp.status === 403) {
+          console.error('[/v1/billing/order] razorpay auth failure:', resp.status);
+          return orderErr('Billing authentication failed.', 401);
+        }
         if (!resp.ok || !data?.id) {
           console.error('[/v1/billing/order] razorpay error:', JSON.stringify(data).slice(0, 300));
-          return jsonError('Could not create a payment order. Please try again.');
+          return orderErr('Could not create a payment order. Please try again.', 500);
         }
         return jsonOk({ order_id: data.id, amount: data.amount, currency: data.currency, key_id: auth.id, plan });
       } catch (e) {
         console.error('[/v1/billing/order] error:', e && e.message);
-        return jsonError('Could not create a payment order. Please try again.');
+        return orderErr('Could not create a payment order. Please try again.', 500);
       }
     }
 
-    if (path === '/v1/billing/verify' && request.method === 'POST') {
+    // Standard-checkout alias: POST /api/verify-payment <=> POST /v1/billing/verify.
+    // HMAC-SHA256(order_id + "|" + payment_id, KEY_SECRET); mismatch => 400,
+    // never granted. Missing fields => 400.
+    if ((path === '/v1/billing/verify' || path === '/api/verify-payment') && request.method === 'POST') {
       try {
         const quotaId = env._quotaId || 'anon';
         if (!quotaId.startsWith('u:')) return jsonError('Please sign in to upgrade.', 401);
@@ -6025,7 +6110,7 @@ export default {
           // Run LLM — SINGLE self-hosted Ollama call. tryWorkersAIChat is just a
           // wrapper around callOllama, so racing both doubles CPU load on the
           // same 4-core box and halves throughput for zero benefit.
-          if (env.OLLAMA_BASE_URL) {
+          if (resolveOllamaBases(env).length) {
             try {
               const codeResult = await callOllama(codeMsgs, env);
               if (codeResult && codeResult.trim()) content = codeResult.trim();
@@ -6197,7 +6282,7 @@ export default {
         // Single self-hosted call — tryWorkersAIChat is just a wrapper around
         // callOllama, so racing both doubles CPU load on the same box and
         // halves throughput for zero benefit.
-        if (env.OLLAMA_BASE_URL) {
+        if (resolveOllamaBases(env).length) {
           try { const t0 = Date.now(); content = await callOllama(msgs, env); console.error('CHAT-TIMING llmGen1Ms=' + (Date.now() - t0)); } catch {}
         }
         if (!content || !content.trim()) {
@@ -6207,7 +6292,7 @@ export default {
             ...history,
             { role: 'user', content: webData ? `Context:\n${webData.substring(0, 1500)}\n\nQuestion: ${effectiveMessage}` : effectiveMessage }
           ];
-          if (env.OLLAMA_BASE_URL) {
+          if (resolveOllamaBases(env).length) {
             try { const t0 = Date.now(); content = await callOllama(retryMsgs, env); console.error('CHAT-TIMING llmGen2Ms=' + (Date.now() - t0)); } catch {}
           }
         }
@@ -6219,7 +6304,7 @@ export default {
             ...history,
             { role: 'user', content: effectiveMessage }
           ];
-          if (env.OLLAMA_BASE_URL) {
+          if (resolveOllamaBases(env).length) {
             try { const t0 = Date.now(); content = await callOllama(bareMsgs, env); console.error('CHAT-TIMING llmGen3Ms=' + (Date.now() - t0)); } catch {}
           }
         }
@@ -6710,11 +6795,11 @@ export default {
           // generation before streaming started, adding 10-60s of dead time.
           // SECONDARY: stream from Ollama coder model (self-hosted, unlimited,
           // higher quality for complex code) — trimmed context keeps prefill fast.
-          if (env.OLLAMA_BASE_URL) {
+          if (resolveOllamaBases(env).length) {
             try {
               const model = env.OLLAMA_CODE_MODEL || env.OLLAMA_MODEL || 'qwen2.5-coder:7b';
               const codeMaxTokens = parseInt(env.OLLAMA_CODE_MAX_TOKENS || '8192');
-              const resp = await fetch(`${(env.OLLAMA_BASE_URL || '').trim()}/api/chat`, {
+              const resp = await fetch(`${resolveOllamaBases(env)[0]}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model, messages: codeMsgs, stream: true, keep_alive: '24h', options: { num_predict: codeMaxTokens, num_ctx: 8192, temperature: 0.15, top_p: 0.9 } }),
@@ -6767,7 +6852,7 @@ export default {
           // tryWorkersAIChat is just a callOllama wrapper — racing both
           // doubles CPU load on the same box for zero benefit.
           let codeContent = null;
-          if (env.OLLAMA_BASE_URL) {
+          if (resolveOllamaBases(env).length) {
             try {
               const codeResult = await callOllama(codeMsgs, env);
               if (codeResult && codeResult.trim()) codeContent = codeResult.trim();
@@ -6925,13 +7010,13 @@ export default {
 
         // PRIMARY & ONLY: Ollama streaming on Contabo VPS (self-hosted,
         // unlimited). Fully self-hosted policy — no quota-limited services.
-        if (env.OLLAMA_BASE_URL) {
+        if (resolveOllamaBases(env).length) {
           try {
             const model = env.OLLAMA_MODEL || 'qwen2.5:3b';
             const useThink = shouldUseThinking(msgs);
             const chatMaxTokens = answerTokenBudget(message, false);
             const tFetch0 = Date.now();
-            const resp = await fetch(`${(env.OLLAMA_BASE_URL || '').trim()}/api/chat`, {
+            const resp = await fetch(`${resolveOllamaBases(env)[0]}/api/chat`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ model, messages: msgs, stream: true, think: useThink, keep_alive: '24h', options: { num_predict: chatMaxTokens, num_ctx: 8192, temperature: 0.6, top_p: 0.85, repeat_penalty: 1.1 } }),
@@ -6992,7 +7077,7 @@ export default {
         {
           try {
             let glmResult = null;
-            if (env.OLLAMA_BASE_URL) { try { glmResult = await callOllama(msgs, env); } catch {} }
+            if (resolveOllamaBases(env).length) { try { glmResult = await callOllama(msgs, env); } catch {} }
             if (glmResult && glmResult.trim()) {
               const content = glmResult.trim();
               if (memUserId) { try { ctx.waitUntil(updateAndStoreUserMemory(env, memUserId, history, message, content)); } catch {} }
@@ -7758,7 +7843,7 @@ export default {
         ];
         let content = null;
         try { content = await tryWorkersAIChat(messages, env); } catch {}
-        if (!content && env.OLLAMA_BASE_URL) { try { content = await callOllama(messages, env); } catch {} }
+        if (!content && resolveOllamaBases(env).length) { try { content = await callOllama(messages, env); } catch {} }
         return jsonOk({ response: cleanResponse(content || '') , type: 'chat' });
       } catch (error) {
         console.error('[/v1/chat/generate-friendly-message] error:', error);
@@ -7766,12 +7851,46 @@ export default {
       }
     }
 
+    // Warmup: touches Ollama (/api/tags + tiny keep_alive) so the model stays
+    // loaded (OLLAMA_KEEP_ALIVE=24h) and cold-start ~20-40s never hits a real
+    // user query. Safe to call from cron / client boot / load-balancer.
     if (path === '/v1/wakeup' && request.method === 'GET') {
-      return jsonOk({ status: 'ok' });
+      const bases = resolveOllamaBases(env);
+      let warmed = false;
+      let checked = 0;
+      for (const b of bases) {
+        checked++;
+        try {
+          const r = await fetch(`${b}/api/tags`, { signal: AbortSignal.timeout(8000) });
+          if (r.ok) { warmed = true; break; }
+        } catch {}
+        if (checked >= 2) break;
+      }
+      return jsonOk({ status: warmed ? 'ok' : 'degraded', warmed, service: 'acronous-ai' });
     }
 
+    // Honest health: probes Ollama instead of always returning ok, so the app
+    // can show offline state instead of sending queries into a void.
     if (path === '/health' && request.method === 'GET') {
-      return jsonOk({ status: 'ok', service: 'acronous-ai' });
+      const bases = resolveOllamaBases(env);
+      let ollama = { ok: false, models: [] };
+      let usedBase = bases[0] || null;
+      for (const b of bases.slice(0, 2)) {
+        const p = await probeOllamaBase(b, 5000);
+        usedBase = b;
+        if (p.ok) { ollama = p; break; }
+      }
+      const status = ollama.ok ? 'ok' : 'degraded';
+      const code = ollama.ok ? 200 : 503;
+      return jsonOk({
+        status,
+        service: 'acronous-ai',
+        ollama: ollama.ok ? 'up' : 'down',
+        ollama_base: usedBase,
+        models: ollama.models || [],
+        model: env.OLLAMA_MODEL || 'qwen2.5:3b',
+        timestamp: new Date().toISOString(),
+      }, code);
     }
 
     if (isApiPath(path)) {
@@ -7791,7 +7910,21 @@ export default {
     } catch {
       return new Response('Proxy error', { status: 502 });
     }
-  }
+  },
+
+  // Cron keep-alive (wrangler [triggers] crons = "*/5 * * * *"): pings Ollama
+  // /api/tags so the model never unloads and the tunnel never idles. Never
+  // throws — cron failures must not page.
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil((async () => {
+      for (const b of resolveOllamaBases(env).slice(0, 2)) {
+        try {
+          const r = await fetch(`${b}/api/tags`, { signal: AbortSignal.timeout(8000) });
+          if (r.ok) break;
+        } catch {}
+      }
+    })());
+  },
 };
 
 

@@ -56,7 +56,9 @@ class ChatRequest {
   });
 
   Map<String, dynamic> toJson() => {
+    // Send both keys: /v1/chat expects `message`, legacy /api/chat reads `query`.
     'query': query,
+    'message': query,
     if (sessionId != null) 'session_id': sessionId,
     if (context != null) 'context': context,
     if (messages != null) 'messages': messages,
@@ -108,7 +110,8 @@ class ChatResponse {
   });
 
   factory ChatResponse.fromJson(Map<String, dynamic> json) => ChatResponse(
-    content: json['content'] as String? ?? '',
+    // Worker returns `response`; legacy paths return `content`. Accept both.
+    content: (json['response'] as String?) ?? (json['content'] as String?) ?? '',
     type: json['type'] as String? ?? 'chat',
     sources: json['sources'] != null
         ? (json['sources'] as List)
@@ -183,12 +186,18 @@ class ApiClient {
       final response = await client
           .get(Uri.parse('$url/health'))
           .timeout(timeout);
-      if (response.statusCode != 200) return false;
       try {
         final body = jsonDecode(response.body);
-        if (body is Map && body['status'] == 'ok') return true;
+        // Server returns 200 ok when Ollama is up, 503 degraded when it is
+        // warming. Both mean the Worker is reachable — degraded just needs a
+        // /v1/wakeup first (done by detectBaseUrl/_discoverServer).
+        if (body is Map) {
+          final status = body['status']?.toString();
+          if (status == 'ok' || status == 'degraded') return true;
+        }
       } catch (_) {}
-      return false;
+      // Fallback: any 2xx with a body counts as reachable.
+      return response.statusCode >= 200 && response.statusCode < 300;
     } catch (_) {
       return false;
     } finally {
@@ -432,6 +441,11 @@ class ApiClient {
     final request = http.Request('POST', uri);
     request.headers['Content-Type'] = 'application/json';
     request.headers['Accept'] = 'text/event-stream';
+    // Auth was never sent on the stream path, so signed-in users burned the
+    // shared IP quota (HTTP 402 after 20 chats). Send it when available.
+    if (_authToken != null) {
+      request.headers['Authorization'] = 'Bearer $_authToken';
+    }
     request.body = jsonEncode(body);
 
     final client = http.Client();

@@ -15,6 +15,7 @@ import '../api/client.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../models/message.dart';
+import '../services/central_auth_service.dart';
 import '../services/file_service.dart';
 import '../services/preferences_service.dart';
 import '../services/speech_service.dart';
@@ -194,8 +195,16 @@ class ChatProvider extends ChangeNotifier {
     _init();
   }
 
+  /// Pushes the signed-in JWT into [ApiClient] so metered endpoints bill the
+  /// user instead of the shared IP bucket (prevents false 402 paywalls).
+  void syncAuthToken([String? token]) {
+    _api.setAuthToken(token ?? CentralAuthService.instance.token);
+  }
+
   Future<void> _init() async {
     await _loadPrefs();
+    // Seed the auth token at boot; main.dart re-syncs on auth changes.
+    syncAuthToken();
     final savedUrl = await _prefs.loadServerUrl();
     if (savedUrl.isNotEmpty) {
       _api.updateBaseUrl(savedUrl);
@@ -233,7 +242,10 @@ class ChatProvider extends ChangeNotifier {
           );
           if (!ready) {
             final healthy = await _api.healthCheck();
-            if (healthy['status'] == 'ok') {
+            // Server reports degraded (503) while Ollama warms — still usable
+            // after wakeup, so treat it as connected instead of offline.
+            final st = healthy['status']?.toString();
+            if (st == 'ok' || st == 'degraded') {
               _isServerConnected = true;
               _startKeepAlive();
               _isConnecting = false;
@@ -271,7 +283,8 @@ class ChatProvider extends ChangeNotifier {
       try {
         await _api.wakeup(timeout: const Duration(seconds: 10));
         final healthy = await _api.healthCheck();
-        _isServerConnected = healthy['status'] == 'ok';
+        final st = healthy['status']?.toString();
+        _isServerConnected = st == 'ok' || st == 'degraded';
       } catch (_) {
         _isServerConnected = false;
       }

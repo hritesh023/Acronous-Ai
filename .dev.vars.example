@@ -1,0 +1,7 @@
+# Local `wrangler dev` vars — NEVER commit the real file (.dev.vars is gitignored).
+# Production: set via `npx wrangler secret put RAZORPAY_KEY_SECRET` (+ webhook secret).
+# The KEY_ID below is public; the secret stays in your local file / secret store only.
+RAZORPAY_KEY_ID = "rzp_test_Td9I8baAyOgRYZ"
+# RAZORPAY_KEY_SECRET = "paste-local-test-secret-here"
+# RAZORPAY_WEBHOOK_SECRET = "paste-local-webhook-secret-here"
+JWT_SECRET = "local-dev-jwt-secret-change-me"

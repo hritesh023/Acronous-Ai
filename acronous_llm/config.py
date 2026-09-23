@@ -21,7 +21,10 @@ class AcronousConfig:
         self.CLASSIFIER_PATH = self.MODELS_DIR / "classifier.pt"
         self.EMBEDDER_PATH = self.MODELS_DIR / "embedder.pt"
 
-        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "qwen3:8b")
+        # Default chat model: qwen2.5:3b (5.7 tok/s, reliable). qwen3:8b
+        # (2.35 tok/s) caused 90s-timeout 500s on the 4-core CPU box — it stays
+        # available via ACRONOUS_LLM_CHAT_MODEL override for quality tasks only.
+        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "qwen2.5:3b")
         self.LLM_BACKEND = os.getenv("ACRONOUS_LLM_BACKEND", "auto")
         self.LLM_PROVIDER = os.getenv("ACRONOUS_LLM_PROVIDER", "contabo")
         # ── Contabo VPS brain (Cloud VPS 8, EU) ──
@@ -32,8 +35,10 @@ class AcronousConfig:
             "ACRONOUS_BRAIN_URL", "https://brain.acronous.com")
         self.BRAIN_DIRECT_URL = os.getenv(
             "ACRONOUS_BRAIN_DIRECT_URL", "http://167.86.104.155:11434")
-        # Model routing — smartest model per task (all served by Contabo Ollama)
-        self.LLM_CHAT_MODEL = os.getenv("ACRONOUS_LLM_CHAT_MODEL", "qwen3:8b")
+        # Model routing — fastest reliable model per task (Contabo 4-core CPU).
+        # Chat defaults to 3b for snappy UX; set ACRONOUS_LLM_CHAT_MODEL=qwen3:8b
+        # explicitly only for quality-first deployments with GPU.
+        self.LLM_CHAT_MODEL = os.getenv("ACRONOUS_LLM_CHAT_MODEL", "qwen2.5:3b")
         self.LLM_CODE_MODEL = os.getenv("ACRONOUS_LLM_CODE_MODEL", "qwen2.5-coder:7b")
         self.LLM_FAST_MODEL = os.getenv("ACRONOUS_LLM_FAST_MODEL", "qwen2.5:3b")
         # ── Self-training (auto-learn from internet + self fine-tune loop) ──

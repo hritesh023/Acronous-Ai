@@ -58,7 +58,8 @@ GPU_PRO_ONLY = "true"
 PRO_PRICE_INR = "299"
 # Razorpay Key ID (public; secret goes via `npx wrangler secret put RAZORPAY_KEY_SECRET`).
 # Leave empty until you have keys — billing endpoints return 503 and all usage stays free-tier.
-RAZORPAY_KEY_ID = "rzp_test_TbYHbib4Lvnemr"
+# LIVE key (production): set the matching live secret on the worker before deploying.
+RAZORPAY_KEY_ID = "rzp_live_TdBXy92OTOoIeh"
 #   npx wrangler secret put RAZORPAY_KEY_SECRET
 
 [[kv_namespaces]]
@@ -68,3 +69,9 @@ id = "eb112976703e4447af69c13dd5f8824c"
 [[kv_namespaces]]
 binding = "USER_MEMORY"
 id = "245e81f7a70c448d840cc399be821633"
+
+# Keep Contabo Ollama warm: Workers cron hits scheduled() every 5 min which
+# pings /api/tags (model keep_alive=24h). Without this the model unloads and
+# the first user after idle pays a 20-40s cold start / timeout.
+[triggers]
+crons = ["*/5 * * * *"]

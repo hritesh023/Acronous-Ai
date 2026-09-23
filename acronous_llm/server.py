@@ -29,7 +29,7 @@ import time
 import logging
 import threading
 
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -324,41 +324,80 @@ async def chat(req: ChatRequest):
         return JSONResponse(status_code=500, content={"response": "I hit a snag. Try again?", "type": "error"})
 
 
-@app.post("/v1/suggest/search")
-async def suggest_search(req: SearchSuggestRequest):
-    """EquiVO AI search bar: return suggestions AND learn from the query."""
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    """OpenAI-compat shim so Navigwiz/CF workers can call the brain with the
+    standard {model, messages} shape. Returns {choices:[{message:{content}}]}.
+    Never returns empty content — empty is what clients render as zero-response."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+    messages = body.get("messages") or []
+    # Last user message is the prompt; system messages are folded into context.
+    prompt = ""
+    system_bits = []
+    for m in messages:
+        role = (m.get("role") or "").lower()
+        content = m.get("content")
+        text = content if isinstance(content, str) else str(content or "")
+        if role == "user" and text.strip():
+            prompt = text
+        elif role == "system" and text.strip():
+            system_bits.append(text[:2000])
+    if not prompt.strip():
+        # Some callers send {prompt} instead of messages.
+        prompt = str(body.get("prompt") or body.get("message") or body.get("query") or "")
+    if not prompt.strip():
+        return JSONResponse(status_code=400, content={"error": "No prompt provided"})
     agent = get_brain()
+    try:
+        session = str(body.get("session_id") or body.get("sessionId") or "default")
+        ctx = "\n".join(system_bits[-2:]) if system_bits else None
+        result = agent.process(prompt, session_id=session, context=ctx)
+        content = result.get("content", "") if isinstance(result, dict) else str(result)
+        if not (content or "").strip():
+            content = _generate_fallback(prompt, "general_chat")
+        return {
+            "choices": [{"message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "model": body.get("model") or "qwen2.5:3b",
+        }
+    except Exception as exc:
+        logger.exception("chat_completions failed")
+        return JSONResponse(status_code=500, content={"error": "LLM unavailable", "choices": []})
+
+
+@app.post("/v1/suggest/search")
+async def suggest_search(req: SearchSuggestRequest, background: BackgroundTasks):
+    """EquiVO AI search bar: return suggestions instantly AND learn from the
+    query in the background (learning does disk writes — never block the
+    response on it, callers budget ~2.5s)."""
     labels = _search_suggestions(req.query)
-    # The brain learns from every search query.
-    agent.neural.learn_from_interaction(
-        req.query,
-        " | ".join(labels),
-        "web_search",
-        session_id=req.session_id,
-        feedback_score=0.5,
-    )
-    agent._save_learning_state()
+
+    def _learn():
+        try:
+            agent = get_brain()
+            agent.neural.learn_from_interaction(
+                req.query,
+                " | ".join(labels),
+                "web_search",
+                session_id=req.session_id,
+                feedback_score=0.5,
+            )
+            agent._save_learning_state()
+        except Exception as exc:
+            logger.warning("suggest/search background learn failed: %s", exc)
+
+    background.add_task(_learn)
     return {"suggestions": [{"label": l, "type": "ai-generated"} for l in labels]}
 
 
 @app.post("/v1/suggest/feed")
-async def suggest_feed(req: FeedSuggestRequest):
-    """EquiVO feed suggestions: the brain learns from which items a user
-    engaged with (interacted list) and returns personalized suggestions."""
+async def suggest_feed(req: FeedSuggestRequest, background: BackgroundTasks):
+    """EquiVO feed suggestions: return personalized candidates instantly and
+    learn from engagement in the background (disk writes never block)."""
     agent = get_brain()
     engaged = req.interacted or []
-    # Learn from this session's engagement.
-    for label in engaged:
-        if not label:
-            continue
-        agent.neural.learn_from_interaction(
-            label or "",
-            "user engaged with this feed item",
-            "general_chat",
-            session_id=req.user_id,
-            feedback_score=0.9,
-        )
-        agent.neural.remember_preference(req.user_id, "engaged", label)
 
     # Prioritise things the brain has learned about (RAG/internet) that the
     # user hasn't already engaged with.
@@ -371,7 +410,25 @@ async def suggest_feed(req: FeedSuggestRequest):
         ]
     if engaged:
         suggestions = [s for s in suggestions if s not in engaged]
-    agent._save_learning_state()
+
+    def _learn():
+        try:
+            for label in engaged:
+                if not label:
+                    continue
+                agent.neural.learn_from_interaction(
+                    label or "",
+                    "user engaged with this feed item",
+                    "general_chat",
+                    session_id=req.user_id,
+                    feedback_score=0.9,
+                )
+                agent.neural.remember_preference(req.user_id, "engaged", label)
+            agent._save_learning_state()
+        except Exception as exc:
+            logger.warning("suggest/feed background learn failed: %s", exc)
+
+    background.add_task(_learn)
     return {"suggestions": suggestions[:8], "learned": len(engaged)}
 
 
@@ -486,6 +543,30 @@ async def brain_evaluate(sample_n: int = 20):
     return {"ok": True, **report}
 
 
+@app.get("/health")
+async def health():
+    """Lightweight liveness probe for load-balancers/cron — never loads the brain."""
+    return {"status": "ok", "service": "acronous-brain"}
+
+
+@app.get("/v1/wakeup")
+async def wakeup():
+    """Keep-alive: warms Ollama (tiny generate with keep_alive) so the model
+    stays loaded and the next real query is fast. Best-effort, never 500s."""
+    try:
+        import urllib.request, json as _json
+        base = os.getenv("ACRONOUS_LLM_API_URL", "http://ollama:11434/v1").replace("/v1", "")
+        req = urllib.request.Request(
+            base + "/api/tags",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=8) as r:
+            ok = r.status == 200
+        return {"status": "ok" if ok else "degraded", "warmed": ok}
+    except Exception as exc:
+        return JSONResponse(status_code=200, content={"status": "degraded", "warmed": False, "error": str(exc)[:200]})
+
+
 @app.get("/v1/brain/info")
 async def brain_info():
     """Static brain identity: Contabo VPS + Qwen routing (for clients/monitors)."""
@@ -496,7 +577,7 @@ async def brain_info():
             "vps": {"display": "acronous", "host_system": "20010", "region": "EU",
                     "ip": "167.86.104.155", "user": "root", "disk_gb": 300,
                     "plan": "Cloud VPS 8 (2026)"},
-            "models": {"chat": "qwen3:8b", "code": "qwen2.5-coder:7b",
+            "models": {"chat": "qwen2.5:3b", "code": "qwen2.5-coder:7b",
                        "fast": "qwen2.5:3b", "vision": "qwen2.5vl:7b"},
             "loop": {"internet_quick_scan_s": 300, "self_train_s": 21600}}
 
@@ -587,13 +668,19 @@ _DEFAULT_GENERATE_SYSTEM = (
 
 def _generate_fallback(prompt: str, route_type: str) -> str:
     """Lightweight offline fallback when the LLM is unreachable, so the app
-    still gets something useful instead of an empty response."""
+    still gets something useful instead of an empty response. NEVER returns
+    empty — empty is what the clients render as 'zero response'."""
     p = (prompt or "").strip()
     if route_type == "image_generation" or "caption" in p.lower():
         return "Here's my favorite: capturing a moment worth sharing.\nEvery picture has a story.\nMade for this moment."
     if "hashtag" in p.lower() or "tags" in p.lower():
         return "photography, lifestyle, trending, community, explore, daily, creative, moments"
-    return ""
+    if p:
+        return (
+            "I'm having a moment connecting to the main AI engine, but I'm still here. "
+            f"Could you try asking about '{p[:120]}' once more in a few seconds?"
+        )
+    return "I'm having a moment connecting to the main AI engine. Please try again in a few seconds."
 
 
 def _search_suggestions(query: str, max_items: int = 8) -> List[str]:

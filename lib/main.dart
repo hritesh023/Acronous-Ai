@@ -18,7 +18,14 @@ void main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
-        ChangeNotifierProvider(create: (_) => ChatProvider()),
+        ChangeNotifierProxyProvider<AuthProvider, ChatProvider>(
+          create: (_) => ChatProvider(),
+          update: (_, auth, chat) {
+            // Keep the API token in sync with sign-in state on every change.
+            chat?.syncAuthToken();
+            return chat!;
+          },
+        ),
         ChangeNotifierProvider<OverlayService>(create: (_) => OverlayService()..initialize()),
       ],
       child: const AcronousAIApp(),

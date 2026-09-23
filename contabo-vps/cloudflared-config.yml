@@ -33,8 +33,27 @@ tunnel: acronous-contabo
 # credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
 
 ingress:
-  # Contabo VPS image-service (Python SD, rembg, etc.)
+  # NOTE: this file is a TEMPLATE. The live tunnel (acronous-contabo) is
+  # remotely managed — the real ingress lives in the Cloudflare dashboard
+  # (PUT /cfd_tunnel/<id>/configurations) and currently is:
+  #   brain.acronous.com /v1/*      → http://brain:8000   (FastAPI brain)
+  #   brain.acronous.com            → http://nginx:80     (web UI / fallbacks)
+  #   ollama.acronous.com           → http://ollama:11434 (LLM, OpenAI-compat)
+  #   brain-ollama.acronous.com     → http://ollama:11434 (alias)
+  #   image-service.acronous.com    → http://image-service:7860
+  #   search.acronous.com           → http://searxng:8080
+  #   brain-ui.acronous.com         → http://nginx:80
+  # Use docker service names (not localhost) — cloudflared runs in compose.
   - hostname: brain.acronous.com
+    service: http://nginx:80
+    originRequest:
+      noTLSVerify: true
+      connectTimeout: 30s
+      timeout: 600s
+
+  # Python image service (matches EDITOR_SERVICE_URL=https://image-service.acronous.com
+  # in Acronous Ai wrangler.toml — this hostname was missing entirely).
+  - hostname: image-service.acronous.com
     service: http://localhost:7860
     originRequest:
       noTLSVerify: true
@@ -48,12 +67,12 @@ ingress:
       connectTimeout: 15s
       timeout: 30s
 
-  # Ollama API (text generation)
+  # Ollama API direct (OpenAI-compat /v1/chat/completions + native /api/chat)
   - hostname: ollama.acronous.com
     service: http://localhost:11434
     originRequest:
       connectTimeout: 30s
-      timeout: 120s
+      timeout: 600s
 
   # Nginx (web UI / static files)
   - hostname: brain-ui.acronous.com

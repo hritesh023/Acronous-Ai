@@ -11,19 +11,20 @@ CLOUD_PROVIDERS = {
     #   direct IP: http://167.86.104.155:11434/v1
     #   tunnel   : https://brain.acronous.com/v1
     # Override with ACRONOUS_LLM_API_URL env var.
-    # Base model: Qwen3 8B (latest smart open-source that fits CPU VPS).
-    #   qwen3:8b          main brain — best reasoning / chat (default)
+    # Base model: qwen2.5:3b default (5.7 tok/s, reliable on 4-core CPU).
+    #   qwen2.5:3b        main chat default — fast + reliable (use this)
     #   qwen2.5-coder:7b  code specialist
+    #   qwen3:8b          quality option only — 2.35 tok/s, caused 90s timeouts;
+    #                     enable explicitly via ACRONOUS_LLM_CHAT_MODEL=qwen3:8b
     #   qwen2.5:7b        balanced fallback
-    #   qwen2.5:3b        fast path — greetings / simple Q&A (~5-6 tok/s CPU)
-    #   qwen2.5:1.5b      ultra-fast, weak — avoid for chat
+    #   qwen2.5:1.5b      ultra-fast, weak — avoid for chat (refuses)
     #   qwen2.5vl:7b      vision-language
     #   llava:7b          vision fallback
     "contabo": {
         "base_url": "http://ollama:11434/v1",
-        "models": ["qwen3:8b", "qwen2.5-coder:7b", "qwen2.5:7b", "qwen2.5:3b", "qwen2.5:1.5b", "qwen3:4b", "qwen2.5vl:7b", "llava:7b", "llama3.1"],
-        "default_model": "qwen3:8b",
-        "chat_model": "qwen3:8b",
+        "models": ["qwen2.5:3b", "qwen3:8b", "qwen2.5-coder:7b", "qwen2.5:7b", "qwen2.5:1.5b", "qwen3:4b", "qwen2.5vl:7b", "llava:7b", "llama3.1"],
+        "default_model": "qwen2.5:3b",
+        "chat_model": "qwen2.5:3b",
         "code_model": "qwen2.5-coder:7b",
         "fast_model": "qwen2.5:3b",
         "vision_model": "qwen2.5vl:7b",
@@ -140,7 +141,7 @@ class LocalLLM:
         if task in ("vision", "image", "vl"):
             return _os.getenv("ACRONOUS_VISION_MODEL", "qwen2.5vl:7b")
         return _os.getenv("ACRONOUS_LLM_CHAT_MODEL",
-                          getattr(self.config, "LLM_CHAT_MODEL", "qwen3:8b"))
+                          getattr(self.config, "LLM_CHAT_MODEL", "qwen2.5:3b"))
 
     def generate(self, prompt, system_prompt=None, stream=False, max_tokens=None):
         if system_prompt is None:
@@ -202,27 +203,46 @@ class LocalLLM:
             yield self.generate(prompt, system_prompt, stream=False, max_tokens=max_tokens)
 
     def _generate_openai(self, prompt, system_prompt, stream=False, max_tokens=8192):
-        try:
-            if len(system_prompt) + len(prompt) > 8000:
-                max_user = max(0, 7000 - len(system_prompt))
-                if len(prompt) > max_user:
-                    prompt = "[Earlier context truncated]\n" + prompt[-max_user:]
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
-            ]
-            resp = self._openai_client.chat.completions.create(
-                model=self.config.LLM_MODEL,
-                messages=messages,
-                temperature=self.config.TEMPERATURE,
-                max_tokens=max_tokens,
-                stream=False,
-                timeout=90,
-            )
-            return resp.choices[0].message.content or ""
-        except Exception as e:
-            logger.error(f"[OpenAI API Error] {type(e).__name__}: {e}")
-            raise
+        # Retry once with the fast model: if the configured chat model stalls
+        # (e.g. qwen3:8b on CPU), the user still gets an answer instead of a
+        # timeout/blank. Never returns "" - callers treat "" as zero-response.
+        import os as _os2
+        models = [self.config.LLM_MODEL]
+        fast = _os2.getenv("ACRONOUS_LLM_FAST_MODEL", "qwen2.5:3b")
+        if fast and fast not in models:
+            models.append(fast)
+        last = None
+        for m in models:
+            try:
+                if len(system_prompt) + len(prompt) > 8000:
+                    max_user = max(0, 7000 - len(system_prompt))
+                    cut = prompt
+                    if len(prompt) > max_user:
+                        cut = "[Earlier context truncated]\n" + prompt[-max_user:]
+                else:
+                    cut = prompt
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": cut},
+                ]
+                resp = self._openai_client.chat.completions.create(
+                    model=m,
+                    messages=messages,
+                    temperature=self.config.TEMPERATURE,
+                    max_tokens=max_tokens,
+                    stream=False,
+                    timeout=75,
+                )
+                out = (resp.choices[0].message.content or "").strip()
+                if out:
+                    return out
+                last = RuntimeError("empty completion")
+            except Exception as e:
+                last = e
+                logger.warning(f"[LLM] model {m} failed ({type(e).__name__}), trying fallback")
+                continue
+        logger.error(f"[OpenAI API Error] {type(last).__name__ if last else 'Unknown'}: {last}")
+        raise last if last else RuntimeError("LLM failed")
 
     def _stream_openai(self, prompt, system_prompt, max_tokens=8192):
         try:
