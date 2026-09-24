@@ -52,7 +52,10 @@ ingress:
       timeout: 60s
 
   # Private dev-only dashboard (admin login gate in app middleware).
-  # Recommend a Zero Trust Access policy (Allow = dev email) as second gate.
+  # NOTE: tunnel acronous-contabo is REMOTELY managed — the live rule must be
+  # added in Cloudflare Zero Trust → Networks → Tunnels → acronous-contabo →
+  # Public Hostnames: dashboard.acronous.com → http://dashboard:3000.
+  # This block documents intent for a future move to local management.
   - hostname: dashboard.acronous.com
     service: http://dashboard:3000
     originRequest:
