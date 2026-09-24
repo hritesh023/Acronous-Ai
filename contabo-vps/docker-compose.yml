@@ -136,7 +136,7 @@ services:
     environment:
       - PORT=3000
       - BRAIN_URL=http://brain:8000
-      - API_URL=http://api-server:3000
+      - API_URL=https://api.acronous.com
       - OLLAMA_URL=http://ollama:11434
       - VPS_METRICS_URL=http://vps-monitor:9100/metrics
     restart: unless-stopped
