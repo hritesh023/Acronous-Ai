@@ -1,6 +1,6 @@
 # Acronous LLM brain — Contabo Cloud VPS 8 (24GB RAM / 300GB disk, EU, 167.86.104.155)
-# MEMORY BUDGET (limits sum ≈ 18GB — OS + Docker keep ~6GB headroom, never OOM):
-#   ollama 10g + brain 3g + image-service 3g + api-server 1g + searxng 512m + nginx/cloudflared ~384m
+# MEMORY BUDGET (limits sum ≈ 18.5GB — OS + Docker keep ~5.5GB headroom, never OOM):
+#   ollama 10g + brain 3g + image-service 3g + api-server 1g + dashboard 512m + searxng 512m + nginx/cloudflared ~384m
 # DISK BUDGET (300GB): models ~40GB + images ~15GB + data/db ~10GB + training quota 25GB
 #   → ~90GB used, ~200GB+ always free. Self-train enforces its quota + 40GB free floor.
 services:
@@ -119,6 +119,31 @@ services:
       - acronous-net
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── Private dev-only dashboard (dashboard.acronous.com) ──
+  # Next.js standalone. Internal port only — exposed SOLELY via the
+  # Cloudflare Tunnel ingress below, never published on the host.
+  # Requires ~/Acronous-Dashboard/.env on the VPS (ADMIN_EMAIL/HASH/SESSION_SECRET).
+  dashboard:
+    build:
+      context: ../Acronous-Dashboard
+      dockerfile: Dockerfile
+    env_file:
+      - ../Acronous-Dashboard/.env
+    environment:
+      - PORT=3000
+      - BRAIN_URL=http://brain:8000
+      - API_URL=http://api-server:3000
+      - OLLAMA_URL=http://ollama:11434
+    restart: unless-stopped
+    mem_limit: 512m
+    networks:
+      - acronous-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -51,5 +51,13 @@ ingress:
       connectTimeout: 10s
       timeout: 60s
 
+  # Private dev-only dashboard (admin login gate in app middleware).
+  # Recommend a Zero Trust Access policy (Allow = dev email) as second gate.
+  - hostname: dashboard.acronous.com
+    service: http://dashboard:3000
+    originRequest:
+      connectTimeout: 10s
+      timeout: 60s
+
   # Catch-all: return 404 for unmatched routes
   - service: http_status:404
