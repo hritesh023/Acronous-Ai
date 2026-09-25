@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../providers/auth_provider.dart' as auth;
 import '../providers/chat_provider.dart';
+import '../widgets/app_logo.dart';
 import 'chat_page.dart';
 
 class AuthPage extends StatefulWidget {
@@ -132,7 +133,7 @@ class _AuthPageState extends State<AuthPage>
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(25),
                           child: Image.asset(
-                            'assets/logo.png',
+                            AppLogo.assetFor(context),
                             width: 100,
                             height: 100,
                             fit: BoxFit.contain,

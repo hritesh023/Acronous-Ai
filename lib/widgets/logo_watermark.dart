@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_logo.dart';
 
 class LogoWatermark extends StatelessWidget {
   final double size;
@@ -20,7 +21,7 @@ class LogoWatermark extends StatelessWidget {
           ),
         ),
         child: Image.asset(
-          'assets/logo.png',
+          AppLogo.assetFor(context),
           width: size,
           height: size,
           fit: BoxFit.contain,

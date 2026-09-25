@@ -17,6 +17,7 @@ import '../utils/file_save.dart';
 import '../widgets/generation_skeleton.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/logo_watermark.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/markdown_renderer.dart';
 import '../widgets/video_preview.dart';
 
@@ -209,7 +210,7 @@ class ChatMessageWidget extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(AppDimens.avatarRadius),
               child: Image.asset(
-                'assets/logo.png',
+                AppLogo.assetFor(context),
                 width: AppDimens.avatarSize,
                 height: AppDimens.avatarSize,
                 fit: BoxFit.contain,

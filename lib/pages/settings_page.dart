@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../constants/app_constants.dart';
 import '../providers/chat_provider.dart';
 import '../services/overlay_service.dart';
+import '../widgets/app_logo.dart';
 import '../widgets/voice_popup.dart';
 import 'pricing_page.dart';
 
@@ -188,7 +189,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         borderRadius: BorderRadius.circular(
                             (AppDimens.inputIconInnerSize + 2) / 2),
                         child: Image.asset(
-                          'assets/Acronous_Ai_svj_logo.png',
+                          AppLogo.assistantAssetFor(context),
                           width: AppDimens.inputIconInnerSize,
                           height: AppDimens.inputIconInnerSize,
                           fit: BoxFit.contain,

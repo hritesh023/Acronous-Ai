@@ -8,6 +8,7 @@ import '../models/suggestion.dart';
 import '../widgets/chat_input.dart';
 import '../widgets/chat_message.dart';
 import '../widgets/sidebar.dart';
+import '../widgets/app_logo.dart';
 import 'auth_page.dart';
 
 class ChatPage extends StatefulWidget {
@@ -218,7 +219,7 @@ class _ChatPageState extends State<ChatPage> {
             ClipRRect(
               borderRadius: BorderRadius.circular(14),
               child: Image.asset(
-                'assets/logo.png',
+                AppLogo.assetFor(context),
                 width: 52,
                 height: 52,
                 errorBuilder: (_, _, _) => Container(

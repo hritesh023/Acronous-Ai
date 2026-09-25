@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
+import 'app_logo.dart';
 
 class TypingIndicator extends StatefulWidget {
   const TypingIndicator({super.key});
@@ -54,7 +55,7 @@ class _TypingIndicatorState extends State<TypingIndicator>
               borderRadius:
                   BorderRadius.circular(AppDimens.avatarRadius),
               child: Image.asset(
-                'assets/logo.png',
+                AppLogo.assetFor(context),
                 width: AppDimens.avatarSize,
                 height: AppDimens.avatarSize,
                 fit: BoxFit.contain,

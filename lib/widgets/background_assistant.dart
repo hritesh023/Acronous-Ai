@@ -6,6 +6,7 @@ import '../constants/app_constants.dart';
 import '../providers/auth_provider.dart';
 import '../providers/chat_provider.dart';
 import '../services/overlay_service.dart';
+import 'app_logo.dart';
 import 'voice_popup.dart';
 import 'voice_command_widget.dart';
 
@@ -176,7 +177,7 @@ class _BackgroundAssistantState extends State<BackgroundAssistant>
                     child: isSnapped
                         ? Icon(Icons.mic_rounded, color: cs.onPrimary, size: 18)
                         : Image.asset(
-                            'assets/Acronous_Ai_svj_logo.png',
+                            AppLogo.assistantAssetFor(context),
                             width: _buttonSize * 0.65,
                             height: _buttonSize * 0.65,
                             fit: BoxFit.contain,

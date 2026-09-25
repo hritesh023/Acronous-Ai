@@ -4,6 +4,7 @@ import '../providers/chat_provider.dart';
 import '../models/message.dart';
 import '../models/suggestion.dart';
 import '../api/client.dart' show ApiClient;
+import 'app_logo.dart';
 
 class SidebarWidget extends StatefulWidget {
   final ChatProvider chatProvider;
@@ -89,7 +90,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: Image.asset(
-              'assets/logo.png',
+              AppLogo.assetFor(context),
               width: 20,
               height: 20,
               errorBuilder: (_, _, _) => Container(

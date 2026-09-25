@@ -7,6 +7,7 @@ import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 import 'services/overlay_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/app_logo.dart';
 import 'widgets/background_assistant.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -121,7 +122,7 @@ class _SplashScreenState extends State<SplashScreen> {
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(30),
                 child: Image.asset(
-                  'assets/logo.png',
+                  AppLogo.assetFor(context),
                   width: 120,
                   height: 120,
                   fit: BoxFit.contain,
