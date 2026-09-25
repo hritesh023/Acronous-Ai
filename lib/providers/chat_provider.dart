@@ -1731,8 +1731,18 @@ class ChatProvider extends ChangeNotifier {
     for (var i = 0; i < msgs.length - 1; i++) {
       final m = msgs[i];
       if (m.role == 'user' || m.role == 'assistant') {
-        history.add({'role': m.role, 'content': m.content});
+        // Cap per-turn length client-side: the server also trims, but sending
+        // less over the wire + smaller prefill = faster first token on CPU.
+        final content =
+            m.content.length > 2000 ? m.content.substring(0, 2000) : m.content;
+        history.add({'role': m.role, 'content': content});
       }
+    }
+    // Keep only the most recent turns — older context costs prefill time on
+    // every request and the server keeps cross-chat memory in KV anyway.
+    const maxTurns = 20;
+    if (history.length > maxTurns) {
+      return history.sublist(history.length - maxTurns);
     }
     return history;
   }
@@ -2146,6 +2156,26 @@ class ChatProvider extends ChangeNotifier {
     String fileType = '';
     String filePoster = '';
     String imageData = '';
+    // Throttle live re-renders: sanitizing the full text + notifyListeners()
+    // (which re-parses markdown) per token is O(n^2) and janks mid-stream on
+    // phones. Flush at most every ~120ms; always flush the final text.
+    final stopwatch = Stopwatch()..start();
+    var pendingFlush = false;
+    void flushStreamingText() {
+      // Sanitize live to prevent backend-detail leaks in the streaming bubble
+      final sanitized = _sanitizeAssistantText(accumulated,
+          allowThirdParty: userAskedAboutThirdParty(text));
+      // Update the last assistant message in-place for live streaming effect
+      if (_currentConversation != null &&
+          _currentConversation!.messages.isNotEmpty &&
+          _currentConversation!.messages.last.role == 'assistant' &&
+          _currentConversation!.messages.last.isStreaming) {
+        _currentConversation!.messages.last.content = sanitized;
+      }
+      notifyListeners();
+      stopwatch.reset();
+      pendingFlush = false;
+    }
     try {
       await for (final event in _api.chatStream(
         message: text,
@@ -2164,21 +2194,13 @@ class ChatProvider extends ChangeNotifier {
           fileType = event.fileType;
           filePoster = event.filePoster;
           imageData = event.imageData;
+          if (pendingFlush || accumulated.isNotEmpty) flushStreamingText();
           break;
         }
         if (event.content.isNotEmpty) {
           accumulated += event.content;
-          // Sanitize live to prevent backend-detail leaks in the streaming bubble
-          final sanitized = _sanitizeAssistantText(accumulated,
-              allowThirdParty: userAskedAboutThirdParty(text));
-          // Update the last assistant message in-place for live streaming effect
-          if (_currentConversation != null &&
-              _currentConversation!.messages.isNotEmpty &&
-              _currentConversation!.messages.last.role == 'assistant' &&
-              _currentConversation!.messages.last.isStreaming) {
-            _currentConversation!.messages.last.content = sanitized;
-          }
-          notifyListeners();
+          pendingFlush = true;
+          if (stopwatch.elapsedMilliseconds >= 120) flushStreamingText();
         }
       }
     } catch (_) {
