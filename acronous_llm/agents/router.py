@@ -24,6 +24,14 @@ _DEEP_PATTERNS = [
     re.compile(r'(?:python|javascript|typescript|rust|go|java|c\+\+|ruby|php|swift|kotlin|html|css|sql|dart)', re.I),
 ]
 
+# Shared instruction appended to grounded prompts. Kept short: every token is
+# CPU prefill, and the sources above it already carry the authority.
+_GROUNDED_INSTRUCTION = (
+    "Answer directly from the sources above. Never mention searching, sources, "
+    "or your training data. Never invent names, dates, or numbers that are not "
+    "in the sources. If the sources do not answer it, say so plainly."
+)
+
 _INSTANT_PATTERNS = [
     re.compile(r'^(hi|hey|hello|yo|sup|howdy|hii+|heyy+|helloo+|greetings)$', re.I),
     re.compile(r'^(thanks?|thank you|thx|ty|tysm|appreciate)$', re.I),
@@ -242,6 +250,39 @@ Category:"""
             return "web_search"
         return "general_chat"
 
+    def _rag_k(self):
+        try:
+            return int(getattr(getattr(self.core, "config", None), "RAG_TOP_K", 4) or 4)
+        except Exception:
+            return 4
+
+    def _rag_direct(self, query):
+        """Memory-only answer, or None when the brain is not confident.
+
+        Confidence comes from the RAG confidence gate (BM25 + dense agreement
+        + real term coverage). Below the bar we deliberately return None so the
+        caller generates instead of guessing — this is the anti-hallucination
+        contract, and it is why "I don't know" is now a possible answer.
+        """
+        try:
+            if self._is_time_sensitive(query):
+                return None
+            hit = self.core.rag.answer(query, k=self._rag_k())
+            if hit.get("answerable") and (hit.get("answer") or "").strip():
+                return hit["answer"].strip()
+        except Exception:
+            pass
+        return None
+
+    def _model_for(self, route_type, query):
+        try:
+            task = "code" if route_type == "code_generation" else "chat"
+            if route_type == "image_generation" or route_type == "image_analysis":
+                task = "vision"
+            return self.core.llm.model_for_task(task)
+        except Exception:
+            return None
+
     def execute(self, query, route, session_id="default", image=None, messages=None, file_path=None, context=None, max_tokens=None):
         try:
             self.core.memory.add_message(session_id, "user", query, {"type": route.get("type", "chat")})
@@ -268,6 +309,18 @@ Category:"""
             context = context + "\n" + stored_context
 
         route_type = route.get("type", "general_chat")
+
+        # ── Memory fast path: skip the LLM entirely when we are confident ──
+        if image is None and file_path is None and route_type not in (
+            "image_generation", "file_generation", "translation"
+        ):
+            direct = self._rag_direct(query)
+            if direct:
+                try:
+                    self.core.memory.add_message(session_id, "assistant", direct, {"type": "rag_memory"})
+                except Exception:
+                    pass
+                return {"type": "factual", "content": direct, "sources": [], "rag_hit": True}
 
         try:
             if image is not None:
@@ -334,6 +387,12 @@ Category:"""
         return result
 
     def execute_stream(self, query, route, session_id="default", messages=None, context=None, max_tokens=None):
+        """Stream an answer token-by-token.
+
+        Ordering matters for latency: memory first (5-25ms, no LLM), then the
+        LLM. A confident memory hit means the user sees text almost instantly
+        instead of waiting on a 1-2s prefill plus decode.
+        """
         try:
             self.core.memory.add_message(session_id, "user", query, {"type": route.get("type", "chat")})
         except Exception:
@@ -357,28 +416,57 @@ Category:"""
             context = context + "\n" + stored_context
 
         route_type = route.get("type", "general_chat")
+
+        # ── 1. Memory fast path (no LLM) ────────────────────────────────
+        if not self._is_time_sensitive(query):
+            try:
+                hit = self.core.rag.answer(query, k=self._rag_k())
+                if hit.get("answerable") and (hit.get("answer") or "").strip():
+                    text = hit["answer"].strip()
+                    for i in range(0, len(text), 30):
+                        yield text[i:i + 30]
+                    return
+            except Exception:
+                pass
+
+        # ── 2. LLM path — real token streaming ──────────────────────────
         if route_type in ("web_search", "factual", "news"):
-            if context and "[Current date and time:" in context:
+            if self._is_time_query(query):
+                answer = self._get_time_answer(query)["content"]
+            elif context and "[Current date and time:" in context:
                 result = self._handle_time_query(query, context, max_tokens)
+                answer = result.get("content", "")
             else:
                 result = self._handle_search(query, context, max_tokens)
-            content = result.get("content", "")
-            chunk_size = 30
-            if not content:
-                content = "I'm here to help! Could you rephrase that?"
-            for i in range(0, len(content), chunk_size):
-                yield content[i:i + chunk_size]
-        else:
-            search_data = self._execute_web_search(query)
-            context_with_search = context
-            if search_data:
-                context_with_search = f"{context}\n\n{search_data}"
-            prompt = f"""{context_with_search}
+                answer = result.get("content", "")
+            if not answer.strip():
+                answer = "I'm here to help! Could you rephrase that?"
+            for i in range(0, len(answer), 30):
+                yield answer[i:i + 30]
+            return
 
-User: {query}
-
-The web search results above are LIVE, FRESH, and AUTHORITATIVE. Use them as your primary source. Never say "based on my training data" or "I don't have real-time access" — you do. Never say "please check external sources" — the info is right here. Never say "I searched the web". Just give the answer directly and naturally, like a knowledgeable friend."""
-            yield from self.core.llm.generate_stream(prompt, max_tokens=max_tokens)
+        search_data = ""
+        if self._is_time_sensitive(query):
+            try:
+                search_data = self._execute_web_search(query)
+            except Exception:
+                search_data = ""
+        rag_ctx, _ = self._rag_context(query, k=2)
+        blocks = [b for b in (context, rag_ctx, search_data) if b]
+        prompt = f"{chr(10).join(blocks)}\n\nUser: {query}\n\n{_GROUNDED_INSTRUCTION}"
+        try:
+            produced = False
+            for piece in self.core.llm.generate_stream(prompt, max_tokens=max_tokens):
+                produced = True
+                yield piece
+            if not produced:
+                raise RuntimeError("empty stream")
+        except Exception:
+            fallback = self._handle_search(query, context, max_tokens)
+            text = (fallback.get("content") or "").strip()
+            if text:
+                for i in range(0, len(text), 30):
+                    yield text[i:i + 30]
 
     def _refine_search_query(self, query):
         # INSTANT query expansion — the old code made an extra LLM call here

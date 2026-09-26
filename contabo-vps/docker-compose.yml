@@ -31,10 +31,13 @@ services:
     environment:
       - PORT=3000
       - OLLAMA_BASE_URL=http://ollama:11434
-      - OLLAMA_MODEL=qwen2.5:3b
-      - OLLAMA_CODE_MODEL=qwen2.5-coder:7b
-      - OLLAMA_CONTEXT_SIZE=24576
-      - OLLAMA_VISION_MODEL=qwen2.5vl:7b
+      - OLLAMA_MODEL=qwen3.5:2b
+      - OLLAMA_FAST_MODEL=qwen3.5:2b
+      - OLLAMA_CODE_MODEL=qwen3.5:4b
+      # MUST match OLLAMA_CONTEXT_LENGTH on the ollama service: any mismatch
+      # forces a KV-cache reallocation worth 8-15s on this box.
+      - OLLAMA_CONTEXT_SIZE=2048
+      - OLLAMA_VISION_MODEL=qwen3.5:4b
       - EDITOR_SERVICE_URL=http://image-service:7860
       - SEARXNG_URL=http://searxng:8080
       - ACRONOUS_BRAIN_URL=http://brain:8000
@@ -59,11 +62,18 @@ services:
     environment:
       - ACRONOUS_LLM_PROVIDER=contabo
       - ACRONOUS_LLM_API_URL=http://ollama:11434/v1
-      - ACRONOUS_LLM_MODEL=qwen2.5:3b
-      - ACRONOUS_LLM_CHAT_MODEL=qwen2.5:3b
-      - ACRONOUS_LLM_CODE_MODEL=qwen2.5-coder:7b
-      - ACRONOUS_LLM_FAST_MODEL=qwen2.5:3b
-      - ACRONOUS_VISION_MODEL=qwen2.5vl:7b
+      - ACRONOUS_LLM_MODEL=qwen3.5:2b
+      - ACRONOUS_LLM_CHAT_MODEL=qwen3.5:2b
+      - ACRONOUS_LLM_CODE_MODEL=qwen3.5:4b
+      - ACRONOUS_LLM_FAST_MODEL=qwen3.5:2b
+      - ACRONOUS_VISION_MODEL=qwen3.5:4b
+      # One context size, one slot, one resident model. Deadline-bounded
+      # generation so a degenerate loop can never eat the whole box again.
+      - ACRONOUS_LLM_CONTEXT_SIZE=2048
+      - ACRONOUS_LLM_NUM_PARALLEL=1
+      - ACRONOUS_LLM_DEADLINE_S=75
+      - ACRONOUS_LLM_DEADLINE_FIRST_TOKEN_S=30
+      - ACRONOUS_LLM_REPEAT_PENALTY=1.2
       - ACRONOUS_BRAIN_HOST=brain.acronous.com
       - ACRONOUS_BRAIN_DIRECT_URL=http://167.86.104.155:11434
       - ACRONOUS_SELF_TRAIN=true
@@ -76,17 +86,21 @@ services:
       - ACRONOUS_SELF_TRAIN_MAX_MERGED_PAIRS=20000
       - ACRONOUS_SELF_TRAIN_RETAIN_DAYS=14
       - ACRONOUS_SELF_TRAIN_RETAIN_SNAPSHOTS=7
-      # ── Fast-RAG + speed path (small-box accuracy without the wait) ──
-      # RAG index capped at 5000 docs (~50MB) with 30s debounced saves so
-      # learning never blocks responses; hybrid retrieve kills hallucinations.
-      - ACRONOUS_RAG_MAX_DOCS=5000
-      - ACRONOUS_RAG_SAVE_DEBOUNCE_S=30
-      - ACRONOUS_RAG_TOP_K=3
-      - ACRONOUS_RAG_THRESHOLD=0.35
-      - ACRONOUS_RAG_DIRECT_ANSWER_SCORE=0.80
+      # ── Fast-RAG v2 (small-box accuracy without the wait) ──
+      # Hybrid BM25 + dense retrieval fused with RRF, behind a confidence
+      # gate: confident hits answer by extraction (0 LLM calls, ~5-20ms),
+      # weak hits fall through to the LLM instead of guessing.
+      - ACRONOUS_RAG_MAX_DOCS=6000
+      - ACRONOUS_RAG_SAVE_DEBOUNCE_S=45
+      - ACRONOUS_RAG_TOP_K=4
+      - ACRONOUS_RAG_CHUNK_CHARS=320
+      - ACRONOUS_RAG_CHUNK_OVERLAP=60
+      - ACRONOUS_RAG_DIRECT_ANSWER=0.72
+      - ACRONOUS_RAG_CACHE_TTL_S=1800
+      - ACRONOUS_RAG_MIN_TERMS=2
       # Regex-only routing (no LLM classify call) + 900ms search cap.
       - ACRONOUS_ROUTER_LLM_CLASSIFY=false
-      - ACRONOUS_SEARCH_PHASE_MS=900
+      - ACRONOUS_SEARCH_PHASE_MS=700
       - ACRONOUS_SEARCH_MAX_RESULTS=3
       - ACRONOUS_MEMORY_MAX_PER_SESSION=200
       - ACRONOUS_MEMORY_MAX_ROWS=20000
@@ -190,13 +204,23 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     environment:
-      # Speed: models stay loaded 24h (no cold-load waits), flash attention
-      # accelerates CPU inference, single parallel slot keeps latency stable.
+      # ── Latency contract (measured on this 4-core CPU box) ──────────────
+      # NUM_PARALLEL=1 + a single pinned CONTEXT_LENGTH is the single biggest
+      # speed win available. Ollama allocates the KV cache per slot, so with
+      # 4 slots ANY caller that changed num_ctx forced a full reallocation of
+      # the whole cache: measured 8-15s of pure prefill per context switch,
+      # and 4x the KV memory, which also halved decode throughput.
+      # One slot + one context size = warm cache, ~0.2s TTFT, ~40 tok/s.
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_CONTEXT_LENGTH=2048
+      - OLLAMA_MAX_LOADED_MODELS=1
+      - OLLAMA_MAX_QUEUE=64
+      # q8_0 KV halves KV memory and lowers attention bandwidth on CPU.
+      - OLLAMA_KV_CACHE_TYPE=q8_0
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_FLASH_ATTENTION=1
-      - OLLAMA_NUM_PARALLEL=1
     restart: unless-stopped
-    mem_limit: 10g
+    mem_limit: 8g
     networks:
       - acronous-net
     healthcheck:

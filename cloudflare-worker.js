@@ -35,6 +35,216 @@ function resolveOllamaBases(env) {
   return out;
 }
 
+// ── Acronous LLM brain (RAG + self-learning) ─────────────────────────────
+// The brain lives on the same VPS (FastAPI, acronous_llm.server) and is
+// reachable over the Cloudflare Tunnel. It owns:
+//   * RAG v2 — hybrid BM25 + dense retrieval behind a confidence gate
+//   * the learned corpus (internet learning + every human-eval turn)
+//   * the self-improvement loops (dataset distillation, gap analysis)
+//
+// Two call shapes, both non-fatal and budget-capped:
+//   brainAnswer()  — fast path: confident memory hit answers with ZERO LLM
+//                    calls (5-25ms). Never fabricates: the answer is
+//                    extracted verbatim from a stored chunk.
+//   brainRetrieve() — grounding passages for a normal generation.
+//   brainLearn()   — teach-back: every turn becomes training signal.
+const BRAIN_FALLBACK_URLS = [
+  'https://brain.acronous.com',
+  'http://167.86.104.155:8000',
+];
+
+function resolveBrainBases(env) {
+  const out = [];
+  const seen = new Set();
+  const push = (u) => {
+    const v = String(u || '').trim().replace(/\/$/, '');
+    if (!v || !/^https?:\/\//i.test(v) || seen.has(v)) return;
+    seen.add(v);
+    out.push(v);
+  };
+  push(env.BRAIN_URL);
+  for (const u of BRAIN_FALLBACK_URLS) push(u);
+  return out;
+}
+
+async function brainFetch(env, path, body, timeoutMs) {
+  const bases = resolveBrainBases(env);
+  for (const base of bases) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => { try { ctrl.abort(); } catch {} }, timeoutMs || 1200);
+    try {
+      const resp = await fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+        signal: ctrl.signal,
+      });
+      if (resp.ok) {
+        const data = await resp.json().catch(() => null);
+        if (data) return data;
+      }
+    } catch {}
+    finally { clearTimeout(timer); }
+  }
+  return null;
+}
+
+// Fast path. Returns {answer, confidence} or null when memory is unsure.
+// A null result is the NORMAL case for anything new — the caller then
+// generates normally, which is exactly the intended fall-through.
+async function brainAnswer(env, query, opts = {}) {
+  if (!query || !String(query).trim()) return null;
+  if (String(opts.budgetMs || 900) <= 0) return null;
+  const data = await brainFetch(env, '/v1/rag/answer', {
+    query: String(query).slice(0, 2000),
+    k: opts.k,
+    source: opts.source || 'acronous',
+  }, opts.budgetMs || 900);
+  if (!data || !data.answerable || !data.answer || !String(data.answer).trim()) return null;
+  return { answer: String(data.answer).trim(), confidence: data.confidence || 0, cached: !!data.cached, ms: data.ms || 0 };
+}
+
+// Grounding passages (no answer guarantee — used to reduce hallucination).
+async function brainRetrieve(env, query, opts = {}) {
+  if (!query || !String(query).trim()) return null;
+  const data = await brainFetch(env, '/v1/rag/retrieve', {
+    query: String(query).slice(0, 2000),
+    k: opts.k,
+    source: opts.source || 'acronous',
+  }, opts.budgetMs || 900);
+  if (!data || !data.context) return null;
+  return { context: String(data.context), confidence: data.confidence || 0 };
+}
+
+// Teach-back. Fire-and-forget via ctx.waitUntil so it never delays a reply.
+// Every real user turn across Acronous AI / Equyvo / Navigwiz is a
+// human-eval sample for the brain's self-improvement loop.
+function brainLearn(ctx, env, payload) {
+  try {
+    if (!ctx || typeof ctx.waitUntil !== 'function') return;
+    if (resolveBrainBases(env).length === 0) return;
+    const pr = brainFetch(env, '/v1/rag/learn', {
+      text: String(payload.text || '').slice(0, 2000),
+      query: String(payload.query || '').slice(0, 500),
+      source: payload.source || 'acronous',
+      session_id: String(payload.session_id || 'default').slice(0, 64),
+      route_type: payload.route_type || 'general_chat',
+      quality: typeof payload.quality === 'number' ? payload.quality : 0.5,
+    }, 2500);
+    ctx.waitUntil(pr);
+  } catch {}
+}
+
+// ── Ollama runtime contract ──────────────────────────────────────────────
+// MUST stay identical to the VPS ollama container (OLLAMA_CONTEXT_LENGTH).
+// A mismatched num_ctx forces Ollama to reallocate the whole KV cache: this
+// was measured at 8-15s of dead time per switch, and was the single biggest
+// cause of the "really slow" responses.
+//
+// 2048, not 4096: measured on this 4-core box, decode is ~25% faster at 2048
+// than at 4096 (9.0 vs 7.2 tok/s) because attention cost scales with the KV
+// cache. 1024 gave no further gain, so 2048 is the knee of the curve.
+const OLLAMA_CTX = 2048;
+
+// Sampling guardrails. A small model CAN loop until num_predict is
+// exhausted, and one such loop was found holding all 4 cores at 741% CPU for
+// 40+ minutes. `repeat_penalty` targets exactly that failure mode and is the
+// cheapest guard available; presence/frequency penalties measured within
+// noise of it, so they are deliberately NOT set here. The per-request
+// wall-clock deadline is the hard backstop that no sampling flag can replace.
+const OLLAMA_GUARDRAILS = {
+  repeat_penalty: 1.2,
+  repeat_last_n: 64,
+  top_p: 0.9,
+};
+
+// ── Prompt budget (the biggest remaining latency lever) ───────────────────
+// Measured on this 4-core CPU box: COLD prefill runs at only ~20 tok/s while
+// a cached prefix prefills at 300-2000 tok/s, and decode is ~9 tok/s. So both
+// prompt SIZE and answer LENGTH are what users actually wait on. The old
+// streaming path did not trim at all and could send 8000+ tokens, which is
+// minutes of dead prefill; and a 400-token budget on an open-ended question
+// produced 1800 characters and 127 seconds of decode.
+//
+// Budgets are sized to fit the pinned 2048-token window with room to answer.
+const PROMPT_BUDGET = {
+  simple: 900,    // ~225 tokens — casual/factual questions
+  normal: 1800,   // ~450 tokens — everything else
+  perTurn: 500,
+  maxTurns: 5,
+};
+// Web snippets are trimmed hard: every extra 1000 chars is ~4s of prefill and
+// the model only needs the top passages to answer correctly.
+const WEB_CHARS = 900;
+
+// Trim a message array newest-first to fit a char budget while always
+// keeping the system prompt (it is the KV-cache prefix and must stay whole).
+function fitPrompt(messages, budget) {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  const system = [];
+  const rest = [];
+  for (const m of messages) {
+    if (m && m.role === 'system') system.push(m);
+    else if (m) rest.push(m);
+  }
+  const trimmed = [];
+  let used = 0;
+  for (let i = rest.length - 1; i >= 0; i--) {
+    if (trimmed.length >= PROMPT_BUDGET.maxTurns) break;
+    const m = rest[i];
+    let content = String(m.content || '');
+    if (content.length > PROMPT_BUDGET.perTurn) {
+      content = content.slice(0, PROMPT_BUDGET.perTurn) + '…';
+    }
+    const cost = content.length;
+    if (used + cost > budget && trimmed.length) break;
+    used += cost;
+    trimmed.unshift({ role: m.role, content });
+  }
+  return [...system, ...trimmed];
+}
+
+// Choose the model tier. Short/simple questions go to the fast model
+// (qwen3.5:2b: ~2x the prefill rate, ~2x the decode rate); anything that
+// needs depth or code gets the 4B model.
+function pickChatModel(message, isCode, env) {
+  if (isCode) return env.OLLAMA_CODE_MODEL || env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
+  const t = String(message || '').trim();
+  const simple = t.length <= 220 && (
+    isSimpleFactual(t) ||
+    /^(?:hi|hey|hello|thanks|thank you|ok|okay|cool|nice|yes|no)\b/i.test(t) ||
+    /\b(?:thanks|thank you|who are you|what can you do|help)\b/i.test(t)
+  );
+  if (simple) return env.OLLAMA_FAST_MODEL || env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
+  return env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
+}
+
+function ollamaOptions(numPredict, ctxSize) {
+  return Object.assign(
+    { num_ctx: ctxSize || OLLAMA_CTX, num_predict: numPredict, temperature: 0.6 },
+    OLLAMA_GUARDRAILS,
+  );
+}
+
+// Generation budgets, sized to the hardware. Decode measures ~9 tok/s for the
+// 2B model on this 4-core box, so 500 tokens is already ~55s of generation.
+// Two hard-won lessons:
+//   * The old caps (8192-16384) let one degenerate loop occupy all 4 cores.
+//   * But a cap alone is not enough — a 400-token budget on an open-ended
+//     "explain..." question produced 1810 characters and ran for 127s. Length
+//     has to be driven by the prompt, not only by the cap.
+function generationBudget(message, isCode) {
+  if (isCode) return 700;
+  const t = String(message || '');
+  if (!t.trim()) return 150;
+  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 200;
+  if (t.length <= 260 && isSimpleFactual(t)) return 220;
+  if (t.length > 400) return 600;
+  return 400;
+}
+
+const DEFAULT_CHAT_MODEL = 'qwen3.5:4b';
+
 async function probeOllamaBase(base, timeoutMs = 5000) {
   try {
     const resp = await fetch(`${base}/api/tags`, {
@@ -2398,19 +2608,10 @@ function extractNameForRole(role, webData) {
 }
 
 // ── Ollama (self-hosted LLM on Contabo VPS — unlimited tokens, no API caps) ──
-// Per-query generation budget. Short/factual/casual asks get a smaller cap so the
-// CPU model answers in seconds; everything else gets the full 8192 budget and
-// no fetch timeout — answers always complete, never cut off.
-function answerTokenBudget(lastUserText, isCode) {
-  if (isCode) return 8192;
-  const t = String(lastUserText || '').trim().toLowerCase();
-  if (!t) return 8192;
-  if (t.length <= 260 && (
-    isSimpleFactual(t) ||
-    /\b(?:what is|who is|current (?:time|date|year|month|president|prime minister|cm|pm)|weather|population|capital|price|score|winner|records?|where is|define|hi|hello|hey)\b/.test(t)
-  )) return 1500;
-  return 8192;
-}
+// NOTE: the per-query generation budget now lives in `generationBudget()`
+// (defined next to the Ollama runtime contract above). The old
+// `answerTokenBudget()` allowed 8192-16384 tokens, which let one degenerate
+// loop occupy the 4-core box for the better part of an hour.
 
 // ── GPU fast-path (RunPod Serverless, scale-to-zero) ─────────────────────
 // Optional. When GPU_LLM_URL / GPU_IMAGE_URL are set, the Worker tries the
@@ -2505,57 +2706,39 @@ async function tryGpuImageGen(visualPrompt, width, height, styleHint, env) {
   } catch { return null; } finally { clearTimeout(timer); }
 }
 
-async function callOllama(messages, env) {
+async function callOllama(messages, env, opts = {}) {
   const bases = resolveOllamaBases(env);
   if (!bases.length) throw new Error('No Ollama URL');
   // Route code requests to the dedicated coder model when available
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const lastText = typeof lastUser?.content === 'string' ? lastUser.content : '';
   const isCode = isCodeQuery(lastText);
-  // Default to qwen2.5:3b (5.7 tok/s, reliable). qwen2.5:1.5b refuses despite
-  // system prompt; qwen3:8b caused 90s-timeout 500s. Never default to 1.5b.
-  const model = (isCode && env.OLLAMA_CODE_MODEL) ? env.OLLAMA_CODE_MODEL : (env.OLLAMA_MODEL || 'qwen2.5:3b');
+  const model = opts.model || pickChatModel(lastText, isCode, env);
   const useThink = shouldUseThinking(messages);
-  // Cap context at 4096 for faster CPU prefill — reduces time-to-first-token
-  // from ~2s to ~1s on warm cache. History is trimmed to fit.
-  const contextSize = Math.min(parseInt(env.OLLAMA_CONTEXT_SIZE || '4096'), 4096);
-  // Answer length is capped by query type: casual/factual asks finish fast,
-  // deep/explanatory/code answers keep headroom for completeness.
-  const numPredict = answerTokenBudget(lastText, isCode);
-  // Truncate messages to fit context window — keep system prompt, truncate user content
-  const maxChars = contextSize * 3; // ~3 chars per token, rough estimate
-  let totalChars = 0;
-  const truncated = [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    const chars = typeof m.content === 'string' ? m.content.length : 0;
-    if (totalChars + chars > maxChars && i > 0) {
-      // Truncate this message to fit
-      const remaining = maxChars - totalChars;
-      if (remaining > 200) {
-        truncated.unshift({ ...m, content: String(m.content).substring(0, remaining) + '...[truncated]' });
-      }
-      totalChars += remaining;
-      break;
-    }
-    totalChars += chars;
-    truncated.unshift(m);
-  }
-  // GPU fast-path first (RunPod Serverless). Any failure/timeout falls
-  // through to the Contabo CPU Ollama call below — never throws.
+  // Context is PINNED, never negotiated. See OLLAMA_CTX.
+  const contextSize = OLLAMA_CTX;
+  const numPredict = opts.maxTokens || generationBudget(lastText, isCode);
+  // Hard prompt budget — cold prefill on this box runs at only ~20-39 tok/s,
+  // so every token we drop is real time returned to the user.
+  const budget = (String(lastText || '').length <= 220 && isSimpleFactual(lastText))
+    ? PROMPT_BUDGET.simple
+    : PROMPT_BUDGET.normal;
+  const truncated = fitPrompt(messages, budget);
+  // GPU fast-path is hard-disabled by policy (paid, metered). The code path
+  // remains behind GPU_ENABLED so it can never engage by accident.
   try {
     const gpu = await tryGpuChat(truncated, env, model, numPredict, lastText);
     if (gpu && gpu.trim()) return gpu;
   } catch {}
   // Try each Ollama base in order (secret → tunnel → direct IP). Streaming
   // keeps bytes flowing so no proxy idle-kills the connection; the model
-  // stops naturally at EOS. Per-base watchdog (120s) prevents one dead base
-  // from hanging the whole request — we fail over to the next base.
+  // stops naturally at EOS. Per-base watchdog converts a stalled generation
+  // into a clean failover instead of an indefinite hang.
   let lastErr = null;
   for (const ollamaUrl of bases) {
     try {
       const ctrl = new AbortController();
-      const watchdog = setTimeout(() => { try { ctrl.abort(); } catch {} }, 120000);
+      const watchdog = setTimeout(() => { try { ctrl.abort(); } catch {} }, 150000);
       let resp;
       try {
         resp = await fetch(`${ollamaUrl}/api/chat`, {
@@ -2567,14 +2750,7 @@ async function callOllama(messages, env) {
             stream: true,
             think: useThink,
             keep_alive: '24h',
-            options: {
-              num_ctx: contextSize,
-              num_predict: numPredict,
-              temperature: isCode ? 0.1 : 0.6,
-              top_p: 0.85,
-              repeat_penalty: 1.1,
-              num_parallel: 1,
-            }
+            options: ollamaOptions(numPredict, contextSize),
           }),
           signal: ctrl.signal,
         });
@@ -2862,8 +3038,9 @@ async function raceLLMs(promises, overallTimeoutMs = 600000) {
 
 async function tryWorkersAIChat(messages, env) {
   // Fully self-hosted policy: ALL chat inference goes to the Contabo VPS
-  // Ollama server (unlimited). No Workers AI, no Gemini — both are
-  // quota/rate-limited third-party services.
+  // Ollama server, which is free and unlimited. No rate-limited cloud model
+  // is reachable from here — this function is kept only as a readable alias
+  // for callOllama so the many call sites stay unchanged.
   try {
     const result = await callOllama(messages, env);
     if (result && result.trim()) return result;
@@ -5120,19 +5297,24 @@ function reformatCodeBlocks(content) {
 // Dynamic greeting response — all providers race, no hardcoded text
 async function generateGreeting(message, env, location) {
   const locContext = location ? `\n- User location: ${location}` : '';
-  const sysMsg = `You are Acronous AI, created by Acronous. Respond to this greeting naturally and warmly in 1-2 sentences.${locContext}${location ? ` If the greeting references time of day or location, you may acknowledge it (e.g., "Good morning from ${location}!" or similar) — but only if natural. Never mention the location unprompted if the user just said "hi".` : ''} NEVER say "ChatGPT", "GPT", "OpenAI", "Gemini", "Claude", or any model name. NEVER reveal model names, providers, or backend details. Never say 'As an AI'. Never use pre-written templates — generate a fresh, natural response each time.`;
+  const sysMsg = `You are Acronous AI, created by Acronous. Reply to this greeting in ONE short friendly sentence and nothing more.${locContext}${location ? ` You may acknowledge the location naturally.` : ''} NEVER mention any model, provider, or backend. Never say 'As an AI'. Generate a fresh reply each time.`;
   const msgs = [{ role: 'system', content: sysMsg }, { role: 'user', content: message }];
 
-  // Single self-hosted Ollama call — tryWorkersAIChat is the same backend,
-  // racing both doubles CPU load for zero benefit.
+  // Single self-hosted Ollama call on the FAST model with a tiny budget.
+  // Greetings are the most frequent interaction in the product, so they get
+  // the cheapest possible path: the old 700-token budget let the model write
+  // a paragraph where one sentence was asked for, which cost ~6s of decode.
   if (resolveOllamaBases(env).length) {
     try {
-      const result = await callOllama(msgs, env);
+      const result = await callOllama(msgs, env, {
+        model: env.OLLAMA_FAST_MODEL || env.OLLAMA_MODEL,
+        maxTokens: 90,
+      });
       if (result && result.trim()) return result.trim();
     } catch {}
   }
 
-  // All providers failed — return error, never hardcoded text
+  // All providers failed - return error, never hardcoded text
   return null;
 }
 
@@ -5503,9 +5685,12 @@ async function updateAndStoreUserMemory(env, userId, historyArr, currentUserMsg,
 
 function formatMemoryForPrompt(memory) {
   if (!memory?.recent?.length) return '';
-  const lines = memory.recent.slice(-20).map((e) => {
-    const q = String(e.q || '').substring(0, 200);
-    const a = e.a ? ` | Answered: ${String(e.a).substring(0, 200)}` : '';
+  // Only the last few exchanges, each trimmed. Long memory blocks were a
+  // major contributor to prefill time and the model does not need 20 turns
+  // of history to stay coherent — the RAG fast path covers recall instead.
+  const lines = memory.recent.slice(-4).map((e) => {
+    const q = String(e.q || '').substring(0, 120);
+    const a = e.a ? ` | ${String(e.a).substring(0, 120)}` : '';
     let when = '';
     if (e.ts) {
       const mins = Math.floor((Date.now() - e.ts) / 60000);
@@ -5562,8 +5747,13 @@ function buildDynamicContextBlock(tz, location, webData, userMemory) {
     const timeStr = `${h12}:${minutes} ${ampm} UTC`;
     dateTimeLine = `${dateStr}, ${timeStr}`;
   }
-  parts.push(`IMPORTANT — Current date and time: ${dateTimeLine}. TODAY IS ${dateTimeLine}. ALWAYS use this CURRENT date/time for ANY time-related question (who holds a position NOW, current events, prices, weather, scores). Never give outdated or stale information when current data is available. Web search results are LIVE and CURRENT — use them as primary source, NEVER answer time-sensitive questions from memory alone.`);
-  if (location) parts.push(`User location: ${location}. Use this for location-aware answers (weather, local info, directions).`);
+  // Kept deliberately plain. The previous wording ("ALWAYS use this CURRENT
+  // date/time for ANY time-related question") made the model open answers
+  // with "Based on your location of <city> today, ..." on questions that had
+  // nothing to do with time or place — a visible quality bug and pure wasted
+  // tokens on a 9 tok/s decoder.
+  parts.push(`Current date and time: ${dateTimeLine}. Use this only if the question depends on the current date, time, or recent events.`);
+  if (location) parts.push(`User location: ${location}. Mention it only if the question is location-dependent.`);
   if (webData) parts.push('Web search results are attached to the user message — answer from them directly, using the MOST RECENT information.');
   const mem = formatMemoryForPrompt(userMemory);
   if (mem) parts.push(mem);
@@ -6181,6 +6371,18 @@ export default {
 
         // CRITICAL: Keep total subrequests under 50 (CF Worker limit)
         const searchTasks = [];
+
+        // ── RAG MEMORY FAST PATH (runs alongside the web searches) ───────
+        // Confident memory hit → answer with zero LLM calls. We deliberately
+        // do NOT await this before searching: both start now, and memory wins
+        // only if it comes back confident, so a cold/miss costs nothing.
+        const tRagStart0 = Date.now();
+        const ragPromise0 = ((env.RAG_ENABLED || 'true') !== 'false'
+          && !isTimeSensitive(message)
+          && !isReversedRoleQuery(message))
+          ? brainAnswer(env, message, { budgetMs: 1500, source: 'acronous' })
+          : null;
+
         // Use search variations for better coverage — original + year + "latest" variant
         const searchVariations = generateSearchVariations(message);
         for (const variation of searchVariations) {
@@ -6211,6 +6413,21 @@ export default {
           const infoboxAnswer = await Promise.race([infoboxPromise0, new Promise((res) => setTimeout(() => res(null), 800))]);
           if (infoboxAnswer) {
             return jsonOk({ response: cleanResponse(infoboxAnswer), session_id: sessionId, type: 'chat' });
+          }
+        }
+
+        // RAG memory verdict (if it arrived while we were searching).
+        if (ragPromise0) {
+          let hit = null;
+          try { hit = await Promise.race([ragPromise0, new Promise((res) => setTimeout(() => res(null), 250))]); } catch {}
+          console.error('CHAT-TIMING ragMs=' + (Date.now() - tRagStart0) + ' hit=' + (hit ? 'yes' : 'no'));
+          if (hit) {
+            const answer = cleanResponse(hit.answer, message);
+            brainLearn(ctx, env, {
+              text: answer, query: message, session_id: sessionId,
+              source: 'acronous', quality: 0.6,
+            });
+            return jsonOk({ response: answer, session_id: sessionId, type: 'chat', source: 'memory' });
           }
         }
 
@@ -6253,7 +6470,7 @@ export default {
         // Only use LLM when pre-extraction failed (complex queries, opinions, etc.)
         let userMsgContent;
         if (webData) {
-          userMsgContent = `Web search results:\n${webData.substring(0, 2500)}\n\nQuestion: ${effectiveMessage}`;
+          userMsgContent = `Web search results:\n${webData.substring(0, WEB_CHARS)}\n\nQuestion: ${effectiveMessage}`;
           if (isTimeSensitive(message)) {
             userMsgContent = `The web search results below are LIVE and CURRENT — they override anything else you know. Answer factual claims ONLY from them. NEVER say "my last update", "training data", "knowledge cutoff", or cite an older year/model/version from memory.\n\n${userMsgContent}`;
           }
@@ -6267,6 +6484,11 @@ export default {
         const wantsDetail = /\b(detail|detailed|explain|essay|in depth|in-depth|comprehensive|elaborate|step by step|pros and cons|compar)/i.test(message);
         if (isSimpleFactual(message) || (webData && isTimeSensitive(message) && !wantsDetail)) {
           userMsgContent = `Be concise — answer in 2-4 complete sentences.\n\n${userMsgContent}`;
+        } else if (!wantsDetail) {
+          // Length has to be REQUESTED, not merely capped. Without this the
+          // model wrote 1800 characters for a one-line question and the user
+          // waited 127s for the tail of an answer they had already read.
+          userMsgContent = `Answer completely but concisely. No preamble, no "great question", no summary of what you are about to say. Stop as soon as the question is fully answered.\n\n${userMsgContent}`;
         }
 
         // Cacheable prefix: static system prompt + stable history first;
@@ -6500,6 +6722,13 @@ export default {
         if (memUserId && content && content.trim()) {
           try { ctx.waitUntil(updateAndStoreUserMemory(env, memUserId, history, message, content)); } catch {}
         }
+
+        // Human-eval teach-back into the shared brain (non-blocking). Every
+        // real Acronous AI turn becomes training signal for the brain's
+        // self-improvement loop, alongside Equyvo and Navigwiz.
+        brainLearn(ctx, env, {
+          text: content, query: message, session_id: sessionId, source: 'acronous',
+        });
 
         return jsonOk({ response: content, session_id: sessionId, type: 'chat' });
       } catch (error) {
@@ -6877,6 +7106,35 @@ export default {
           }
         }
 
+        // ── RAG MEMORY FAST PATH ────────────────────────────────────────
+        // calls, so repeat/learned questions come back in milliseconds with
+        // text extracted verbatim from the corpus — accurate by construction
+        // and impossible to hallucinate. Only genuinely unknown questions pay
+        // for a generation. Time-sensitive asks always skip this (memory is
+        // by definition not "current").
+        if ((env.RAG_ENABLED || 'true') !== 'false' && !isTimeSensitive(message) && !isReversedRoleQuery(message)
+            && !isGreeting && !founderQuery && !isTimeQuery(message)) {
+          const tRag0 = Date.now();
+          const hit = await brainAnswer(env, message, { budgetMs: 1200, source: 'acronous' });
+          console.error('CHAT-TIMING ragMs=' + (Date.now() - tRag0) + ' hit=' + (hit ? 'yes' : 'no'));
+          if (hit) {
+            const answer = cleanResponse(hit.answer, message);
+            brainLearn(ctx, env, {
+              text: answer, query: message, session_id: sessionId,
+              source: 'acronous', quality: 0.6,
+            });
+            const stream = new ReadableStream({
+              start(controller) {
+                const encoder = new TextEncoder();
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: answer, source: 'memory' })}\n\n`));
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, session_id: sessionId, type: 'chat' })}\n\n`));
+                controller.close();
+              }
+            });
+            return new Response(stream, { headers: sseHeaders });
+          }
+        }
+
         // Web search for context — always search for fresh, accurate answers
         const tSearch0 = Date.now();
 
@@ -6967,7 +7225,7 @@ export default {
         // Only use LLM when pre-extraction failed (complex queries, opinions, etc.)
         let userMsgContent;
         if (webData) {
-          userMsgContent = `Web search results:\n${webData.substring(0, 2500)}\n\nQuestion: ${effectiveMessage}`;
+          userMsgContent = `Web search results:\n${webData.substring(0, WEB_CHARS)}\n\nQuestion: ${effectiveMessage}`;
           if (isTimeSensitive(message)) {
             userMsgContent = `The web search results below are LIVE and CURRENT — they override anything else you know. Answer factual claims ONLY from them. NEVER say "my last update", "training data", "knowledge cutoff", or cite an older year/model/version from memory.\n\n${userMsgContent}`;
           }
@@ -6981,6 +7239,11 @@ export default {
         const wantsDetail = /\b(detail|detailed|explain|essay|in depth|in-depth|comprehensive|elaborate|step by step|pros and cons|compar)/i.test(message);
         if (isSimpleFactual(message) || (webData && isTimeSensitive(message) && !wantsDetail)) {
           userMsgContent = `Be concise — answer in 2-4 complete sentences.\n\n${userMsgContent}`;
+        } else if (!wantsDetail) {
+          // Length has to be REQUESTED, not merely capped. Without this the
+          // model wrote 1800 characters for a one-line question and the user
+          // waited 127s for the tail of an answer they had already read.
+          userMsgContent = `Answer completely but concisely. No preamble, no "great question", no summary of what you are about to say. Stop as soon as the question is fully answered.\n\n${userMsgContent}`;
         }
 
         // Cacheable prefix: static system prompt + stable history first;
@@ -7012,14 +7275,27 @@ export default {
         // unlimited). Fully self-hosted policy — no quota-limited services.
         if (resolveOllamaBases(env).length) {
           try {
-            const model = env.OLLAMA_MODEL || 'qwen2.5:3b';
+            const isCode = isCodeQuery(message);
+            const model = pickChatModel(message, isCode, env);
             const useThink = shouldUseThinking(msgs);
-            const chatMaxTokens = answerTokenBudget(message, false);
+            const chatMaxTokens = generationBudget(message, isCode);
+            // Hard prompt budget — this path previously sent the message array
+            // completely untrimmed (up to 8000+ tokens = 40-90s of prefill
+            // before the first character could appear).
+            const budget = (String(message).length <= 220 && isSimpleFactual(message))
+              ? PROMPT_BUDGET.simple
+              : PROMPT_BUDGET.normal;
+            const trimmedMsgs = fitPrompt(msgs, budget);
             const tFetch0 = Date.now();
+            const streamCtrl = new AbortController();
+            // Hard wall-clock ceiling: a degenerate loop must not pin the
+            // 4-core box (one such loop held 741% CPU for 40+ minutes).
+            const streamWatchdog = setTimeout(() => { try { streamCtrl.abort(); } catch {} }, 150000);
             const resp = await fetch(`${resolveOllamaBases(env)[0]}/api/chat`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ model, messages: msgs, stream: true, think: useThink, keep_alive: '24h', options: { num_predict: chatMaxTokens, num_ctx: 8192, temperature: 0.6, top_p: 0.85, repeat_penalty: 1.1 } }),
+              body: JSON.stringify({ model, messages: trimmedMsgs, stream: true, think: useThink, keep_alive: '24h', options: ollamaOptions(chatMaxTokens, OLLAMA_CTX) }),
+              signal: streamCtrl.signal,
             });
             if (resp.ok) {
               console.error('CHAT-TIMING ollamaFetchMs=' + (Date.now() - tFetch0) + ' totalBeforeStream=' + (Date.now() - tSearch0));
@@ -7064,11 +7340,16 @@ export default {
                   } catch {}
                   controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, session_id: sessionId, type: 'chat' })}\n\n`));
                   controller.close();
+                  // Human-eval teach-back: this real user turn becomes
+                  // training signal for the shared brain. Non-blocking.
+                  brainLearn(ctx, env, { text: fullReply, query: message, session_id: sessionId, source: 'acronous' });
                   resolveStreamDone(fullReply);
-                }
+                },
+                cancel() { clearTimeout(streamWatchdog); try { streamCtrl.abort(); } catch {} },
               });
               return new Response(stream, { headers: sseHeaders });
             }
+            clearTimeout(streamWatchdog);
           } catch {}
         }
 

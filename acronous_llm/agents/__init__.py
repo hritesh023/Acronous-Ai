@@ -233,16 +233,17 @@ class AcronousAgentEngine:
         return "\n".join(time_parts)
 
     def _complexity_to_max_tokens(self, score):
-        # CPU reality check (qwen2.5:3b ≈ 5.7 tok/s): 4096 tokens ≈ 12 min.
-        # Cap hard so even "complex" answers finish in a usable time; the
-        # model stops at EOS anyway — the cap only cuts runaway generations.
+        # CPU reality check (qwen3.5:2b ≈ 39 tok/s, qwen3.5:4b ≈ 22 tok/s):
+        # 4096 tokens would be ~2-3 minutes of pure decode. These budgets keep
+        # a typical answer at 10-30s of generation, and the wall-clock
+        # deadline in core/llm.py catches anything that still runs away.
         if score >= 8:
-            return 1500
+            return 1200
         if score >= 5:
-            return 1024
+            return 800
         if score >= 3:
-            return 512
-        return 256
+            return 550
+        return 350
 
     def process(self, query, session_id="default", context=None, messages=None, timezone="", location="", source="unknown"):
         time_context = self._timezone_context(timezone, location, query)

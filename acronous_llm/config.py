@@ -24,7 +24,7 @@ class AcronousConfig:
         # Default chat model: qwen2.5:3b (5.7 tok/s, reliable). qwen3:8b
         # (2.35 tok/s) caused 90s-timeout 500s on the 4-core CPU box — it stays
         # available via ACRONOUS_LLM_CHAT_MODEL override for quality tasks only.
-        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "qwen2.5:3b")
+        self.LLM_MODEL = os.getenv("ACRONOUS_LLM_MODEL", "qwen3.5:2b")
         self.LLM_BACKEND = os.getenv("ACRONOUS_LLM_BACKEND", "auto")
         self.LLM_PROVIDER = os.getenv("ACRONOUS_LLM_PROVIDER", "contabo")
         # ── Contabo VPS brain (Cloud VPS 8, EU) ──
@@ -36,11 +36,16 @@ class AcronousConfig:
         self.BRAIN_DIRECT_URL = os.getenv(
             "ACRONOUS_BRAIN_DIRECT_URL", "http://167.86.104.155:11434")
         # Model routing — fastest reliable model per task (Contabo 4-core CPU).
-        # Chat defaults to 3b for snappy UX; set ACRONOUS_LLM_CHAT_MODEL=qwen3:8b
-        # explicitly only for quality-first deployments with GPU.
-        self.LLM_CHAT_MODEL = os.getenv("ACRONOUS_LLM_CHAT_MODEL", "qwen2.5:3b")
-        self.LLM_CODE_MODEL = os.getenv("ACRONOUS_LLM_CODE_MODEL", "qwen2.5-coder:7b")
-        self.LLM_FAST_MODEL = os.getenv("ACRONOUS_LLM_FAST_MODEL", "qwen2.5:3b")
+        # Measured steady state (single slot, pinned 4096 ctx):
+        #   qwen3.5:2b  TTFT 0.4-1.6s  ~31-34 tok/s
+        #   qwen3.5:4b  TTFT 1.5-2.3s  ~15-18 tok/s
+        # The 2B is the default because on a CPU box GENERATION time is what
+        # the user feels; the 4B is reserved for code/depth where the extra
+        # quality per token is worth the wait. Both are natively multimodal,
+        # and both must be called with think=false.
+        self.LLM_CHAT_MODEL = os.getenv("ACRONOUS_LLM_CHAT_MODEL", "qwen3.5:2b")
+        self.LLM_CODE_MODEL = os.getenv("ACRONOUS_LLM_CODE_MODEL", "qwen3.5:4b")
+        self.LLM_FAST_MODEL = os.getenv("ACRONOUS_LLM_FAST_MODEL", "qwen3.5:2b")
         # ── Self-training (auto-learn from internet + self fine-tune loop) ──
         # Resource-safe by design: 24GB RAM / 300GB disk caps are ENFORCED.
         # The brain gets smarter daily via bounded RAG/memory/JSONL growth
@@ -60,14 +65,21 @@ class AcronousConfig:
         # ── Fast-RAG + speed path (small-box accuracy without the wait) ──
         # RAG index is capped (RAM-safe) and persisted with a debounce so
         # learning never blocks a response. Retrieval is hybrid
-        # (dense cosine + keyword gate) to kill hash-collision hallucinations.
-        self.RAG_MAX_DOCS = int(os.getenv("ACRONOUS_RAG_MAX_DOCS", "5000"))
-        self.RAG_SAVE_DEBOUNCE_S = float(os.getenv("ACRONOUS_RAG_SAVE_DEBOUNCE_S", "30"))
-        self.RAG_TOP_K = int(os.getenv("ACRONOUS_RAG_TOP_K", "3"))
+        # (BM25 + dense cosine, RRF-fused) behind a confidence gate so the
+        # brain can say "I don't know" instead of hallucinating from memory.
+        self.RAG_MAX_DOCS = int(os.getenv("ACRONOUS_RAG_MAX_DOCS", "6000"))
+        self.RAG_SAVE_DEBOUNCE_S = float(os.getenv("ACRONOUS_RAG_SAVE_DEBOUNCE_S", "45"))
+        self.RAG_TOP_K = int(os.getenv("ACRONOUS_RAG_TOP_K", "4"))
         self.RAG_THRESHOLD = float(os.getenv("ACRONOUS_RAG_THRESHOLD", "0.35"))
-        # RAG-first shortcut: blended score >= this answers from learned
-        # memory with a tiny grounded prompt (no web search, small max_tokens).
-        self.RAG_DIRECT_ANSWER_SCORE = float(os.getenv("ACRONOUS_RAG_DIRECT_ANSWER_SCORE", "0.80"))
+        self.RAG_CHUNK_CHARS = int(os.getenv("ACRONOUS_RAG_CHUNK_CHARS", "320"))
+        self.RAG_CHUNK_OVERLAP = int(os.getenv("ACRONOUS_RAG_CHUNK_OVERLAP", "60"))
+        # RAG-first shortcut: confidence >= this answers from learned memory
+        # with pure extraction (zero LLM calls) — instant + cannot hallucinate.
+        self.RAG_DIRECT_ANSWER = float(os.getenv("ACRONOUS_RAG_DIRECT_ANSWER", "0.72"))
+        self.RAG_CACHE_TTL_S = float(os.getenv("ACRONOUS_RAG_CACHE_TTL_S", "1800"))
+        self.RAG_MIN_TERMS = int(os.getenv("ACRONOUS_RAG_MIN_TERMS", "2"))
+        # Legacy alias kept so old env files/compose files keep working.
+        self.RAG_DIRECT_ANSWER_SCORE = self.RAG_DIRECT_ANSWER
         # Hot-path guards: regex-only routing (no LLM classify call) and a
         # hard cap on the web-search phase so TTFT stays ~1s, not ~10s.
         self.ROUTER_LLM_CLASSIFY = os.getenv("ACRONOUS_ROUTER_LLM_CLASSIFY", "false").lower() == "true"
@@ -104,6 +116,27 @@ class AcronousConfig:
             except ImportError:
                 self.DEVICE = "cpu"
         self.OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+        # ── Ollama runtime contract (MUST match the VPS ollama container) ──
+        # Alternating num_ctx between callers forces Ollama to reallocate the
+        # whole KV cache on every switch, which cost 8-15s of pure prefill per
+        # request and was the single biggest source of "really slow" responses.
+        # 2048 also measures ~25% faster than 4096 for decode (9.0 vs 7.2
+        # tok/s) because attention cost scales with the KV cache.
+        self.LLM_CONTEXT_SIZE = int(os.getenv("ACRONOUS_LLM_CONTEXT_SIZE", "2048"))
+        self.LLM_NUM_PARALLEL = int(os.getenv("ACRONOUS_LLM_NUM_PARALLEL", "1"))
+        # Wall-clock ceiling per generation. A small model with a runaway
+        # repeat loop and a large num_predict will happily burn the whole
+        # 4-core box for 50+ minutes; the deadline converts that into a fast,
+        # honest partial answer instead of a frozen app.
+        self.LLM_DEADLINE_S = float(os.getenv("ACRONOUS_LLM_DEADLINE_S", "75"))
+        self.LLM_DEADLINE_FIRST_TOKEN_S = float(os.getenv("ACRONOUS_LLM_DEADLINE_FIRST_TOKEN_S", "30"))
+        # Sampling guardrail against degenerate repetition (one such loop held
+        # all 4 cores at 741% CPU for 40+ minutes). repeat_penalty is the
+        # cheapest effective guard; presence/frequency penalties measured
+        # within noise of it, so they are not set.
+        self.LLM_REPEAT_PENALTY = float(os.getenv("ACRONOUS_LLM_REPEAT_PENALTY", "1.2"))
+        self.LLM_REPEAT_LAST_N = int(os.getenv("ACRONOUS_LLM_REPEAT_LAST_N", "64"))
+        self.LLM_TOP_P = float(os.getenv("ACRONOUS_LLM_TOP_P", "0.9"))
         self.LANG = "en"
 
         self.IMAGE_STEPS = int(os.getenv("ACRONOUS_IMAGE_STEPS", "50"))

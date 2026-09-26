@@ -60,6 +60,8 @@ def get_brain():
             _start_internet_learning(_brain)
             # Start self-training loop (dataset distill every 6h + opportunistic LoRA).
             _start_self_train(_brain)
+            # Pre-load the chat models so the first user request is warm.
+            _start_warmup(_brain)
         return _brain
 
 
@@ -148,6 +150,22 @@ class ChatRequest(BaseModel):
     location: Optional[str] = None
 
 
+class RagRequest(BaseModel):
+    query: str
+    k: Optional[int] = None
+    min_confidence: Optional[float] = None
+    source: Optional[str] = "worker"
+
+
+class RagLearnRequest(BaseModel):
+    text: str
+    query: Optional[str] = ""
+    source: Optional[str] = "unknown"
+    session_id: Optional[str] = "default"
+    route_type: Optional[str] = "general_chat"
+    quality: Optional[float] = 0.5
+
+
 class FeedbackRequest(BaseModel):
     session_id: Optional[str] = "default"
     query: str
@@ -176,6 +194,34 @@ class GenerateRequest(BaseModel):
     source: Optional[str] = "equivo"
     route_type: Optional[str] = "general_chat"
     temperature: Optional[float] = None
+
+
+def _start_warmup(agent):
+    """Pre-load the chat + fast models in the background.
+
+    Ollama keeps a model resident for OLLAMA_KEEP_ALIVE, but after a restart
+    or an eviction the first real request pays a 15-30s model load. A tiny
+    generation moves that cost to boot time, where nobody is waiting.
+    """
+    import threading as _th
+
+    def _loop():
+        time.sleep(20)
+        try:
+            llm = agent.core.llm
+            for task in ("fast", "chat"):
+                try:
+                    llm.generate("hi", system_prompt="Reply with the single word: ok",
+                                 max_tokens=4, model=llm.model_for_task(task))
+                    logger.info("brain warmup: %s model loaded", task)
+                except Exception as exc:
+                    logger.info("brain warmup %s skipped: %s", task, exc)
+        except Exception as exc:
+            logger.info("brain warmup unavailable: %s", exc)
+
+    th = _th.Thread(target=_loop, daemon=True, name="acronous-warmup")
+    th.start()
+    logger.info("brain warmup scheduled (chat + fast models)")
 
 
 @app.post("/v1/generate")
@@ -324,17 +370,26 @@ async def chat(req: ChatRequest):
 
 @app.post("/v1/chat/stream")
 async def chat_stream(req: ChatRequest):
-    """SSE streaming chat — first token flows as soon as Ollama emits it, so
-    the app/browser render progressively instead of staring at a spinner for
-    the whole generation. Learning still happens (inside process_stream)."""
+    """SSE streaming chat — the first token is forwarded the moment Ollama
+    emits it, so the app/browser paint progressively instead of showing a
+    spinner for the whole generation.
+
+    Latency order inside the brain: RAG memory (5-25ms, no LLM) → web search
+    (hard-capped) → streamed generation (deadline-bounded).
+    """
     import json as _json
     agent = get_brain()
+    session_id = req.session_id or "default"
 
     def _gen():
+        chunks = []
         try:
+            # Announce readiness immediately so the client can flip from
+            # "connecting" to "thinking" without waiting on the first token.
+            yield "data: " + _json.dumps({"status": "thinking"}) + "\n\n"
             for chunk in agent.process_stream(
                 req.message,
-                session_id=req.session_id,
+                session_id=session_id,
                 context=None,
                 messages=req.messages,
                 timezone=req.timezone or "",
@@ -342,13 +397,23 @@ async def chat_stream(req: ChatRequest):
                 source=req.source or "unknown",
             ):
                 if chunk:
+                    chunks.append(chunk)
                     yield "data: " + _json.dumps({"content": chunk}) + "\n\n"
+            yield "data: " + _json.dumps({"done": True, "session_id": session_id}) + "\n\n"
             yield "data: [DONE]\n\n"
         except Exception as exc:
             logger.warning("chat stream failed: %s", exc)
-            yield "data: " + _json.dumps({"content": "", "error": "stream failed"}) + "\n\n"
+            yield "data: " + _json.dumps({
+                "content": "".join(chunks) or "I hit a snag. Try again?",
+                "error": "stream_failed",
+            }) + "\n\n"
+            yield "data: [DONE]\n\n"
 
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers={
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    })
 
 
 @app.post("/v1/chat/fast")
@@ -381,12 +446,133 @@ async def chat_fast(req: ChatRequest):
 
 @app.get("/v1/rag/stats")
 async def rag_stats():
-    """RAG index health: doc count vs cap, index bytes (disk discipline)."""
+    """RAG index health: chunk count vs cap, index bytes, cache size."""
     brain = get_brain()
     try:
         return {"ok": True, **brain.core.rag.stats()}
     except Exception as exc:
         return JSONResponse(status_code=500, content={"ok": False, "error": str(exc)[:200]})
+
+
+# ── RAG fast path (the reason answers are instant + non-hallucinated) ─────
+@app.post("/v1/rag/answer")
+async def rag_answer(req: RagRequest):
+    """Answer from the brain's own learned memory when it is confident.
+
+    This is the endpoint the Acronous AI worker and the Navigwiz worker call
+    BEFORE starting a generation. Two guarantees make it safe:
+
+      * `answerable` is false whenever coverage/confidence are low, so the
+        caller falls through to the LLM instead of forcing a memory answer.
+      * when `answerable` is true the answer is EXTRACTED verbatim from a
+        stored chunk — no model runs, so nothing can be invented.
+
+    Typical latency: 5-25ms (no Ollama round trip).
+    """
+    brain = get_brain()
+    try:
+        out = brain.core.rag.answer(
+            req.query or "",
+            k=req.k,
+            min_confidence=req.min_confidence,
+        )
+    except Exception as exc:
+        logger.warning("rag_answer failed: %s", exc)
+        return {"answerable": False, "answer": "", "confidence": 0.0, "sources": []}
+    return {
+        "answerable": bool(out.get("answerable")),
+        "answer": out.get("answer", ""),
+        "context": out.get("context", ""),
+        "confidence": out.get("confidence", 0.0),
+        "sources": [s for s in (out.get("sources") or []) if s],
+        "cached": bool(out.get("cached")),
+        "ms": out.get("ms", 0.0),
+    }
+
+
+@app.post("/v1/rag/retrieve")
+async def rag_retrieve(req: RagRequest):
+    """Passage retrieval only — grounding for a normal LLM generation."""
+    brain = get_brain()
+    try:
+        res = brain.core.rag.search(req.query or "", k=req.k)
+    except Exception as exc:
+        return {"answerable": False, "confidence": 0.0, "results": []}
+    return {
+        "answerable": bool(res.get("answerable")),
+        "confidence": res.get("confidence", 0.0),
+        "context": brain.core.rag._format_context(res.get("results", [])),
+        "results": [
+            {"text": r["text"], "score": r["score"], "metadata": r.get("metadata", {})}
+            for r in res.get("results", [])
+        ],
+        "ms": res.get("ms", 0.0),
+    }
+
+
+@app.post("/v1/rag/learn")
+async def rag_learn(req: RagLearnRequest, background: BackgroundTasks):
+    """Teach the brain one Q→A turn (human-eval signal from any product).
+
+    Fire-and-forget by design: the workers call this on every message, so it
+    must never sit in a response path.
+
+    A quality gate runs first: junk answers are rejected. This is what stops
+    the RAG from poisoning itself — it learns from the workers' own replies,
+    so a single truncated answer stored and later recalled at full confidence
+    would otherwise be served (and re-learned) forever.
+    """
+    text = (req.text or "").strip()
+    query = (req.query or "").strip()
+
+    from acronous_llm.core.rag import answer_is_learnable
+    if not text or not answer_is_learnable(text):
+        return {"ok": True, "queued": False, "skipped": "low_quality_answer"}
+
+    def _do():
+        try:
+            brain = get_brain()
+            # Store question and answer as separate chunks so a later query can
+            # match either side (asking the same question OR the same topic).
+            if query and text and not text.lower().startswith("q:"):
+                body = f"Q: {query}\nA: {text}"
+            else:
+                body = text
+            if body:
+                brain.core.rag.add_and_index(
+                    body[:2000],
+                    {"source": req.source or "unknown", "session": req.session_id,
+                     "route": req.route_type or "general_chat",
+                     "q": (req.query or "")[:200], "quality": req.quality},
+                )
+            if query:
+                try:
+                    brain.core.memory.store_knowledge(
+                        f"qa:{query[:120]}",
+                        (text or "")[:400],
+                        source=req.source or "unknown",
+                        confidence=float(req.quality or 0.5),
+                    )
+                except Exception:
+                    pass
+            if query and text:
+                try:
+                    brain.neural.learn_from_interaction(
+                        query, text, req.route_type or "general_chat",
+                        session_id=req.session_id or "default",
+                        feedback_score=float(req.quality or 0.5),
+                    )
+                except Exception:
+                    pass
+            try:
+                brain._save_learning_state()
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("rag_learn background failed: %s", exc)
+
+    background.add_task(_do)
+    return {"ok": True, "queued": True}
 
 
 @app.post("/v1/chat/completions")

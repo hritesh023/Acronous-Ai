@@ -9,31 +9,48 @@ routes = [
 ]
 
 [vars]
-# Model sizing measured on Contabo 4-core CPU (2026-08): qwen3:8b=2.35tok/s,
-# coder:7b=2.56tok/s, qwen3:4b burns tokens on hidden thinking, qwen2.5:3b=5.6,
-# qwen2.5:1.5b=10.6tok/s with 27tok/s prefill. Small models = snappy UX.
-OLLAMA_MODEL = "qwen2.5:3b"
-OLLAMA_CODE_MODEL = "qwen2.5:3b"
-OLLAMA_VISION_MODEL = "llava:7b"
-# Generous token budgets — responses must NEVER be cut off mid-answer.
-# Chat 16384 / code 12288 caps; models still stop naturally at EOS.
-OLLAMA_CHAT_MAX_TOKENS = "16384"
-OLLAMA_CODE_MAX_TOKENS = "12288"
-OLLAMA_CONTEXT_SIZE = "8192"
+# ── Model routing (measured on Contabo 4-core CPU, 2026-09) ────────────────
+# qwen3.5 (hybrid Gated-DeltaNet) is both faster and smarter than the qwen2.5
+# line at the same footprint. Steady-state, single slot, pinned 4096 ctx:
+#   qwen3.5:2b  TTFT 0.4-1.6s   ~31-34 tok/s   -> default chat (2x faster)
+#   qwen3.5:4b  TTFT 1.5-2.3s   ~15-18 tok/s   -> code / deep answers
+#   qwen2.5:3b  ~28 tok/s                      -> legacy fallback
+# The default is the 2B because on a CPU box GENERATION time, not quality, is
+# what the user feels: at 31 tok/s a 500-token answer takes 16s, at 15 tok/s it
+# takes 33s. The 4B is used where quality per token matters (code, research).
+# MUST be thinking-disabled at the call site (`think:false`) — qwen3.5 defaults
+# to emitting a reasoning block and returns empty content without it.
+OLLAMA_MODEL = "qwen3.5:2b"
+OLLAMA_FAST_MODEL = "qwen3.5:2b"
+OLLAMA_CODE_MODEL = "qwen3.5:4b"
+OLLAMA_VISION_MODEL = "qwen2.5vl:7b"
+# Pinned to match OLLAMA_CONTEXT_LENGTH on the VPS ollama container. A
+# mismatch makes Ollama reallocate the entire KV cache (measured 8-15s of
+# dead prefill per switch) — this single value is worth more than any model
+# upgrade for perceived speed.
+OLLAMA_CONTEXT_SIZE = "4096"
 ENABLE_WEB = "true"
 ENABLE_VISION = "true"
 ENABLE_VOICE = "true"
 PAGES_ORIGIN = "https://acronous-ai.pages.dev"
-# Python image editing service URL — Cloudflare Tunnel to Contabo VPS
-# Tunnel routes image-service.acronous.com → localhost:7860
+# Python image editing service URL - Cloudflare Tunnel to Contabo VPS
+# Tunnel routes image-service.acronous.com  localhost:7860
 EDITOR_SERVICE_URL = "https://image-service.acronous.com"
+# ── Shared Acronous LLM brain (RAG + self-learning) ───────────────────────
+# Same VPS, reached over the Cloudflare Tunnel. Provides the RAG fast path
+# (confident memory hits answer with zero LLM calls) and receives every turn
+# as human-eval training signal.
+BRAIN_URL = "https://brain.acronous.com"
+RAG_ENABLED = "true"
 
-# ── GPU fast-path (RunPod Serverless, scale-to-zero; all optional) ──
-# Leave empty = pure Contabo CPU behaviour (current, $0). Set these via
-# `npx wrangler secret put GPU_LLM_KEY` / vars to enable GPU-first + CPU fallback.
-# GPU_ENABLED = "true"             # "false" forces CPU-only (kill-switch, no redeploy of code)
+# ── GPU fast-path (RunPod Serverless) — DISABLED, must stay disabled ──
+# Policy: free + unlimited, self-hosted resources only. RunPod is a paid,
+# metered service, so it is hard-disabled below. The code path is retained
+# behind GPU_ENABLED so it can never engage by accident. Do not set
+# GPU_LLM_URL / GPU_IMAGE_URL without an explicit decision.
+GPU_ENABLED = "false"
 # GPU_LLM_URL = ""                 # e.g. https://api.runpod.ai/v2/<llm-endpoint-id>
-# GPU_LLM_MODEL = "qwen2.5:7b"     # model served by your vLLM serverless template
+# GPU_LLM_MODEL = "qwen3.5:4b"     # model served by your vLLM serverless template
 # GPU_LLM_TIMEOUT_MS = "60000"     # GPU attempt budget; cold start ~15-30s, warm ~2-5s
 # GPU_IMAGE_URL = ""               # e.g. https://api.runpod.ai/v2/<image-endpoint-id>
 # GPU_IMAGE_TIMEOUT_MS = "110000"  # image cold start can take ~20-40s
