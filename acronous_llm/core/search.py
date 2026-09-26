@@ -44,8 +44,13 @@ class WebSearch:
             self.serpapi_key = self.config.SERPAPI_KEY
 
     def search(self, query, max_results=5):
-        """Multi-engine search — tries DuckDuckGo, SearXNG, Wikipedia, Google News, Hacker News in parallel."""
+        """Multi-engine search — tries DuckDuckGo, SearXNG, Wikipedia, Google News, Hacker News in parallel.
+
+        Hard-capped at ~2s total: the router already enforces its own 900ms
+        phase budget on top, so a slow engine can never stall a response.
+        """
         import concurrent.futures
+        import os as _os
 
         engines = [
             ("duckduckgo", self._duckduckgo_search),
@@ -58,20 +63,34 @@ class WebSearch:
 
         all_results = []
         seen_urls = set()
+        try:
+            budget = float(_os.getenv("ACRONOUS_SEARCH_ENGINE_S", "2.0"))
+        except Exception:
+            budget = 2.0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
             futures = {executor.submit(fn, query, max_results): name for name, fn in engines}
-            for future in concurrent.futures.as_completed(futures, timeout=10):
-                name = futures[future]
-                try:
-                    results = future.result()
-                    for r in results:
-                        url = r.get("url", "")
-                        if url and url not in seen_urls:
-                            seen_urls.add(url)
-                            all_results.append(r)
-                except Exception:
-                    pass
+            try:
+                for future in concurrent.futures.as_completed(futures, timeout=budget):
+                    try:
+                        results = future.result()
+                        for r in results or []:
+                            url = r.get("url", "")
+                            if url and url not in seen_urls:
+                                seen_urls.add(url)
+                                all_results.append(r)
+                    except Exception:
+                        pass
+                    if len(all_results) >= max_results:
+                        break
+            except Exception:
+                pass
+            finally:
+                for f in futures:
+                    try:
+                        f.cancel()
+                    except Exception:
+                        pass
 
         return all_results[:max_results]
 

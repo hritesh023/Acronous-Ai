@@ -183,6 +183,16 @@ class QueryRouter:
             return None
 
     def _determine_type_with_llm(self, query):
+        # HOT-PATH FIX: the old code made a full LLM inference just to
+        # classify every query — doubling latency on the 4-core CPU box
+        # (classify ~5s + answer ~5-10s). Default is now instant heuristics
+        # (regex above + keyword rules below). The LLM classifier only runs
+        # when explicitly enabled via ACRONOUS_ROUTER_LLM_CLASSIFY=true.
+        try:
+            if not getattr(getattr(self.core, "config", None), "ROUTER_LLM_CLASSIFY", False):
+                return self._heuristic_classify(query)
+        except Exception:
+            pass
         prompt = f"""Classify this user request into exactly one category. Return ONLY the category name, nothing else.
 
 Categories:
@@ -201,15 +211,36 @@ Category:"""
         try:
             result = self.core.llm.generate(
                 prompt,
-                system_prompt="You classify user requests into categories. Return only the category name."
+                system_prompt="You classify user requests into categories. Return only the category name.",
+                max_tokens=16,
             )
             result = result.strip().lower().strip('"').strip("'").strip()
             valid = {"image_generation", "file_generation", "web_search", "code_generation", "translation", "image_analysis", "general_chat"}
             if result in valid:
                 return result
-            return "web_search"
+            return self._heuristic_classify(query)
         except Exception:
+            return self._heuristic_classify(query)
+
+    @staticmethod
+    def _heuristic_classify(query):
+        """Instant offline classifier — no LLM call, <1ms."""
+        q = (query or "").lower().strip()
+        if not q:
+            return "general_chat"
+        if re.search(r'\btranslate\b|\bhow to say\b.*\bin\b', q):
+            return "translation"
+        if re.search(r'\b(draw|paint|sketch|generate (an? )?(image|picture|photo|art|logo|icon)|create (an? )?(image|picture|photo|art)|make (an? )?(image|picture|photo))\b', q):
+            return "image_generation"
+        if re.search(r'\b(pdf|csv|svg|json|html|spreadsheet|invoice|resume|certificate|\bfile\b).{0,20}\b(create|generate|make|export)\b|\b(create|generate|make|export)\b.{0,20}\b(pdf|csv|svg|json|html|file|document|spreadsheet|report|chart|diagram)\b', q):
+            return "file_generation"
+        if re.search(r'\b(code|function|program|algorithm|debug| traceback|compile error|write .*program)\b', q):
+            return "code_generation"
+        # Information-seeking → web_search (same bias as the LLM prompt).
+        if ("?" in q or re.search(
+                r'\b(who|what|where|when|why|how|which|is|are|was|were|do|does|did|has|have|had|can|could|will|would|should|explain|define|meaning of|tell me about|latest|current|today|news|price|score|weather|president|minister|mayor|governor|ceo)\b', q)):
             return "web_search"
+        return "general_chat"
 
     def execute(self, query, route, session_id="default", image=None, messages=None, file_path=None, context=None, max_tokens=None):
         try:
@@ -350,51 +381,92 @@ The web search results above are LIVE, FRESH, and AUTHORITATIVE. Use them as you
             yield from self.core.llm.generate_stream(prompt, max_tokens=max_tokens)
 
     def _refine_search_query(self, query):
-        # Fast path: short queries don't need refinement
-        words = query.split()
-        if len(words) <= 8:
+        # INSTANT query expansion — the old code made an extra LLM call here
+        # for every long query (+3-6s). Template expansion is <1ms and just
+        # as effective for retrieval: original + year-anchored variant.
+        q = (query or "").strip()
+        if not q:
+            return [query]
+        if len(q) > 220:
+            q = q[:220].rsplit(" ", 1)[0]
+        try:
             from datetime import datetime, timezone
             year = datetime.now(timezone.utc).astimezone().year
-            return [query, f"{query} {year}", f"{query} current"]
-        try:
-            prompt = f"""Rewrite this question into 2-3 concise search queries that would best find the answer on a search engine. Return each query on a separate line, nothing else.
+        except Exception:
+            year = 2026
+        if self._is_time_sensitive(q):
+            return [q, f"{q} {year}"]
+        words = q.split()
+        if len(words) <= 4:
+            return [q]
+        # Strip question scaffolding for the 2nd variant ("what is the X of Y" → "X of Y").
+        short = re.sub(r'^(what|who|where|when|why|how|which|is|are|was|were|do|does|did|can|could|will|would|tell me|explain|define)\b[\s,]+', '', q, flags=re.I).strip()
+        return [q, short] if short and short != q else [q]
 
-Original: {query}
-Search queries:"""
-            result = self.core.llm.generate(
-                prompt,
-                system_prompt="You generate effective search engine queries. Return one per line."
-            )
-            lines = [l.strip() for l in result.strip().split("\n") if l.strip() and len(l.strip()) > 5]
-            if lines:
-                return lines[:3]
+    @staticmethod
+    def _is_time_sensitive(query):
+        q = (query or "").lower()
+        return bool(re.search(
+            r'\b(current|latest|recent|today|now|breaking|update|price|score|weather|election|president|minister|mayor|governor|ceo|news|who is the|what is the)\b', q))
+
+    def _rag_context(self, query, k=3):
+        """Pull learned-memory context (RAG + SQLite knowledge + neural facts).
+
+        This is the small-box accuracy path: past human-eval turns and the
+        internet learner's distilled facts answer repeats instantly and stay
+        consistent instead of re-hallucinating from the 3B weights.
+        """
+        parts = []
+        top_score = 0.0
+        try:
+            cfg = getattr(self.core, "config", None)
+            k = int(getattr(cfg, "RAG_TOP_K", k or 3))
+            ctx, hits = self.core.rag.retrieve_with_context(query, k=k)
+            if ctx:
+                parts.append("Learned memory (past verified answers — trust verbatim unless contradicted by fresher web data):\n" + ctx)
+                top_score = max((h.get("score", 0) for h in hits), default=0.0)
         except Exception:
             pass
-        return [query]
+        try:
+            rows = self.core.memory.search_knowledge(query[:80], limit=2)
+            if rows:
+                kb = " | ".join(f"{r.get('key')}: {str(r.get('value'))[:200]}" for r in rows)
+                parts.append("Knowledge base: " + kb)
+        except Exception:
+            pass
+        return ("\n\n".join(parts) if parts else ""), top_score
 
     def _execute_web_search(self, query):
+        # Hard-capped search phase: ONE query variant, bounded results, hard
+        # deadline (default 900ms from config). The old code ran up to 3
+        # sequential deep-content searches (~10s+) before the LLM even started.
+        import time as _t
         try:
-            from datetime import datetime, timezone
-            queries = self._refine_search_query(query)
+            cfg = getattr(self.core, "config", None)
+            budget_ms = int(getattr(cfg, "SEARCH_PHASE_MS", 900))
+            max_results = int(getattr(cfg, "SEARCH_MAX_RESULTS", 3))
+            deadline = _t.monotonic() + budget_ms / 1000.0
+            queries = self._refine_search_query(query)[:1]
             all_results = []
             seen_urls = set()
-            for q in queries[:3]:
-                results = self.core.search.search_with_deep_content(q, max_results=3)
-                for r in results:
+            for q in queries:
+                if _t.monotonic() >= deadline:
+                    break
+                try:
+                    results = self.core.search.search_with_deep_content(q, max_results=max_results)
+                except Exception:
+                    results = []
+                for r in results or []:
                     url = r.get("url", "")
                     if url and url not in seen_urls and r.get("snippet"):
                         seen_urls.add(url)
                         all_results.append(r)
-                if len(all_results) >= 3:
+                if len(all_results) >= max_results:
                     break
-            if not all_results:
-                alt_query = f"{query} {datetime.now(timezone.utc).astimezone().year}"
-                results = self.core.search.search_with_deep_content(alt_query, max_results=3)
-                all_results = [r for r in results if r.get("snippet")]
             if all_results:
                 snippets = "\n\n".join([
-                    f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:500]}"
-                    for r in all_results
+                    f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:400]}"
+                    for r in all_results[:max_results]
                 ])
                 return f"Web search results for '{query}':\n\n{snippets}"
         except Exception:
@@ -411,38 +483,66 @@ Using the date, time, and location information provided above, answer their ques
         return {"type": "chat", "content": (response.strip() if response else "I'm here to help! Could you rephrase that?"), "sources": []}
 
     def _handle_search(self, query, context, max_tokens=None):
+        # RAG-FIRST: if learned memory already holds a high-confidence answer
+        # and the question is not time-sensitive, answer from it directly —
+        # one small LLM call, no web phase at all (~2-3s vs ~10s+).
+        import time as _t
         search_data = ""
         search_results = []
+        rag_ctx, rag_score = self._rag_context(query)
         try:
-            from datetime import datetime, timezone
-            queries = self._refine_search_query(query)
+            cfg = getattr(self.core, "config", None)
+            direct_at = float(getattr(cfg, "RAG_DIRECT_ANSWER_SCORE", 0.80))
+        except Exception:
+            direct_at = 0.80
+        if rag_score >= direct_at and not self._is_time_sensitive(query):
+            prompt = f"""{context}\n\n{rag_ctx}\n\nUser: {query}\n\nAnswer ONLY from the learned memory above, in 2-4 sentences. If the memory does not contain the answer, say "I couldn't find that in my learned knowledge." Never invent facts, dates, or names."""
+            try:
+                response = self.core.llm.generate(prompt, max_tokens=min(max_tokens or 512, 512))
+            except Exception:
+                response = ""
+            if (response or "").strip():
+                return {"type": "factual", "content": response.strip(), "sources": [], "rag_hit": True}
+        # Bounded web phase: single variant, deadline-capped, fewer results.
+        _start = _t.monotonic()
+        try:
+            import concurrent.futures as _cf
+            cfg = getattr(self.core, "config", None)
+            budget_ms = int(getattr(cfg, "SEARCH_PHASE_MS", 900))
+            max_results = int(getattr(cfg, "SEARCH_MAX_RESULTS", 3))
+            queries = self._refine_search_query(query)[:1]
             all_results = []
             seen_urls = set()
-            for q in queries[:3]:
-                results = self.core.search.search_with_deep_content(q, max_results=5)
-                for r in results:
-                    url = r.get("url", "")
-                    if url and url not in seen_urls and r.get("snippet"):
-                        seen_urls.add(url)
-                        all_results.append(r)
-                if len(all_results) >= 5:
-                    break
-            if not all_results:
-                alt_query = f"{query} {datetime.now(timezone.utc).astimezone().year}"
-                results = self.core.search.search_with_deep_content(alt_query, max_results=5)
-                all_results = [r for r in results if r.get("snippet")]
-            search_results = all_results[:5]
+            with _cf.ThreadPoolExecutor(max_workers=1) as ex:
+                for q in queries:
+                    remaining = budget_ms / 1000.0 - (_t.monotonic() - _start)
+                    if remaining <= 0.05:
+                        break
+                    fut = ex.submit(self.core.search.search_with_deep_content, q, max_results)
+                    try:
+                        results = fut.result(timeout=remaining)
+                    except Exception:
+                        results = []
+                    for r in results or []:
+                        url = r.get("url", "")
+                        if url and url not in seen_urls and r.get("snippet"):
+                            seen_urls.add(url)
+                            all_results.append(r)
+                    if len(all_results) >= max_results:
+                        break
+            search_results = all_results[:max_results]
             if search_results:
                 snippets = "\n\n".join([
-                    f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:500]}"
+                    f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:400]}"
                     for r in search_results
                 ])
                 search_data = snippets
         except Exception:
             pass
 
+        rag_block = f"\n\n{rag_ctx}\n" if rag_ctx else ""
         if search_data:
-            prompt = f"""{context}
+            prompt = f"""{context}{rag_block}
 
 Web search results for "{query}":
 
@@ -456,6 +556,7 @@ The web search results above are LIVE, FRESH, and AUTHORITATIVE. You MUST:
 4. If the search results contain the answer but are scattered, synthesize them into one clear answer
 5. ONLY if the search results are completely empty or irrelevant, say "I couldn't find current information on that"
 6. ALWAYS answer based on the SEARCH RESULTS FIRST, not your training data — your training data may be outdated
+7. ANTI-HALLUCINATION: never invent names, dates, numbers, or quotes. If a detail is not in the sources above, omit it or say you couldn't verify it.
 
 YOU MUST NOT:
 - Never say "based on my training data" or "as of my knowledge cutoff" when search results are available
@@ -465,6 +566,14 @@ YOU MUST NOT:
 - Never say "I searched the web" or "according to search results" — just give the answer naturally
 
 Speak naturally and directly — just give the answer like a knowledgeable friend. Be concise but complete."""
+        elif rag_ctx:
+            prompt = f"""{context}
+
+{rag_ctx}
+
+User: {query}
+
+Answer from the learned memory above in 2-4 sentences. If it lacks the answer, say "I couldn't find current information on that" — never invent facts."""
         else:
             prompt = f"""{context}
 
@@ -497,53 +606,46 @@ No web search results were found. Do NOT use your pre-trained knowledge. Be hone
         if self._is_simple_greeting(query):
             prompt = f"""User: "{query}"
 
-Respond naturally with a warm, friendly greeting. Keep it concise and conversational."""
-            response = self.core.llm.generate(prompt, max_tokens=max_tokens)
+Respond naturally with a warm, friendly greeting. Keep it to 1-2 sentences, conversational."""
+            try:
+                response = self.core.llm.generate(prompt, max_tokens=min(max_tokens or 256, 256))
+            except Exception:
+                response = ""
             return {"type": "chat", "content": (response.strip() if response else "Hey there! How can I help you today?"), "sources": []}
 
+        # SPEED: casual chat must NOT pay for a web search. RAG memory is
+        # injected (instant, local); web is only used for time-sensitive asks
+        # and even then under the shared deadline. Old code searched twice here.
+        rag_ctx, _ = self._rag_context(query)
+        rag_block = f"\n\n{rag_ctx}\n" if rag_ctx else ""
         search_data = ""
         search_results = []
-
-        try:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).astimezone()
-            queries = self._refine_search_query(query)
-            all_results = []
-            seen_urls = set()
-            for q in queries[:2]:
-                results = self.core.search.search_with_deep_content(q, max_results=3)
-                for r in results:
-                    url = r.get("url", "")
-                    if url and url not in seen_urls and r.get("snippet"):
-                        seen_urls.add(url)
-                        all_results.append(r)
-                if len(all_results) >= 3:
-                    break
-            if not all_results:
-                alt_q = f"{query} {now.year}"
-                results = self.core.search.search_with_deep_content(alt_q, max_results=3)
-                all_results = [r for r in results if r.get("snippet")]
-            search_results = all_results[:3]
-            if search_results:
-                snippets = "\n\n".join([
-                    f"[{r['title']}]({r['url']}): {r['snippet']}\n{r.get('content', '')[:300]}"
-                    for r in search_results
-                ])
-                search_data = f"\n\nRelated web information:\n{snippets}\n"
-        except Exception:
-            pass
+        if self._is_time_sensitive(query):
+            try:
+                search_data = self._execute_web_search(query)
+            except Exception:
+                search_data = ""
 
         if search_data:
-            prompt = f"""{context}{search_data}
+            prompt = f"""{context}{rag_block}{search_data}
 
 User: {query}
 
-The web search results above are LIVE and AUTHORITATIVE. Use them as your primary source. Never say "based on my training data", "I don't have real-time access", or "check external sources". Never say "I searched the web". Answer naturally and directly, like a knowledgeable friend."""
+The web results above are LIVE and AUTHORITATIVE — use them first, then learned memory. Never say "based on my training data", "I don't have real-time access", or "check external sources". Never say "I searched the web". Answer naturally and directly, like a knowledgeable friend. Never invent names, dates, or numbers not in the sources."""
+        elif rag_block:
+            prompt = f"""{context}{rag_block}
+
+User: {query}
+
+Use the learned memory above when relevant; otherwise answer conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources. Never invent facts."""
         else:
-            prompt = f"""User: "{query}"
+            prompt = f"""{context}
+
+User: "{query}"
 
 Respond naturally and conversationally. Never say "As of my knowledge" or "based on my training". Never tell the user to check external sources."""
-        response = self.core.llm.generate(prompt, max_tokens=max_tokens)
+        # Chat answers stay short by default (CPU tokens are the bottleneck).
+        response = self.core.llm.generate(prompt, max_tokens=min(max_tokens or 512, 1024))
         content = response.strip() if response else "I'm here to help! Could you rephrase that?"
         return {"type": "chat", "content": content, "sources": [{"title": r["title"], "url": r["url"]} for r in search_results]}
 

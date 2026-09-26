@@ -24,7 +24,13 @@ class AcronousAgentEngine:
         self.planner = TaskPlanner(core_engine)
 
     # ── Autonomous learning loop ──────────────────────────────────────────
-    def _learn_from_interaction(self, query, result, session_id, route_type=None):
+    # Every user turn across Acronous AI / Equyvo / Navigwiz is a HUMAN-EVAL
+    # signal: the query+answer pair trains the classifier (implicit reward
+    # 0.5), lands in RAG memory with its product source, and explicit
+    # thumbs up/down via record_feedback() re-weights it (human eval loop).
+    # Idle-time growth comes from InternetLearner instead — the two paths
+    # never block each other (both write through the debounced RAG save).
+    def _learn_from_interaction(self, query, result, session_id, route_type=None, source="unknown"):
         """After EVERY completed user interaction, let the brain learn:
           1. Feed the query+label to the neural learner (implicit feedback).
           2. Store the Q→A pair into the vector RAG memory so future similar
@@ -45,17 +51,36 @@ class AcronousAgentEngine:
             try:
                 self.core.rag.add_and_index(
                     f"Q: {query}\nA: {content[:800]}",
-                    {"type": route_type, "session": session_id}
+                    {"type": route_type, "session": session_id, "source": source}
                 )
             except Exception:
                 pass
         except Exception:
             pass
 
-    def _save_learning_state(self):
+    _last_save_ts = 0.0
+    _turns_since_save = 0
+
+    def _save_learning_state(self, force=False):
+        """Debounced persist: torch.save + JSON writes every ~60s or 10 turns,
+        never on every turn. The old per-turn save added 100-500ms to EVERY
+        response on the hot path."""
+        import time as _t
         try:
+            if not force:
+                AcronousAgentEngine._turns_since_save += 1
+                now = _t.time()
+                if (AcronousAgentEngine._turns_since_save < 10
+                        and now - AcronousAgentEngine._last_save_ts < 60):
+                    return
             cfg = self.neural.config
             self.neural.save_state(str(cfg.MODELS_DIR / "learner.pt"))
+            try:
+                self.core.rag.flush()
+            except Exception:
+                pass
+            AcronousAgentEngine._last_save_ts = _t.time()
+            AcronousAgentEngine._turns_since_save = 0
         except Exception:
             pass
 
@@ -208,15 +233,18 @@ class AcronousAgentEngine:
         return "\n".join(time_parts)
 
     def _complexity_to_max_tokens(self, score):
+        # CPU reality check (qwen2.5:3b ≈ 5.7 tok/s): 4096 tokens ≈ 12 min.
+        # Cap hard so even "complex" answers finish in a usable time; the
+        # model stops at EOS anyway — the cap only cuts runaway generations.
         if score >= 8:
-            return 4096
+            return 1500
         if score >= 5:
-            return 2048
-        if score >= 3:
             return 1024
-        return 512
+        if score >= 3:
+            return 512
+        return 256
 
-    def process(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
+    def process(self, query, session_id="default", context=None, messages=None, timezone="", location="", source="unknown"):
         time_context = self._timezone_context(timezone, location, query)
         ctx_parts = [p for p in [time_context, context] if p]
         context = "\n".join(ctx_parts) if ctx_parts else ""
@@ -231,12 +259,12 @@ class AcronousAgentEngine:
             result["complexity"] = complexity
             result["complexity_label"] = self._complexity_bucket(complexity)
         # AUTONOMOUS LEARNING: improve from every completed interaction.
-        self._learn_from_interaction(query, result, session_id, route.get("type"))
+        self._learn_from_interaction(query, result, session_id, route.get("type"), source)
         self._learn_preferences(query, session_id)
         self._save_learning_state()
         return result
 
-    def process_stream(self, query, session_id="default", context=None, messages=None, timezone="", location=""):
+    def process_stream(self, query, session_id="default", context=None, messages=None, timezone="", location="", source="unknown"):
         time_context = self._timezone_context(timezone, location, query)
         ctx_parts = [p for p in [time_context, context] if p]
         context = "\n".join(ctx_parts) if ctx_parts else ""
@@ -249,7 +277,7 @@ class AcronousAgentEngine:
             chunk_size = 30
             for i in range(0, len(content), chunk_size):
                 yield content[i:i + chunk_size]
-            self._learn_from_interaction(query, result, session_id, route.get("type"))
+            self._learn_from_interaction(query, result, session_id, route.get("type"), source)
             self._save_learning_state()
             return
         full = []
@@ -257,7 +285,7 @@ class AcronousAgentEngine:
             full.append(chunk)
             yield chunk
         joined = "".join(full)
-        self._learn_from_interaction(query, {"content": joined, "type": route.get("type")}, session_id, route.get("type"))
+        self._learn_from_interaction(query, {"content": joined, "type": route.get("type")}, session_id, route.get("type"), source)
         self._learn_preferences(query, session_id)
         self._save_learning_state()
 

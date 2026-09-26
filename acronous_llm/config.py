@@ -57,6 +57,25 @@ class AcronousConfig:
         self.SELF_TRAIN_MAX_MERGED_PAIRS = int(os.getenv("ACRONOUS_SELF_TRAIN_MAX_MERGED_PAIRS", "20000"))  # merged file cap (~100MB)
         self.SELF_TRAIN_RETAIN_DAYS = int(os.getenv("ACRONOUS_SELF_TRAIN_RETAIN_DAYS", "14"))  # prune snapshots older than this
         self.SELF_TRAIN_RETAIN_SNAPSHOTS = int(os.getenv("ACRONOUS_SELF_TRAIN_RETAIN_SNAPSHOTS", "7"))  # keep newest N snapshots
+        # ── Fast-RAG + speed path (small-box accuracy without the wait) ──
+        # RAG index is capped (RAM-safe) and persisted with a debounce so
+        # learning never blocks a response. Retrieval is hybrid
+        # (dense cosine + keyword gate) to kill hash-collision hallucinations.
+        self.RAG_MAX_DOCS = int(os.getenv("ACRONOUS_RAG_MAX_DOCS", "5000"))
+        self.RAG_SAVE_DEBOUNCE_S = float(os.getenv("ACRONOUS_RAG_SAVE_DEBOUNCE_S", "30"))
+        self.RAG_TOP_K = int(os.getenv("ACRONOUS_RAG_TOP_K", "3"))
+        self.RAG_THRESHOLD = float(os.getenv("ACRONOUS_RAG_THRESHOLD", "0.35"))
+        # RAG-first shortcut: blended score >= this answers from learned
+        # memory with a tiny grounded prompt (no web search, small max_tokens).
+        self.RAG_DIRECT_ANSWER_SCORE = float(os.getenv("ACRONOUS_RAG_DIRECT_ANSWER_SCORE", "0.80"))
+        # Hot-path guards: regex-only routing (no LLM classify call) and a
+        # hard cap on the web-search phase so TTFT stays ~1s, not ~10s.
+        self.ROUTER_LLM_CLASSIFY = os.getenv("ACRONOUS_ROUTER_LLM_CLASSIFY", "false").lower() == "true"
+        self.SEARCH_PHASE_MS = int(os.getenv("ACRONOUS_SEARCH_PHASE_MS", "900"))
+        self.SEARCH_MAX_RESULTS = int(os.getenv("ACRONOUS_SEARCH_MAX_RESULTS", "3"))
+        # Memory hygiene: WAL + indexes + per-session/DB prune caps.
+        self.MEMORY_MAX_PER_SESSION = int(os.getenv("ACRONOUS_MEMORY_MAX_PER_SESSION", "200"))
+        self.MEMORY_MAX_ROWS = int(os.getenv("ACRONOUS_MEMORY_MAX_ROWS", "20000"))
         self.LLM_API_KEY = os.getenv("ACRONOUS_LLM_API_KEY", "")
         self.LLM_API_URL = os.getenv("ACRONOUS_LLM_API_URL", "")
         self.EMBED_MODEL = os.getenv("ACRONOUS_EMBED_MODEL", "all-MiniLM-L6-v2")

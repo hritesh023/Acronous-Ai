@@ -989,11 +989,15 @@ class ChatProvider extends ChangeNotifier {
       try {
         Map<String, dynamic> resp;
         if (canStream && attempt == 0 && !_generationInProgress) {
-          // Try streaming for text-only chat — add placeholder message
+          // Try streaming for text-only chat — placeholder carries a phased
+          // status label so the bubble never sits empty/awkward while the
+          // first token is on its way (TTFT ~3s warm, longer cold).
           final streamingMsg = ChatMessage(
             role: 'assistant',
             content: '',
             isStreaming: true,
+            progressLabel: 'Thinking…',
+            progressKind: 'chat',
           );
           _currentConversation!.messages.add(streamingMsg);
           _isTakingLong = true;
@@ -2161,6 +2165,10 @@ class ChatProvider extends ChangeNotifier {
     // phones. Flush at most every ~120ms; always flush the final text.
     final stopwatch = Stopwatch()..start();
     var pendingFlush = false;
+    // Phased status while the first tokens are still on their way. Once
+    // content starts flowing the label clears and live text takes over.
+    const chatPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
+    var chatPhaseIdx = 0;
     void flushStreamingText() {
       // Sanitize live to prevent backend-detail leaks in the streaming bubble
       final sanitized = _sanitizeAssistantText(accumulated,
@@ -2170,13 +2178,32 @@ class ChatProvider extends ChangeNotifier {
           _currentConversation!.messages.isNotEmpty &&
           _currentConversation!.messages.last.role == 'assistant' &&
           _currentConversation!.messages.last.isStreaming) {
-        _currentConversation!.messages.last.content = sanitized;
+        final last = _currentConversation!.messages.last;
+        last.content = sanitized;
+        if (sanitized.isNotEmpty) {
+          // Tokens flowing — drop the skeleton, show live text.
+          last.progressLabel = '';
+        } else if (stopwatch.elapsedMilliseconds >= 2500 &&
+            chatPhaseIdx < chatPhases.length - 1) {
+          // Still waiting on TTFT — advance the reassuring status label.
+          chatPhaseIdx++;
+          last.progressLabel = chatPhases[chatPhaseIdx];
+        }
       }
       notifyListeners();
       stopwatch.reset();
       pendingFlush = false;
     }
+    // Heartbeat so the phased "Thinking… → Recalling memory… → Writing…"
+    // label advances even while no SSE bytes have arrived yet (slow TTFT).
+    Timer? phaseTimer;
     try {
+      phaseTimer = Timer.periodic(const Duration(milliseconds: 2500), (_) {
+        if (accumulated.isEmpty && pendingFlush == false) {
+          pendingFlush = true;
+          flushStreamingText();
+        }
+      });
       await for (final event in _api.chatStream(
         message: text,
         sessionId: sessionId,
@@ -2206,6 +2233,8 @@ class ChatProvider extends ChangeNotifier {
     } catch (_) {
       // Streaming failed — caller will fall back to non-streaming
       rethrow;
+    } finally {
+      phaseTimer?.cancel();
     }
     return {
       'response': accumulated,

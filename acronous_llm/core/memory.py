@@ -14,6 +14,11 @@ class MemorySystem:
     def _init_db(self):
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+        except Exception:
+            pass
         self.cursor = self.conn.cursor()
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS conversations (
@@ -44,10 +49,48 @@ class MemorySystem:
                 timestamp TEXT
             )
         """)
+        try:
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_conv_session ON conversations(session_id, id)")
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_know_key ON knowledge(key)")
+            self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_know_ts ON knowledge(timestamp)")
+        except Exception:
+            pass
         self.conn.commit()
+        try:
+            self.prune_old()
+        except Exception:
+            pass
+
+    def prune_old(self):
+        """Bounded growth: per-session + global caps so the DB never slows
+        queries or fills the 300GB disk. Runs on startup and opportunistically."""
+        try:
+            max_rows = int(getattr(self.config, "MEMORY_MAX_ROWS", 20000))
+            max_per = int(getattr(self.config, "MEMORY_MAX_PER_SESSION", 200))
+            self.cursor.execute("SELECT COUNT(*) FROM conversations")
+            total = (self.cursor.fetchone() or [0])[0]
+            if total > max_rows:
+                self.cursor.execute(
+                    "DELETE FROM conversations WHERE id IN "
+                    "(SELECT id FROM conversations ORDER BY id ASC LIMIT ?)",
+                    (total - max_rows,))
+            # Per-session trim for the heaviest sessions only (cheap).
+            self.cursor.execute(
+                "SELECT session_id, COUNT(*) c FROM conversations GROUP BY session_id "
+                "HAVING c > ? LIMIT 20", (max_per,))
+            for (sid, c) in self.cursor.fetchall():
+                self.cursor.execute(
+                    "DELETE FROM conversations WHERE id IN "
+                    "(SELECT id FROM conversations WHERE session_id=? ORDER BY id ASC LIMIT ?)",
+                    (sid, c - max_per))
+            self.conn.commit()
+        except Exception:
+            pass
 
     def add(self, session_id, role, content, metadata=None):
         return self.add_message(session_id, role, content, metadata)
+
+    _writes_since_prune = 0
 
     def add_message(self, session_id, role, content, metadata=None):
         ts = datetime.now().isoformat()
@@ -61,6 +104,13 @@ class MemorySystem:
             (session_id, role, content, ts, json.dumps(metadata or {}))
         )
         self.conn.commit()
+        try:
+            MemorySystem._writes_since_prune += 1
+            if MemorySystem._writes_since_prune >= 50:
+                MemorySystem._writes_since_prune = 0
+                self.prune_old()
+        except Exception:
+            pass
 
     def get_history(self, session_id, limit=None):
         if limit is None:

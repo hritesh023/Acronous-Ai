@@ -253,8 +253,13 @@ class ChatMessageWidget extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Streaming UX: skeleton ONLY while zero content has
+                        // arrived (slow TTFT). Once tokens flow, render the
+                        // live text with a typing indicator — never an empty
+                        // bubble, never skeleton-over-text flicker.
                         if (message.isStreaming &&
-                            message.progressLabel.isNotEmpty) ...[
+                            message.progressLabel.isNotEmpty &&
+                            message.content.isEmpty) ...[
                           SizedBox(
                             width: math.min(
                               340.0,
@@ -272,6 +277,12 @@ class ChatMessageWidget extends StatelessWidget {
                             _buildGeneratedMedia(context, message, cs),
                           if (message.content.isNotEmpty)
                             MarkdownRenderer(content: message.content),
+                          // Live typing dots while tokens are still flowing.
+                          if (message.isStreaming)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: _StreamingDots(color: cs.onSurfaceVariant),
+                            ),
                         ],
                       ],
                     ),
@@ -1240,6 +1251,56 @@ class _VideoFullScreenPageState extends State<_VideoFullScreenPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Tiny animated ellipsis shown under a bubble while streamed tokens are
+/// still arriving — signals "writing…" without an awkward spinner takeover.
+class _StreamingDots extends StatefulWidget {
+  final Color? color;
+  const _StreamingDots({this.color});
+
+  @override
+  State<_StreamingDots> createState() => _StreamingDotsState();
+}
+
+class _StreamingDotsState extends State<_StreamingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (context, child) {
+        final step = (_ctrl.value * 3).floor() % 4;
+        return Text(
+          '.' * (step == 0 ? 1 : step),
+          style: TextStyle(
+            color: (widget.color ?? Theme.of(context).colorScheme.onSurfaceVariant)
+                .withValues(alpha: 0.6),
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 2,
+          ),
+        );
+      },
     );
   }
 }

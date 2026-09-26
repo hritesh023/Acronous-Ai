@@ -17,8 +17,19 @@ class TextEmbedder:
         return self._model
 
     def _load_model(self):
+        # Zero-RAM default: improved hash embeddings (unigram + bigram).
+        # If `sentence-transformers` is installed on the VPS it is used
+        # lazily (better recall, ~90MB RAM) — otherwise the hash path keeps
+        # the 3GB brain container lean. Never crash the hot path on this.
         self._model_loaded = True
         self._model = None
+        try:
+            if os.getenv("ACRONOUS_EMBED_ST", "auto") in ("auto", "1", "true"):
+                from sentence_transformers import SentenceTransformer  # optional
+                name = os.getenv("ACRONOUS_EMBED_MODEL", "all-MiniLM-L6-v2")
+                self._model = SentenceTransformer(name)
+        except Exception:
+            self._model = None
 
     def embed(self, text):
         if self.model is not None:
@@ -39,14 +50,23 @@ class TextEmbedder:
         return torch.stack([self._fallback_embed(t) for t in texts])
 
     def _fallback_embed(self, text):
-        text = text.lower().strip()
-        tokens = re.findall(r'\w+', text)
+        # Unigram + bigram hashed TF with length-norm. Bigrams sharply cut
+        # hash-collision false positives (the old unigram-only vector is why
+        # RAG recall felt random) at zero extra RAM or dependency cost.
+        text = (text or "").lower().strip()
+        tokens = re.findall(r'[a-z0-9]+', text)
         vec = torch.zeros(self.config.EMBED_DIM)
         if not tokens:
             return vec
-        for i, t in enumerate(set(tokens)):
-            idx = hash(t) % self.config.EMBED_DIM
-            vec[idx] += 1.0
+        feats = set(tokens)
+        for a, b in zip(tokens, tokens[1:]):
+            feats.add(a + "_" + b)
+        for t in feats:
+            # stable hash (python hash() is salted per-process → non-deterministic
+            # across restarts; md5 keeps the persisted index consistent).
+            import hashlib as _h
+            idx = int(_h.md5(t.encode()).hexdigest(), 16) % self.config.EMBED_DIM
+            vec[idx] += 1.0 if "_" not in t else 1.5  # bigrams carry more signal
         if vec.norm() > 0:
             vec = vec / vec.norm()
         return vec

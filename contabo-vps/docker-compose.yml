@@ -76,6 +76,20 @@ services:
       - ACRONOUS_SELF_TRAIN_MAX_MERGED_PAIRS=20000
       - ACRONOUS_SELF_TRAIN_RETAIN_DAYS=14
       - ACRONOUS_SELF_TRAIN_RETAIN_SNAPSHOTS=7
+      # ── Fast-RAG + speed path (small-box accuracy without the wait) ──
+      # RAG index capped at 5000 docs (~50MB) with 30s debounced saves so
+      # learning never blocks responses; hybrid retrieve kills hallucinations.
+      - ACRONOUS_RAG_MAX_DOCS=5000
+      - ACRONOUS_RAG_SAVE_DEBOUNCE_S=30
+      - ACRONOUS_RAG_TOP_K=3
+      - ACRONOUS_RAG_THRESHOLD=0.35
+      - ACRONOUS_RAG_DIRECT_ANSWER_SCORE=0.80
+      # Regex-only routing (no LLM classify call) + 900ms search cap.
+      - ACRONOUS_ROUTER_LLM_CLASSIFY=false
+      - ACRONOUS_SEARCH_PHASE_MS=900
+      - ACRONOUS_SEARCH_MAX_RESULTS=3
+      - ACRONOUS_MEMORY_MAX_PER_SESSION=200
+      - ACRONOUS_MEMORY_MAX_ROWS=20000
       - DATA_DIR=/data/brain
     volumes:
       - ./data/brain:/data/brain
