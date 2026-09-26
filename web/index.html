@@ -4,7 +4,7 @@
   <base href="$FLUTTER_BASE_HREF">
   <meta charset="UTF-8">
   <meta content="IE=edge" http-equiv="X-UA-Compatible">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="Acronous AI - AI Chat Assistant">
 
   <meta name="mobile-web-app-capable" content="yes">
@@ -19,7 +19,16 @@
   <link rel="manifest" href="manifest.json">
   <link rel="sitemap" type="application/xml" href="sitemap.xml">
   <style>
+    /* Full-viewport flexible shell: fills phones, foldables, tablets,
+       desktops and external displays; respects notches/cutouts. */
     html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    html, body { min-height: 100vh; min-height: 100dvh; width: 100%; }
+    body {
+      padding-left: env(safe-area-inset-left, 0px);
+      padding-right: env(safe-area-inset-right, 0px);
+      overscroll-behavior-y: none;
+      background: #111118;
+    }
   </style>
 </head>
 <body>
