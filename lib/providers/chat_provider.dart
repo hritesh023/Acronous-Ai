@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart' as geo;
 import 'package:geocoding/geocoding.dart' as geocoding;
 import '../api/client.dart';
+import '../billing/paywall.dart';
 import '../config/app_config.dart';
 import '../constants/app_constants.dart';
 import '../models/message.dart';
@@ -1180,6 +1181,8 @@ class ChatProvider extends ChangeNotifier {
           _isLoading = false;
           _prefs.saveConversations(_conversations).catchError((_) {});
           notifyListeners();
+          // Take the user to the subscription page (throttled, post-frame).
+          PaywallBus.handle(e);
           _processQueue();
           return;
         }

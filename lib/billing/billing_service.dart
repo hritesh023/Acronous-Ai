@@ -22,6 +22,8 @@ class BillingService extends ChangeNotifier {
   bool isPro = false;
   String? activePlanId;
   int apiCredits = 0;
+  Map<String, dynamic> usage = const {};
+  Map<String, dynamic> tierQuotas = const {};
   String? busyPlanId;
   String? error;
 
@@ -43,7 +45,11 @@ class BillingService extends ChangeNotifier {
       apiCredits = (s['api_credits'] as num?)?.toInt() ?? 0;
       final subs = s['subscriptions'] as Map<String, dynamic>?;
       final ai = subs?['acronous_ai'] as Map<String, dynamic>?;
-      activePlanId = ai?['plan'] as String?;
+      activePlanId = ai?['plan'] as String? ?? s['ai_plan'] as String?;
+      final u = s['usage'];
+      if (u is Map<String, dynamic>) usage = u;
+      final tq = s['tier_quotas'];
+      if (tq is Map<String, dynamic>) tierQuotas = tq;
       notifyListeners();
     } catch (e) {
       error = ApiClient.isPaywall(e)
@@ -94,6 +100,7 @@ class BillingService extends ChangeNotifier {
         orderId: g.orderId,
         paymentId: g.paymentId,
         signature: g.signature,
+        plan: plan.id,
       );
       await refresh();
       return true;

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'billing/paywall.dart';
 import 'config/app_config.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
@@ -15,6 +16,8 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   AppConfig.instance.load();
+  // Global paywall → subscription page wiring (HTTP 402 anywhere).
+  PaywallBus.attach(navigatorKey);
   runApp(
     MultiProvider(
       providers: [

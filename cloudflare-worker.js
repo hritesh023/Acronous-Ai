@@ -4356,6 +4356,46 @@ function quotaLimit(env, kind) {
   return Math.max(0, parseInt(env.FREE_CHAT_PER_DAY || '20', 10) || 0);
 }
 
+// ── Tiered entitlements: every paid plan unlocks exactly what pricing says ──
+// Mirrors Acronous-landing-page/billing/entitlements.json. Free caps come
+// from env (FREE_*_PER_DAY); paid tiers get explicit daily allowances so
+// ₹149 Starter is NOT unlimited and Ultra is very high but never infinite.
+const TIER_QUOTAS = {
+  ai_starter_monthly: { chat: 200,   image: 20,   video: 3,   files_per_day: 20,   max_file_mb: 25 },
+  ai_plus_monthly:    { chat: 1000,  image: 100,  video: 10,  files_per_day: 100,  max_file_mb: 100 },
+  ai_pro_monthly:     { chat: 5000,  image: 300,  video: 30,  files_per_day: 300,  max_file_mb: 250 },
+  ai_ultra_monthly:   { chat: 20000, image: 1000, video: 100, files_per_day: 1000, max_file_mb: 500 },
+  pro_monthly:        { chat: 1000,  image: 100,  video: 10,  files_per_day: 100,  max_file_mb: 100 },
+};
+
+const UPGRADE_URLS = {
+  acronous_ai: 'https://acronous.com/pricing.html#ai',
+  navigwiz: 'https://acronous.com/pricing.html#nav',
+  equyvo: 'https://acronous.com/pricing.html#eq',
+  bundle: 'https://acronous.com/pricing.html#one',
+  api: 'https://acronous.com/api.html#packs',
+};
+
+// Active AI plan id for this request (bundle/legacy included), or null.
+async function activeAiPlan(env, quotaId) {
+  if (!env.USER_MEMORY || !quotaId || quotaId === 'anon') return null;
+  try {
+    const direct = await getSubscription(env, 'acronous_ai', quotaId);
+    if (direct && direct.plan) return direct.plan;
+    const bundle = await getSubscription(env, 'bundle', quotaId);
+    if (bundle) return 'ai_plus_monthly'; // One grants Plus-level AI.
+    if (await isProUser(env, quotaId)) return 'pro_monthly';
+  } catch {}
+  return null;
+}
+
+// Effective daily limit for kind given the user's tier (null = free tier).
+function tierLimitFor(planId, kind, env) {
+  const t = planId && TIER_QUOTAS[planId];
+  if (t && typeof t[kind] === 'number') return t[kind];
+  return quotaLimit(env, kind);
+}
+
 async function isProUser(env, quotaId) {
   if (!env.USER_MEMORY || !quotaId || quotaId === 'anon') return false;
   try {
@@ -4432,6 +4472,11 @@ async function grantPlanToUser(env, quotaId, planId, paymentId) {
     // bypass keep working without touching the hot path.
     await env.USER_MEMORY.put(`pro:${quotaId}`,
       JSON.stringify({ until, plan: planId, payment_id: paymentId || '', ts: Date.now() }), { expirationTtl: ttl });
+  } else if (planId === 'acronous_one') {
+    // Bundle grants Plus-level AI: flip pro flag too so GPU routing treats
+    // One subscribers as paid from the first request (no extra KV reads).
+    await env.USER_MEMORY.put(`pro:${quotaId}`,
+      JSON.stringify({ until, plan: 'ai_plus_monthly', via: 'acronous_one', payment_id: paymentId || '', ts: Date.now() }), { expirationTtl: ttl });
   }
   let credits = 0;
   if (entry.api_credits) credits = await addApiCredits(env, quotaId, entry.api_credits);
@@ -4491,19 +4536,20 @@ async function checkQuota(env, ctx, kind) {
     } catch {}
     return { allowed: false, used: 0, limit: cost, pro: false, api_credits: true };
   }
-  const limit = quotaLimit(env, kind);
-  try {
-    if (await isProUser(env, quotaId)) return { allowed: true, used: 0, limit: -1, pro: true };
-  } catch {}
+  // Tiered quotas: paid plans get their own daily allowance (never infinite).
+  let planId = null;
+  try { planId = await activeAiPlan(env, quotaId); } catch {}
+  const limit = planId ? tierLimitFor(planId, kind, env) : quotaLimit(env, kind);
+  if (planId) env._aiPlan = planId;
   const used = await getUsageCount(env, quotaId, kind);
-  if (used >= limit) return { allowed: false, used, limit, pro: false };
+  if (used >= limit) return { allowed: false, used, limit, pro: !!planId, plan: planId };
   try {
     if (env.USER_MEMORY && ctx && ctx.waitUntil) {
       ctx.waitUntil(env.USER_MEMORY.put(
         `usage:${dayStamp()}:${kind}:${quotaId}`, String(used + 1), { expirationTtl: 259200 }));
     }
   } catch {}
-  return { allowed: true, used: used + 1, limit, pro: false };
+  return { allowed: true, used: used + 1, limit, pro: !!planId, plan: planId };
 }
 
 function paywallResponse(env, kind, used, limit) {
@@ -4512,16 +4558,22 @@ function paywallResponse(env, kind, used, limit) {
     return jsonOk({
       response: `Out of API credits (need ${limit}, balance ${used}). Top up at https://acronous.com/api.html — packs from ₹99 via Razorpay (UPI/cards/international).`,
       type: 'paywall', error: 'out_of_credits', kind, used, limit, api_credits: true,
+      product: 'api',
+      upgrade_url: UPGRADE_URLS.api,
     }, 402);
   }
-  const price = Math.round(billingAmountPaise(env) / 100);
+  const plan = (env && env._aiPlan) || 'ai_plus_monthly';
+  const tier = TIER_QUOTAS[plan] || TIER_QUOTAS.ai_plus_monthly;
   return jsonOk({
-    response: `You've used all ${limit} free ${unit} for today. Go Plus (₹449/month) for higher limits, or Pro (₹999) / Ultra (₹2499) for maximum capacity — see https://acronous.com/pricing.html. Legacy Pro (₹${price}/month) still works.`,
+    response: `You've used all ${limit} ${unit} on your current plan for today. Starter (₹149/mo) allows ${TIER_QUOTAS.ai_starter_monthly[kind] ?? limit}/day, Plus (₹449/mo) ${TIER_QUOTAS.ai_plus_monthly[kind] ?? limit}/day, Pro (₹999) and Ultra (₹2499) much more — see https://acronous.com/pricing.html.`,
     type: 'paywall',
     error: 'quota_exceeded',
     kind, used, limit,
-    plan: 'ai_plus_monthly',
-    price_inr: 449,
+    product: 'acronous_ai',
+    plan,
+    plan_required: 'ai_starter_monthly',
+    tier_limits: tier,
+    upgrade_url: UPGRADE_URLS.acronous_ai,
   }, 402);
 }
 
@@ -5839,6 +5891,10 @@ export default {
     } catch {}
     try { env._isPro = await isProUser(env, env._quotaId); }
     catch { env._isPro = false; }
+    // Any active AI tier (or the One bundle) counts as Pro for routing.
+    if (!env._isPro && env._quotaId && env._quotaId.startsWith('u:')) {
+      try { if (await activeAiPlan(env, env._quotaId)) env._isPro = true; } catch {}
+    }
     // API developers with a positive credit balance get Pro-quality routing.
     if (env._apiKeyId && !env._isPro) {
       try { if ((await getApiCredits(env, env._quotaId)) > 0) env._isPro = true; } catch {}
@@ -5863,6 +5919,7 @@ export default {
         ]);
         const reqProduct = String(url.searchParams.get('product') || '').toLowerCase();
         const subs = {};
+        let aiPlan = null;
         if (quotaId.startsWith('u:')) {
           for (const p of ['acronous_ai', 'navigwiz', 'equyvo', 'bundle']) {
             try {
@@ -5872,18 +5929,26 @@ export default {
           }
           // Legacy flag surfaces as acronous_ai access.
           if (!subs.acronous_ai && pro) subs.acronous_ai = { plan: 'pro_monthly', legacy: true, until: proUntil };
+          try { aiPlan = await activeAiPlan(env, quotaId); } catch {}
         }
         const credits = quotaId.startsWith('u:') ? await getApiCredits(env, quotaId) : 0;
+        // Tier-aware limits: paid users see their plan's allowance, not free caps.
+        const chatLimit = aiPlan ? tierLimitFor(aiPlan, 'chat', env) : (pro ? -1 : quotaLimit(env, 'chat'));
+        const imageLimit = aiPlan ? tierLimitFor(aiPlan, 'image', env) : (pro ? -1 : quotaLimit(env, 'image'));
+        const videoLimit = aiPlan ? tierLimitFor(aiPlan, 'video', env) : (pro ? -1 : quotaLimit(env, 'video'));
         const out = {
           pro, pro_until: proUntil,
+          ai_plan: aiPlan,
           usage: {
-            chat: { used: chatUsed, limit: pro ? -1 : quotaLimit(env, 'chat') },
-            image: { used: imageUsed, limit: pro ? -1 : quotaLimit(env, 'image') },
-            video: { used: videoUsed, limit: pro ? -1 : quotaLimit(env, 'video') },
+            chat: { used: chatUsed, limit: chatLimit },
+            image: { used: imageUsed, limit: imageLimit },
+            video: { used: videoUsed, limit: videoLimit },
           },
           subscriptions: subs,
           api_credits: credits,
           plans: publicCatalog(env),
+          tier_quotas: TIER_QUOTAS,
+          upgrade_urls: UPGRADE_URLS,
         };
         if (reqProduct) {
           out.access = subs[reqProduct] || null;
@@ -5900,8 +5965,8 @@ export default {
 
     // Standard-checkout alias: POST /api/create-order behaves exactly like
     // POST /v1/billing/order (same auth, same HMAC model, same KV grants).
-    // Body accepts EITHER {plan} (catalog subscription) OR the generic
-    // {amount (paise), currency, receipt} shape. Minimum amount: 100 paise.
+    // STRICT: body must be {plan} from BILLING_CATALOG. Raw client-supplied
+    // amounts are rejected — price always comes from the catalog.
     if ((path === '/v1/billing/order' || path === '/api/create-order') && request.method === 'POST') {
       const strict = (path === '/api/create-order');
       const orderErr = (msg, status) => strict
@@ -5914,24 +5979,17 @@ export default {
         try { rawBody = (await request.json()) || {}; } catch {}
         const auth = razorpayAuth(env);
         if (!auth) return orderErr('Billing is not configured yet. Please try again later.', 503);
-        let amount = 0;
-        let plan = rawBody.plan || 'ai_plus_monthly';
+        const plan = String(rawBody.plan || '');
+        if (!plan) return orderErr('A plan id is required.', 400);
+        if (plan === 'pro_monthly') { /* legacy alias allowed */ }
+        const entry = catalogEntryForPlan(plan, env);
+        if (!entry) return orderErr('Unknown plan.', strict ? 400 : 200);
+        if (!entry.amount_inr || entry.amount_inr <= 0) return orderErr('That plan is free — no payment needed.', 400);
+        const amount = Math.round(entry.amount_inr * 100);
+        if (amount < 100) return orderErr('Amount must be an integer >= 100 paise.', 400);
         let receipt = String(rawBody.receipt || '').slice(0, 40);
-        if (rawBody.amount != null && !(typeof rawBody.plan === 'string' && BILLING_CATALOG[rawBody.plan])) {
-          // Generic amount-based order (paise). Free/plan catalog is bypassed.
-          amount = Math.floor(Number(rawBody.amount));
-          if (!Number.isFinite(amount) || amount < 100) return orderErr('Amount must be an integer >= 100 paise.', 400);
-          plan = (typeof rawBody.plan === 'string' && rawBody.plan) ? String(rawBody.plan).slice(0, 64) : 'one_time';
-        } else {
-          if (plan === 'pro_monthly') { /* legacy alias allowed */ }
-          const entry = catalogEntryForPlan(plan, env);
-          if (!entry) return orderErr('Unknown plan.', strict ? 400 : 200);
-          if (!entry.amount_inr || entry.amount_inr <= 0) return orderErr('That plan is free — no payment needed.', 400);
-          amount = Math.round(entry.amount_inr * 100);
-          if (amount < 100) return orderErr('Amount must be an integer >= 100 paise.', 400);
-        }
         if (!receipt) receipt = `acro_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`.slice(0, 40);
-        const currency = String(rawBody.currency || 'INR').toUpperCase().slice(0, 3) || 'INR';
+        const currency = 'INR';
         const resp = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: auth.headers,
@@ -5956,7 +6014,10 @@ export default {
 
     // Standard-checkout alias: POST /api/verify-payment <=> POST /v1/billing/verify.
     // HMAC-SHA256(order_id + "|" + payment_id, KEY_SECRET); mismatch => 400,
-    // never granted. Missing fields => 400.
+    // never granted. Missing fields => 400. The Razorpay ORDER is then
+    // fetched and bound: amount must equal the catalog price, notes.plan must
+    // equal the claimed plan, notes.user must equal the caller. This stops
+    // replaying a ₹99 payment as Ultra or as another user's grant.
     if ((path === '/v1/billing/verify' || path === '/api/verify-payment') && request.method === 'POST') {
       try {
         const quotaId = env._quotaId || 'anon';
@@ -5975,18 +6036,29 @@ export default {
           if (expected[i] !== signature[i]) match = false;
         }
         if (!match) return jsonOk({ ok: false, error: 'bad_signature' }, 400);
-        // Resolve plan: explicit field wins; else legacy Pro; order notes are
-        // the source of truth when the client omits it (looked up below).
-        let planId = plan && (BILLING_CATALOG[plan] || plan === 'pro_monthly') ? plan : 'pro_monthly';
-        if (!plan && auth) {
-          try {
-            const or = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
-              headers: auth.headers, signal: AbortSignal.timeout(15000),
-            });
-            const od = await or.json().catch(() => ({}));
-            const notePlan = od?.notes?.plan;
-            if (notePlan && (BILLING_CATALOG[notePlan] || notePlan === 'pro_monthly')) planId = notePlan;
-          } catch {}
+        // Resolve + bind plan against the Razorpay order record.
+        let planId = plan && (BILLING_CATALOG[plan] || plan === 'pro_monthly') ? plan : null;
+        let rzOrder = null;
+        try {
+          const or = await fetch(`https://api.razorpay.com/v1/orders/${encodeURIComponent(orderId)}`, {
+            headers: auth.headers, signal: AbortSignal.timeout(15000),
+          });
+          rzOrder = await or.json().catch(() => ({}));
+        } catch {}
+        const notePlan = rzOrder?.notes?.plan;
+        if (!planId) {
+          if (notePlan && (BILLING_CATALOG[notePlan] || notePlan === 'pro_monthly')) planId = notePlan;
+          else return jsonOk({ ok: false, error: 'unknown_plan' }, 400);
+        }
+        if (notePlan && notePlan !== planId) return jsonOk({ ok: false, error: 'plan_mismatch' }, 400);
+        const entry = catalogEntryForPlan(planId, env);
+        if (!entry) return jsonOk({ ok: false, error: 'unknown_plan' }, 400);
+        if (rzOrder && typeof rzOrder.amount === 'number') {
+          const want = Math.round(entry.amount_inr * 100);
+          if (rzOrder.amount !== want) return jsonOk({ ok: false, error: 'amount_mismatch' }, 400);
+          if (rzOrder.notes?.user && rzOrder.notes.user !== quotaId) {
+            return jsonOk({ ok: false, error: 'order_owner_mismatch' }, 403);
+          }
         }
         if (planId === 'pro_monthly') {
           const days = BILLING_PLANS.pro_monthly.days;
@@ -5995,12 +6067,13 @@ export default {
             JSON.stringify({ until, plan: 'pro_monthly', payment_id: paymentId, ts: Date.now() }),
             { expirationTtl: 45 * 86400 });
           env._isPro = true;
-          return jsonOk({ ok: true, pro: true, pro_until: until, plan: planId });
+          return jsonOk({ ok: true, pro: true, pro_until: until, plan: planId, upgrade_urls: UPGRADE_URLS });
         }
         const granted = await grantPlanToUser(env, quotaId, planId, paymentId);
         if (!granted) return jsonError('Unknown plan.');
         try { env._isPro = await isProUser(env, quotaId); } catch {}
-        return jsonOk({ ok: true, pro: env._isPro, pro_until: granted.until, plan: planId, api_credits: granted.credits });
+        try { env._aiPlan = planId; } catch {}
+        return jsonOk({ ok: true, pro: env._isPro, pro_until: granted.until, plan: planId, api_credits: granted.credits, upgrade_urls: UPGRADE_URLS });
       } catch (e) {
         console.error('[/v1/billing/verify] error:', e && e.message);
         return jsonError('Could not verify payment. Please try again.');
@@ -6107,6 +6180,23 @@ export default {
         if (!quotaId.startsWith('u:')) return jsonError('Please sign in.', 401);
         return jsonOk({ api_credits: await getApiCredits(env, quotaId), plans: publicCatalog(env) });
       } catch { return jsonError('Could not load usage.'); }
+    }
+
+    // Public entitlement contract (no auth, no secrets): tier quotas +
+    // upgrade URLs so every app + dashboard reads ONE source of truth.
+    if (path === '/v1/billing/entitlements' && request.method === 'GET') {
+      return jsonOk({
+        version: 1,
+        currency: 'INR',
+        upgrade_urls: UPGRADE_URLS,
+        tier_quotas: TIER_QUOTAS,
+        plans: publicCatalog(env),
+        free: {
+          chat_per_day: quotaLimit(env, 'chat'),
+          images_per_day: quotaLimit(env, 'image'),
+          videos_per_day: quotaLimit(env, 'video'),
+        },
+      });
     }
 
     if (path === '/v1/chat' && request.method === 'POST') {

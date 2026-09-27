@@ -773,11 +773,28 @@ class ApiClient {
   Future<Map<String, dynamic>> healthCheck() => _get('/health');
 
   // ── Billing (Razorpay paywall) ──────────────────────────────────────
-  // Worker returns HTTP 402 with {type:'paywall',...} when the free daily
-  // quota is exhausted; ApiException carries it (statusCode 402, body = json).
+  // Worker returns HTTP 402 with {type:'paywall',...} when the daily
+  // allowance for the user's tier is exhausted; ApiException carries it
+  // (statusCode 402, body = json). Every 402 funnels to PaywallBus which
+  // pushes the PricingPage — see lib/billing/paywall.dart.
   static bool isPaywall(Object e) =>
       e is ApiException &&
       (e.statusCode == 402 || (e.body?['type'] as String?) == 'paywall');
+
+  static String paywallUpgradeUrl(Object e, {String product = 'acronous_ai'}) {
+    if (e is ApiException) {
+      final u = e.body?['upgrade_url'] as String?;
+      if (u != null && u.isNotEmpty) return u;
+    }
+    const map = {
+      'acronous_ai': 'https://acronous.com/pricing.html#ai',
+      'navigwiz': 'https://acronous.com/pricing.html#nav',
+      'equyvo': 'https://acronous.com/pricing.html#eq',
+      'bundle': 'https://acronous.com/pricing.html#one',
+      'api': 'https://acronous.com/api.html#packs',
+    };
+    return map[product] ?? map['acronous_ai']!;
+  }
 
   static String paywallMessage(Object e, {String fallback = ''}) {
     if (e is ApiException) {
@@ -799,11 +816,15 @@ class ApiClient {
     required String orderId,
     required String paymentId,
     required String signature,
+    String? plan,
   }) =>
       _post('/v1/billing/verify', {
         'razorpay_order_id': orderId,
         'razorpay_payment_id': paymentId,
         'razorpay_signature': signature,
+        // The worker binds this against the Razorpay order notes; omitting it
+        // used to silently grant legacy Pro regardless of what was paid.
+        if (plan != null && plan.isNotEmpty) 'plan': plan,
       });
 
   Future<Map<String, dynamic>> getConfig() async {
