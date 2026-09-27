@@ -274,7 +274,7 @@ class ApiClient {
       final status = response.statusCode;
       throw ApiException(
         status,
-        'Request failed: invalid response format',
+        _friendlyStatusMessage(status),
         <String, dynamic>{'response': body},
       );
     }
@@ -283,14 +283,40 @@ class ApiClient {
           json['error'] as String? ??
           json['detail'] as String? ??
           json['message'] as String? ??
+          json['response'] as String? ??
           '';
       throw ApiException(
         response.statusCode,
-        errMsg.isNotEmpty ? errMsg : 'Request failed ($response.statusCode)',
+        errMsg.isNotEmpty ? errMsg : _friendlyStatusMessage(response.statusCode),
         json,
       );
     }
     return json;
+  }
+
+  static String _friendlyStatusMessage(int status) {
+    switch (status) {
+      case 400:
+        return 'Invalid request. Please try again.';
+      case 401:
+        return 'Your session expired. Please sign in again.';
+      case 402:
+        return 'Quota exceeded. Please upgrade your plan.';
+      case 403:
+        return 'You do not have permission to do this.';
+      case 404:
+        return 'Service not found. Please try again later.';
+      case 429:
+        return 'Too many requests. Please wait a moment.';
+      case 500:
+        return 'Service error. Please try again later.';
+      case 502:
+        return 'Bad gateway. Please try again in a moment.';
+      case 503:
+        return 'Service temporarily unavailable. Please try again later.';
+      default:
+        return 'Request failed. Please try again.';
+    }
   }
 
   Future<Map<String, dynamic>> _get(String path, {Duration? timeout}) async {

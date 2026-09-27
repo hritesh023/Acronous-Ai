@@ -4266,7 +4266,12 @@ function looksLikeImageEditRequest(message) {
 function jsonOk(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key',
+    },
   });
 }
 
@@ -5682,15 +5687,34 @@ const MEMORY_MAX_ENTRIES = 50;
 
 function getUserIdFromRequest(request) {
   try {
+    // 1) Authorization: Bearer header (native apps, API clients)
     const auth = request.headers.get('Authorization') || '';
     const m = auth.match(/^Bearer\s+(.+)$/i);
-    if (!m) return null;
-    const parts = m[1].split('.');
-    if (parts.length < 2) return null;
-    let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    while (payload.length % 4) payload += '=';
-    const data = JSON.parse(atob(payload));
-    return data.sub || data.user_id || data.email || null;
+    if (m) {
+      const parts = m[1].split('.');
+      if (parts.length >= 2) {
+        let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (payload.length % 4) payload += '=';
+        const data = JSON.parse(atob(payload));
+        const sub = data.sub || data.user_id || data.email || null;
+        if (sub) return sub;
+      }
+    }
+    // 2) acronous_token cookie (web sessions — HttpOnly, set by landing/auth)
+    const cookie = request.headers.get('Cookie') || '';
+    const cm = cookie.match(/(?:^|;\s*)acronous_token=([^;]+)/);
+    if (cm) {
+      const token = decodeURIComponent(cm[1]);
+      const parts = token.split('.');
+      if (parts.length >= 2) {
+        let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        while (payload.length % 4) payload += '=';
+        const data = JSON.parse(atob(payload));
+        const sub = data.sub || data.user_id || data.email || null;
+        if (sub) return sub;
+      }
+    }
+    return null;
   } catch { return null; }
 }
 

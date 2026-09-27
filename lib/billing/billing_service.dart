@@ -121,7 +121,23 @@ class BillingService extends ChangeNotifier {
       if (e.statusCode == 503) {
         return 'Payments are being switched on. Please try again in a bit.';
       }
-      if (e.message.isNotEmpty) return e.message;
+      if (e.statusCode == 401) {
+        return 'Your session expired. Please sign in again to continue.';
+      }
+      if (e.statusCode == 402) {
+        return ApiClient.paywallMessage(e);
+      }
+      if (e.statusCode == 429) {
+        return 'Too many requests. Please wait a moment and try again.';
+      }
+      if (e.statusCode >= 500) {
+        return 'Payment service is temporarily unavailable. Please try again in a bit.';
+      }
+      // Use the server's message if it's user-friendly (not a raw code)
+      final msg = e.message;
+      if (msg.isNotEmpty && !msg.contains('statusCode') && !msg.contains('ApiException')) {
+        return msg;
+      }
     }
     final m = e.toString().replaceFirst('StateError: ', '');
     if (m.startsWith('Exception: ')) return m.substring('Exception: '.length);
