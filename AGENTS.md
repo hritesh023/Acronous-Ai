@@ -83,13 +83,28 @@
 - Video intent (`detectVideoGenerationIntent`) → self-hosted renderer with synthesized scenes + edge-tts narration; caption uses the parsed topic. Image-gen intent (`detectImageGenerationIntent`) → `generateImageForChat()` (Contabo scene engine) returning explanation + image; on failure returns type 'chat' with IMAGE_GEN_UNAVAILABLE (never type 'image_gen' with empty data).
 - Identity queries (`detectIdentityQuery`) answered deterministically via IDENTITY_ANSWER — checked BEFORE greeting regex in BOTH handlers.
 - callOllama uses stream:true internally and accumulates (non-streaming sends zero bytes → CF edge/nginx idle-kill long generations, which caused response:null). Never race tryWorkersAIChat against callOllama — same box, doubles CPU load.
-- Non-streaming chat num_predict is 8192 and Ollama fetches carry NO timeout (streaming keeps bytes flowing, models stop at EOS) — answers complete fully, never cut off. Streaming path uses full OLLAMA_CHAT_MAX_TOKENS=8192 since chunks flow.
+- Both chat paths send `num_predict = generationBudget(message, isCode)` with
+  NO fetch timeout on the Ollama call (streaming keeps bytes flowing, models
+  stop at EOS) — answers complete fully, never cut off. The hard backstop is
+  the 150s stream watchdog + repeat_penalty guardrails, not the token cap.
 - Anti-refusal: cleanResponse strips "As an AI..." openers and apology lead-ins; system prompt forbids refusals.
 
 ## Generation UX (Flutter)
 - Image gen / video gen / file gen / attached-image edit requests show a skeleton preview bubble with context-aware cycling status labels ("Changing background…", "Recording narration…", "Applying final touches…") derived from the user's text (`_buildProgressSteps`). Fields: ChatMessage.progressLabel/progressKind (transient). Widget: lib/widgets/generation_skeleton.dart. Engine: _startGenerationProgress/_finishGenerationProgress in ChatProvider.
-- Normal text chat NEVER shows the media skeleton: `progressKind: 'chat'` renders `AiLoadingBubble` (lib/widgets/ai_loading_bubble.dart — animated gradient orb + shimmer label). The old 3-dots indicator was replaced everywhere. Skeleton is only for real media requests.
-- Generation budget (cloudflare-worker.js `generationBudget`): code 8192, simple 512, default 1024, long prompts 2048; temperature 0.5; Python brain mirrors (config.TEMPERATURE=0.5, server max_tokens cap 4096). Do not lower budgets — cutoff answers were the regression.
+- Normal text chat NEVER shows the media skeleton: `progressKind: 'chat'` renders `AiLoadingBubble` (lib/widgets/ai_loading_bubble.dart — animated gradient orb + self-cycling honest phase labels with cross-fade, optional `phases:` override per mode). The old 3-dots indicator was replaced everywhere. Skeleton is only for real media requests.
+- `_isImageGenRequest` safety net (chat_provider.dart) matches visual nouns on
+  WHOLE WORDS only (`\b…\b` — "photosynthesis"/"part of"/"overview" must not
+  trigger it) and returns false for direct questions (`?`) and
+  knowledge-seeking openers (what/who/why/explain/…): every explicit image
+  pattern above already returned true before the net, so anything reaching it
+  with `?` is a question, not a generation request.
+- Generation budget (cloudflare-worker.js `generationBudget`, used by BOTH
+  `/v1/chat` and `/v1/chat/stream` — there is no separate OLLAMA_CHAT_MAX_TOKENS):
+  code 8192, list-style 512, simple 768, default 1536, long prompts 3072;
+  temperature 0.5; Python brain mirrors (config.TEMPERATURE=0.5, server
+  max_tokens cap 4096). Budgets are generous on purpose — the model stops at
+  EOS on its own, so a bigger cap only costs time on genuinely long answers;
+  too-small budgets caused cut-off complaints. Do not lower them.
 - API keys: new keys seed 25 free credits (`credits:<quotaId>`) so they work immediately; per-key rate limit 60 req/min (KV `rate:<keyId>:<minute>`, HTTP 429).
 
 ## Python Image Service (Contabo VPS)

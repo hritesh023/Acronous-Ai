@@ -1291,6 +1291,16 @@ function classifyQuery(message) {
   if (/\b(write\s+(?:a\s+)?(?:story|poem|essay|article|letter|speech|joke|riddle|song)|generate\s+(?:a\s+)?|create\s+(?:a\s+)?(?:diagram|chart|table|list|plan|recipe|story|poem))\b/i.test(m))
     return { search: false, reason: 'creative' };
 
+  // Stable-knowledge explanations ("explain X", "what is X", "how does X
+  // work") live in the model's weights. Searching the news for them returns
+  // fresh-but-irrelevant snippets that hijack the answer (e.g. "explain
+  // photosynthesis" answered with forest-research news). Skip search unless
+  // the question carries time markers or a time-sensitive topic.
+  if (!isTimeSensitive(message) &&
+      /^(explain|define|describe|what\s+is|what\s+are|how\s+does|how\s+do|why\s+is|why\s+are|tell\s+me\s+about)\b/i.test(m) &&
+      !/\b(news|latest|current|today|tonight|yesterday|election|war|protest|crisis|score|price|weather|president|prime\s+minister|chief\s+minister|minister|mayor|governor|version|release|update)\b/i.test(m))
+    return { search: false, reason: 'stable_knowledge' };
+
   // ALWAYS search for factual/current queries — these need up-to-date info
   if (/\b(who\s+(?:is|was|are|were)\s+(?:the\s+)?(?:current|present|new|latest)\b|who\s+(?:is|was)\s+(?:the\s+)?(?:president|minister|cm|pm|ceo|founder|governor|mayor|head|leader|boss|director|chairman)\s+(?:of|for)\b|what\s+(?:is|was)\s+(?:the\s+)?(?:current|present|latest|new)\b|when\s+(?:did|was|is|are|will)\b|how\s+(?:many|much|long|old|far|big|tall|deep|wide)\b|what\s+(?:time|date|day|year|month)\b|current\s+(?:news|events|affairs|status|situation|weather|price|stock|rate|exchange|affairs)\b|latest\s+(?:news|update|version|release|developments?)\b|today\s+(?:news|events|headlines?)\b|yesterday\s+(?:news|events)\b|(?:price|stock|rate|exchange)\s+(?:of|for|on)\b|(?:weather|forecast)\s+(?:in|at|for|today|tomorrow)\b|(?:score|results?)\s+(?:of|for|in)\b|(?:population|area|land\s+area)\s+(?:of|for)\b|(?:history|invention|discovery)\s+(?:of|for)\b|(?:meaning|definition|pronunciation)\s+(?:of|for)\b|(?:recipe|ingredients?)\s+(?:for|of)\b|(?:symptoms?|treatment|cause|diagnosis)\s+(?:of|for)\b|(?:capital|currency|language)\s+(?:of|for)\b|(?:founder|creator|inventor|discoverer)\s+(?:of|for)\b)\b/i.test(m))
     return { search: true, reason: 'factual_query' };
