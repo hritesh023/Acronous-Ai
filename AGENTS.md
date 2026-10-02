@@ -88,6 +88,9 @@
 
 ## Generation UX (Flutter)
 - Image gen / video gen / file gen / attached-image edit requests show a skeleton preview bubble with context-aware cycling status labels ("Changing background…", "Recording narration…", "Applying final touches…") derived from the user's text (`_buildProgressSteps`). Fields: ChatMessage.progressLabel/progressKind (transient). Widget: lib/widgets/generation_skeleton.dart. Engine: _startGenerationProgress/_finishGenerationProgress in ChatProvider.
+- Normal text chat NEVER shows the media skeleton: `progressKind: 'chat'` renders `AiLoadingBubble` (lib/widgets/ai_loading_bubble.dart — animated gradient orb + shimmer label). The old 3-dots indicator was replaced everywhere. Skeleton is only for real media requests.
+- Generation budget (cloudflare-worker.js `generationBudget`): code 8192, simple 512, default 1024, long prompts 2048; temperature 0.5; Python brain mirrors (config.TEMPERATURE=0.5, server max_tokens cap 4096). Do not lower budgets — cutoff answers were the regression.
+- API keys: new keys seed 25 free credits (`credits:<quotaId>`) so they work immediately; per-key rate limit 60 req/min (KV `rate:<keyId>:<minute>`, HTTP 429).
 
 ## Python Image Service (Contabo VPS)
 - URL: `EDITOR_SERVICE_URL=https://image-service.acronous.com`; compose dir `~/contabo-vps`, build context `~/image-service/`.
