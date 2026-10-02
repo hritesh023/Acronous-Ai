@@ -304,12 +304,25 @@ class _ChatPageState extends State<ChatPage> {
        BuildContext context, List<ChatMessage> messages, ChatProvider chat) {
       // Single loading state: the provider already inserts a live placeholder
       // message (AiLoadingBubble for chat, GenerationSkeleton for media)
-      // while work is in flight. The trailing fallback slot below renders
-      // ONLY when no such bubble exists yet (e.g. the beat before the
-      // placeholder lands) — never stacked on top of one.
-      final hasLiveBubble = messages.any((m) =>
-          m.role == 'assistant' && m.isStreaming && m.content.isEmpty);
+      // while work is in flight — including WHILE tokens stream in
+      // (isStreaming stays true until the reply completes). The trailing
+      // fallback slot below renders ONLY when no streaming message exists
+      // at all (e.g. the beat before the placeholder lands) — never stacked
+      // on top of live content.
+      final hasLiveBubble = messages.any(
+        (m) => m.role == 'assistant' && m.isStreaming,
+      );
       final showFallbackSlot = chat.isLoading && !hasLiveBubble;
+      // Fallback label thinks about THIS question too: derive the subject
+      // from the latest user message instead of a hardcoded line.
+      String? fallbackSubject;
+      for (var i = messages.length - 1; i >= 0; i--) {
+        final m = messages[i];
+        if (m.role == 'user' && m.content.trim().isNotEmpty) {
+          fallbackSubject = ChatProvider.querySubject(m.content);
+          break;
+        }
+      }
       return ListView.builder(
         key: const ValueKey('messages_list'),
         controller: _scrollController,
@@ -317,6 +330,7 @@ class _ChatPageState extends State<ChatPage> {
         itemCount: messages.length + (showFallbackSlot ? 1 : 0),
         itemBuilder: (context, index) {
           if (showFallbackSlot && index == messages.length) {
+            final subject = fallbackSubject;
             return Padding(
               padding: const EdgeInsets.all(12),
               child: Row(
@@ -324,6 +338,11 @@ class _ChatPageState extends State<ChatPage> {
                   Flexible(
                     child: _TypingIndicator(
                       isTakingLong: chat.isTakingLong,
+                      label: subject == null
+                          ? null
+                          : chat.isTakingLong
+                              ? 'Still working on $subject'
+                              : 'Thinking about $subject…',
                     ),
                   ),
                 ],
@@ -449,7 +468,11 @@ class _ChatPageState extends State<ChatPage> {
 class _TypingIndicator extends StatefulWidget {
   final bool isTakingLong;
 
-  const _TypingIndicator({this.isTakingLong = false});
+  /// Optional query-aware override (e.g. 'Thinking about "photosynthesis"…').
+  /// When null the bubble falls back to its default honest phases.
+  final String? label;
+
+  const _TypingIndicator({this.isTakingLong = false, this.label});
 
   @override
   State<_TypingIndicator> createState() => _TypingIndicatorState();
@@ -459,7 +482,9 @@ class _TypingIndicatorState extends State<_TypingIndicator> {
   @override
   Widget build(BuildContext context) {
     return AiLoadingBubble(
-      label: widget.isTakingLong ? 'Still working on it' : 'Thinking',
+      label:
+          widget.label ??
+          (widget.isTakingLong ? 'Still working on it' : 'Thinking'),
     );
   }
 }

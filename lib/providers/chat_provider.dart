@@ -506,6 +506,30 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
+  /// Short human-readable subject of the user's message, used to make the
+  /// loading bubble think about THIS question ("Thinking about
+  /// "photosynthesis"…") instead of showing hardcoded generic labels.
+  static String querySubject(String text) {
+    var s = text.trim().split('\n').first.trim().replaceAll(
+      RegExp(r'\s+'),
+      ' ',
+    );
+    if (s.length > 44) s = '${s.substring(0, 44).trim()}…';
+    if (s.isEmpty) return 'your question';
+    return '\u201c$s\u201d';
+  }
+
+  /// Query-oriented loading phases for a plain text reply: every stage
+  /// names what the user asked about. Honest stage names, personal subject.
+  static List<String> chatLoadingPhases(String text) {
+    final subject = querySubject(text);
+    return [
+      'Thinking about $subject…',
+      'Gathering context for $subject…',
+      'Writing the answer…',
+    ];
+  }
+
   void _startGenerationProgress(String text, {required String kind}) {
     _finishGenerationProgress();
     _progressSteps = _buildProgressSteps(text, kind: kind);
@@ -990,15 +1014,18 @@ class ChatProvider extends ChangeNotifier {
       try {
         Map<String, dynamic> resp;
         if (canStream && attempt == 0 && !_generationInProgress) {
-          // Try streaming for text-only chat — placeholder carries a phased
-          // status label so the bubble never sits empty/awkward while the
-          // first token is on its way (TTFT ~3s warm, longer cold).
+          // Try streaming for text-only chat — placeholder carries
+          // query-aware phased status labels so the bubble thinks about
+          // THIS question while the first token is on its way
+          // (TTFT ~3s warm, longer cold).
+          final chatPhases = chatLoadingPhases(text);
           final streamingMsg = ChatMessage(
             role: 'assistant',
             content: '',
             isStreaming: true,
-            progressLabel: 'Thinking…',
+            progressLabel: chatPhases.first,
             progressKind: 'chat',
+            progressPhases: chatPhases,
           );
           _currentConversation!.messages.add(streamingMsg);
           _isTakingLong = true;
@@ -2206,7 +2233,9 @@ class ChatProvider extends ChangeNotifier {
     var pendingFlush = false;
     // Phased status while the first tokens are still on their way. Once
     // content starts flowing the label clears and live text takes over.
-    const chatPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
+    // Phases come from the placeholder message itself (query-aware), with
+    // the generic trio as fallback.
+    const defaultPhases = ['Thinking…', 'Recalling memory…', 'Writing…'];
     var chatPhaseIdx = 0;
     void flushStreamingText() {
       // Sanitize live to prevent backend-detail leaks in the streaming bubble
@@ -2222,11 +2251,15 @@ class ChatProvider extends ChangeNotifier {
         if (sanitized.isNotEmpty) {
           // Tokens flowing — drop the skeleton, show live text.
           last.progressLabel = '';
-        } else if (stopwatch.elapsedMilliseconds >= 2500 &&
-            chatPhaseIdx < chatPhases.length - 1) {
-          // Still waiting on TTFT — advance the reassuring status label.
-          chatPhaseIdx++;
-          last.progressLabel = chatPhases[chatPhaseIdx];
+        } else if (stopwatch.elapsedMilliseconds >= 2500) {
+          // Still waiting on TTFT — advance the query-aware status label.
+          final phases = last.progressPhases.isNotEmpty
+              ? last.progressPhases
+              : defaultPhases;
+          if (chatPhaseIdx < phases.length - 1) {
+            chatPhaseIdx++;
+            last.progressLabel = phases[chatPhaseIdx];
+          }
         }
       }
       notifyListeners();

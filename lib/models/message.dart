@@ -69,6 +69,12 @@ class ChatMessage {
   /// Transient skeleton style: 'image' | 'video' | 'file' | 'edit'.
   String progressKind;
 
+  /// Transient query-aware loading phases cycled by the loading bubble while
+  /// this message is streaming, e.g. ['Thinking about "photosynthesis"…',
+  /// 'Gathering context…', 'Writing the answer…']. Never persisted; when
+  /// empty the bubble falls back to its default honest phases.
+  List<String> progressPhases;
+
   ChatMessage({
     required this.role,
     required this.content,
@@ -83,8 +89,10 @@ class ChatMessage {
     this.isStreaming = false,
     this.progressLabel = '',
     this.progressKind = 'image',
+    List<String>? progressPhases,
   }) : timestamp = timestamp ?? DateTime.now(),
        attachments = attachments ?? [],
+       progressPhases = progressPhases ?? [],
        id = id ?? DateTime.now().microsecondsSinceEpoch.toString();
 
   Map<String, dynamic> toJson() => {

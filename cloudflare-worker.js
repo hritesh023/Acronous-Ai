@@ -1132,18 +1132,37 @@ async function webSearch(query, env = {}) {
 function isCodeQuery(message) {
   const m = message.trim().toLowerCase();
   if (!m) return false;
-  // Explicit code requests
-  if (/\b(write|create|generate|code|program|function|class|implement|develop|build|make|code)\b.*(code|program|function|class|script|algorithm|method|routine|snippet)/i.test(m)) return true;
+  // Explicit code markers — these alone prove code intent even inside a
+  // question ("how do I write python code to…?").
+  const explicit =
+    /```/.test(message) ||
+    /\b(write|give|show|provide|generate)\b.{0,24}\b(code|program)\b/i.test(m) ||
+    /\b(create|make|build|write|implement)\b.{0,24}\b(function|method|class|script|program|code|algorithm)\b/i.test(m) ||
+    (/\b(python|javascript|typescript|java|c\+\+|c#|go|rust|ruby|php|swift|kotlin|dart|scala|perl|lua|html|css|sql|bash|shell|powershell)\b/i.test(m) &&
+     /\b(code|program|function|script|debug|compile|syntax|error|algorithm|solution)\b/i.test(m));
+  // Info-seeking questions about the world ("create a solution for hair
+  // fall", "which food converts fat in the body") match the loose
+  // builder-verb patterns below but are NOT code — without this guard they
+  // get routed to the code model, whose prompt ORDERS fenced code output,
+  // so everyday questions come back as code blocks.
+  if (isInfoQuery(message) && !explicit) return false;
+  // Explicit code requests ('routine' excluded — "make a morning routine"
+  // is not programming; see note on 'solution' below)
+  if (/\b(write|create|generate|code|program|function|class|implement|develop|build|make|code)\b.*(code|program|function|class|script|algorithm|method|snippet)/i.test(m)) return true;
   if (/\b(code|program|function|class|script|algorithm|method)\b.*\b(in|using|with|for)\b.*(python|javascript|java|c\+\+|c#|go|rust|ruby|php|swift|kotlin|typescript|dart|r|scala|perl|lua|html|css|sql|bash|shell|powershell)\b/i.test(m)) return true;
   if (/\b(python|javascript|java|c\+\+|c#|go|rust|ruby|php|swift|kotlin|typescript|dart|r|scala|perl|lua)\b.*\b(code|program|function|class|script|implement|write|create)\b/i.test(m)) return true;
-  // Common coding requests
-  if (/\b(write|create|generate|implement|code)\b.*\b(a|an|the|me|for)\b.*\b(program|function|class|script|method|algorithm|solution|code)\b/i.test(m)) return true;
+  // Common coding requests (note: 'solution' and 'routine' are deliberately
+  // NOT code nouns — "create a solution for hair fall" and "make a morning
+  // routine" are everyday questions, not programming tasks)
+  if (/\b(write|create|generate|implement|code)\b.*\b(a|an|the|me|for)\b.*\b(program|function|class|script|method|algorithm|code)\b/i.test(m)) return true;
   if (/\b(palindrome|fibonacci|factorial|prime|sorting|binary\s+search|linked\s+list|binary\s+tree|hash|stack|queue|graph|dynamic\s+programming|recursion|iteration)\b/i.test(m) && /\b(code|program|function|implement|write|create|in|using|python|java|javascript|c\+\+)\b/i.test(m)) return true;
   // "write code" / "code in" patterns
   if (/\b(write|give|show|provide)\b.*\b(code|program)\b/i.test(m)) return true;
   if (/\bcode\s+in\b/i.test(m)) return true;
-  // Specific coding task patterns
-  if (/\b(to|that|which)\b.*\b(checks?|finds?|counts?|calculates?|converts?|sorts?|reverses?|validates?|parses?|extracts?|generates?|determines?|detects?)\b/i.test(m) && /\b(code|program|function|implement|write|create|in|using|python|java|javascript|c\+\+)\b/i.test(m)) return true;
+  // Specific coding task patterns (bare 'in|using' removed from the trigger
+  // set — "food that converts fat in the body" is nutrition, not code;
+  // real code tasks name a language or code noun instead)
+  if (/\b(to|that|which)\b.*\b(checks?|finds?|counts?|calculates?|converts?|sorts?|reverses?|validates?|parses?|extracts?|generates?|determines?|detects?)\b/i.test(m) && /\b(code|program|function|implement|write|create|python|java|javascript|c\+\+)\b/i.test(m)) return true;
   return false;
 }
 
@@ -6460,7 +6479,7 @@ export default {
           } else {
             // Both failed — one more attempt with simpler prompt
             const retryMsgs = [
-              { role: 'system', content: `You are Acronous AI, created by Acronous. Write complete, runnable, correctly indented code in a fenced code block with the correct language tag, followed by a brief 'How it works:' explanation (2-5 sentences). Never reveal backend details.` },
+              { role: 'system', content: `You are Acronous AI, created by Acronous. Write complete, runnable, correctly indented code in a fenced code block with the correct language tag, followed by a brief 'How it works:' explanation (2-5 sentences). If the request is not actually a programming task, answer it normally in plain prose instead. Never reveal backend details.` },
               ...history,
               { role: 'user', content: message }
             ];
@@ -7160,7 +7179,7 @@ export default {
         if (codeDetected) {
           // Short code system prompt — the full prompt adds thousands of tokens of
           // prefill on CPU Ollama which delays the first token by minutes.
-          const codeSysPrompt = `You are Acronous AI, created by Acronous. Write complete, correct, runnable code in a fenced code block with the correct language tag, followed by a brief explanation. Never reveal backend details. Never apologize.`;
+          const codeSysPrompt = `You are Acronous AI, created by Acronous. Write complete, correct, runnable code in a fenced code block with the correct language tag, followed by a brief explanation. If the request is not actually a programming task, ignore the code instruction and answer it normally in plain prose with no code fences. Never reveal backend details. Never apologize.`;
           const codeMsgs = [
             { role: 'system', content: codeSysPrompt },
             ...history.slice(-4),

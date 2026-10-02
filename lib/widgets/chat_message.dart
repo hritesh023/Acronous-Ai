@@ -263,7 +263,12 @@ class ChatMessageWidget extends StatelessWidget {
                             message.content.isEmpty) ...[
                           if (message.progressKind == 'chat' ||
                               message.progressKind.isEmpty)
-                            AiLoadingBubble(label: message.progressLabel)
+                            AiLoadingBubble(
+                              label: message.progressLabel,
+                              phases: message.progressPhases.isNotEmpty
+                                  ? message.progressPhases
+                                  : null,
+                            )
                           else
                             SizedBox(
                               width: math.min(

@@ -71,6 +71,21 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
   }
 
   @override
+  void didUpdateWidget(covariant AiLoadingBubble old) {
+    super.didUpdateWidget(old);
+    // The provider drives the canonical label (e.g. advancing through
+    // query-aware phases while tokens are pending). Snap to it when it names
+    // a phase we know, so parent and bubble never show different stages; the
+    // self-cycle keeps advancing between parent updates.
+    if (widget.label != old.label && widget.label.isNotEmpty) {
+      final idx = _phases.indexOf(widget.label);
+      if (idx >= 0 && idx != _phase) {
+        setState(() => _phase = idx);
+      }
+    }
+  }
+
+  @override
   void dispose() {
     _orbit.dispose();
     _pulse.dispose();
