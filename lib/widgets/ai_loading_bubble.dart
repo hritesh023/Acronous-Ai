@@ -5,9 +5,26 @@ import 'package:flutter/material.dart';
 /// Eye-pleasing, intelligent-looking loading bubble shown while the brain
 /// is thinking about a normal (text) question. Replaces the old 3-dots and
 /// the misplaced image skeleton on plain chat.
+///
+/// The status line cycles through honest pipeline phases on its own
+/// ("Thinking" → "Recalling memory" → "Writing"), so every wait looks alive
+/// without the caller managing timers. Pass [phases] to customize the cycle
+/// (e.g. research / project / image modes); pass [staticLabel] for a fixed
+/// line. The cycle never claims completion — it only names the current
+/// stage, so it stays honest on slow CPU inference.
 class AiLoadingBubble extends StatefulWidget {
   final String label;
-  const AiLoadingBubble({super.key, this.label = 'Thinking'});
+  final List<String>? phases;
+  final int initialPhase;
+  final Duration phaseInterval;
+
+  const AiLoadingBubble({
+    super.key,
+    this.label = 'Thinking',
+    this.phases,
+    this.initialPhase = 0,
+    this.phaseInterval = const Duration(milliseconds: 2400),
+  });
 
   @override
   State<AiLoadingBubble> createState() => _AiLoadingBubbleState();
@@ -18,10 +35,18 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
   late final AnimationController _orbit;
   late final AnimationController _pulse;
   late final AnimationController _shimmer;
+  int _phase = 0;
+
+  List<String> get _phases =>
+      widget.phases ??
+      (widget.label.isEmpty
+          ? const ['Thinking', 'Recalling memory', 'Writing']
+          : [widget.label, 'Recalling memory', 'Writing']);
 
   @override
   void initState() {
     super.initState();
+    _phase = widget.initialPhase;
     _orbit = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
@@ -34,6 +59,15 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
       vsync: this,
       duration: const Duration(milliseconds: 1800),
     )..repeat();
+    if (_phases.length > 1) {
+      Future.delayed(widget.phaseInterval, _advancePhase);
+    }
+  }
+
+  void _advancePhase() {
+    if (!mounted) return;
+    setState(() => _phase = (_phase + 1) % _phases.length);
+    Future.delayed(widget.phaseInterval, _advancePhase);
   }
 
   @override
@@ -96,13 +130,27 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
                   child: child,
                 );
               },
-              child: Text(
-                widget.label,
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: 0.2,
-                  color: cs.onSurface,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 350),
+                transitionBuilder: (child, anim) => FadeTransition(
+                  opacity: anim,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.4),
+                      end: Offset.zero,
+                    ).animate(anim),
+                    child: child,
+                  ),
+                ),
+                child: Text(
+                  _phases[_phase.clamp(0, _phases.length - 1)],
+                  key: ValueKey(_phase),
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.2,
+                    color: cs.onSurface,
+                  ),
                 ),
               ),
             ),

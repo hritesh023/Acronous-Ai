@@ -228,19 +228,23 @@ function ollamaOptions(numPredict, ctxSize) {
 
 // Generation budgets, sized to the hardware. Decode measures ~9 tok/s for the
 // 2B model on this 4-core box, so 500 tokens is already ~55s of generation.
-// Two hard-won lessons:
+// Three hard-won lessons:
 //   * The old caps (8192-16384) let one degenerate loop occupy all 4 cores.
 //   * But a cap alone is not enough — a 400-token budget on an open-ended
 //     "explain..." question produced 1810 characters and ran for 127s. Length
 //     has to be driven by the prompt, not only by the cap.
+//   * Too-small budgets cut answers off mid-sentence, which users read as
+//     broken/hallucinating. Budgets below are generous on purpose: the model
+//     stops at EOS on its own, so a bigger cap only costs time on genuinely
+//     long answers — it never invents extra text.
 function generationBudget(message, isCode) {
   if (isCode) return 8192;
   const t = String(message || '');
-  if (!t.trim()) return 280;
-  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 380;
-  if (t.length <= 260 && isSimpleFactual(t)) return 512;
-  if (t.length > 400) return 2048;
-  return 1024;
+  if (!t.trim()) return 384;
+  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 512;
+  if (t.length <= 260 && isSimpleFactual(t)) return 768;
+  if (t.length > 400) return 3072;
+  return 1536;
 }
 
 const DEFAULT_CHAT_MODEL = 'qwen3.5:4b';
@@ -5890,7 +5894,7 @@ export default {
 
     if (request.method === 'OPTIONS') {
       const origin = request.headers.get('Origin') || '*';
-      return new Response(null, { headers: { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization', 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Max-Age': '86400' }});
+      return new Response(null, { headers: { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key', 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Max-Age': '86400' }});
     }
 
     if (isLandingAuthPath(path)) {

@@ -1287,9 +1287,10 @@ class ChatProvider extends ChangeNotifier {
       if (t.contains(pat)) return true;
     }
 
-    // Image file extensions with visual context
+    // Image file extensions with visual context (whole-word matches only —
+    // "overview" is not a "view" request, "export" is not an art request).
     final imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp'];
-    if (imageExts.any((ext) => t.contains(ext))) {
+    if (imageExts.any((ext) => RegExp(r'\b' + ext + r'\b').hasMatch(t))) {
       final visualWords = [
         'image',
         'picture',
@@ -1323,7 +1324,9 @@ class ChatProvider extends ChangeNotifier {
         'scene',
         'view',
       ];
-      if (visualWords.any((w) => t.contains(w))) return true;
+      if (visualWords.any((w) => RegExp(r'\b' + w + r'\b').hasMatch(t))) {
+        return true;
+      }
     }
 
     // Starting with visual noun phrases
@@ -1460,7 +1463,38 @@ class ChatProvider extends ChangeNotifier {
     }
 
     // ── Broad combined-intent safety net ───────────────────────────────
-    // If text has both a creation verb and a visual noun, it's image gen
+    // If text has both a creation verb and a visual noun, it's image gen.
+    // Two guards keep this net from catching plain questions:
+    //  1. Nouns match on whole words only — substring matching fired on
+    //     "photosynthesis" (photo), "part of" (art), etc.
+    //  2. Direct questions ("...?") and knowledge-seeking openers
+    //     (what/who/why/explain/...) are never image gen — every explicit
+    //     image pattern above already returned true before this point.
+    if (t.contains('?')) return false;
+    const knowledgeOpeners = [
+      'what ',
+      'what\'s ',
+      'whats ',
+      'who ',
+      'who\'s ',
+      'why ',
+      'when ',
+      'where ',
+      'which ',
+      'how ',
+      'explain ',
+      'tell me about',
+      'tell me why',
+      'tell me what',
+      'describe ',
+      'define ',
+      'meaning of',
+      'is it true',
+      'is there',
+    ];
+    for (final opener in knowledgeOpeners) {
+      if (t.startsWith(opener)) return false;
+    }
     final creationVerbs = [
       'draw',
       'paint',
@@ -1504,7 +1538,9 @@ class ChatProvider extends ChangeNotifier {
     }
     if (hasVerb) {
       for (final n in visualNouns) {
-        if (t.contains(n)) return true;
+        // Whole-word match: 'art' must not fire on 'part', 'photo' must
+        // not fire on 'photosynthesis', etc.
+        if (RegExp(r'\b' + n + r'\b').hasMatch(t)) return true;
       }
     }
 
