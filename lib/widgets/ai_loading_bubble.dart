@@ -6,17 +6,20 @@ import 'package:flutter/material.dart';
 /// is thinking about a normal (text) question. Replaces the old 3-dots and
 /// the misplaced image skeleton on plain chat.
 ///
-/// The status line cycles through honest pipeline phases on its own
-/// ("Thinking" → "Recalling memory" → "Writing"), so every wait looks alive
-/// without the caller managing timers. Pass [phases] to customize the cycle
-/// (e.g. research / project / image modes); pass [staticLabel] for a fixed
-/// line. The cycle never claims completion — it only names the current
-/// stage, so it stays honest on slow CPU inference.
+/// HONEST loading contract (do not regress):
+/// - Never shows percentages, never claims completion ahead of time.
+/// - [phases] names pipeline stages only; the bubble STICKS on the last
+///   stage instead of looping (looping implies progress that isn't real).
+/// - When [startedAt] is provided, shows live elapsed seconds
+///   ("Thinking… • 5s") and appends "still working" after 12s so long CPU
+///   waits read as honest, not frozen.
 class AiLoadingBubble extends StatefulWidget {
   final String label;
   final List<String>? phases;
   final int initialPhase;
   final Duration phaseInterval;
+  final DateTime? startedAt;
+  final bool showElapsed;
 
   const AiLoadingBubble({
     super.key,
@@ -24,6 +27,8 @@ class AiLoadingBubble extends StatefulWidget {
     this.phases,
     this.initialPhase = 0,
     this.phaseInterval = const Duration(milliseconds: 2400),
+    this.startedAt,
+    this.showElapsed = true,
   });
 
   @override
@@ -36,6 +41,7 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
   late final AnimationController _pulse;
   late final AnimationController _shimmer;
   int _phase = 0;
+  int _elapsedSecs = 0;
 
   List<String> get _phases =>
       widget.phases ??
@@ -43,10 +49,22 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
           ? const ['Thinking', 'Recalling memory', 'Writing']
           : [widget.label, 'Recalling memory', 'Writing']);
 
+  String get _honestLabel {
+    final base = _phases[_phase.clamp(0, _phases.length - 1)];
+    if (!widget.showElapsed || widget.startedAt == null) return base;
+    if (_elapsedSecs <= 0) return base;
+    // After 12s on CPU inference, say so explicitly — never fake progress.
+    if (_elapsedSecs >= 12) return '$base • ${_elapsedSecs}s (still working…)';
+    return '$base • ${_elapsedSecs}s';
+  }
+
   @override
   void initState() {
     super.initState();
     _phase = widget.initialPhase;
+    _elapsedSecs = widget.startedAt == null
+        ? 0
+        : DateTime.now().difference(widget.startedAt!).inSeconds;
     _orbit = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2200),
@@ -62,19 +80,36 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
     if (_phases.length > 1) {
       Future.delayed(widget.phaseInterval, _advancePhase);
     }
+    if (widget.showElapsed && widget.startedAt != null) {
+      Future.delayed(const Duration(seconds: 1), _tickElapsed);
+    }
+  }
+
+  void _tickElapsed() {
+    if (!mounted) return;
+    if (widget.startedAt != null) {
+      setState(() => _elapsedSecs =
+          DateTime.now().difference(widget.startedAt!).inSeconds);
+    }
+    Future.delayed(const Duration(seconds: 1), _tickElapsed);
   }
 
   void _advancePhase() {
     if (!mounted) return;
-    setState(() => _phase = (_phase + 1) % _phases.length);
-    Future.delayed(widget.phaseInterval, _advancePhase);
+    // HONEST: advance through real stages then STICK on the last one.
+    // Looping back to "Thinking" after "Writing" would imply restarted
+    // progress that never happened.
+    if (_phase < _phases.length - 1) {
+      setState(() => _phase++);
+      Future.delayed(widget.phaseInterval, _advancePhase);
+    }
   }
 
   @override
   void didUpdateWidget(covariant AiLoadingBubble old) {
     super.didUpdateWidget(old);
-    // The provider drives the canonical label (e.g. advancing through
-    // query-aware phases while tokens are pending). Snap to it when it names
+    // The parent drives the canonical label (e.g. advancing through
+    // mode-specific phases while work is pending). Snap to it when it names
     // a phase we know, so parent and bubble never show different stages; the
     // self-cycle keeps advancing between parent updates.
     if (widget.label != old.label && widget.label.isNotEmpty) {
@@ -158,8 +193,8 @@ class _AiLoadingBubbleState extends State<AiLoadingBubble>
                   ),
                 ),
                 child: Text(
-                  _phases[_phase.clamp(0, _phases.length - 1)],
-                  key: ValueKey(_phase),
+                  _honestLabel,
+                  key: ValueKey('$_phase-$_elapsedSecs'),
                   style: TextStyle(
                     fontSize: 13.5,
                     fontWeight: FontWeight.w600,

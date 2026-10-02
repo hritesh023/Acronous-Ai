@@ -2823,6 +2823,70 @@ _SCENE_ELEMENT_KEYWORDS = {
     'snow': ['snow', 'snowy', 'winter', 'ice', 'arctic', 'frozen', 'glacier'],
 }
 
+# Subject vocabulary - what the user actually asked FOR (not just scenery).
+# Without this, 'a cat' rendered a generic landscape: out-of-context and ugly.
+# Each subject maps to a foreground focal drawing so the result stays on-topic
+# even with zero GPU (pure Pillow, CPU-cheap).
+_SUBJECT_KEYWORDS = [
+    ('cat', ['cat', 'kitten', 'kitty', 'tabby', 'persian cat', 'siamese']),
+    ('dog', ['dog', 'puppy', 'pup', 'labrador', 'husky', 'german shepherd', 'beagle']),
+    ('bird', ['parrot', 'sparrow', 'crow', 'owl', 'pigeon', 'peacock', 'kingfisher']),
+    ('horse', ['horse', 'stallion', 'mare', 'pony', 'zebra']),
+    ('elephant', ['elephant', 'mammoth']),
+    ('lion', ['lion', 'tiger', 'leopard', 'cheetah', 'panther', 'wild cat']),
+    ('person', ['person', 'people', 'man', 'woman', 'boy', 'girl', 'child', 'baby',
+               'portrait', 'face', 'yoga', 'dancer', 'farmer', 'astronaut', 'king',
+               'queen', 'warrior', 'monk', 'couple', 'family']),
+    ('car', ['car', 'sedan', 'suv', 'sports car', 'vehicle', 'automobile', 'taxi']),
+    ('bike', ['bike', 'bicycle', 'motorbike', 'motorcycle', 'cycle', 'scooter']),
+    ('train', ['train', 'railway', 'locomotive', 'metro']),
+    ('plane', ['plane', 'airplane', 'aircraft', 'jet', 'helicopter']),
+    ('flower', ['flower', 'flowers', 'rose', 'lotus', 'tulip', 'sunflower', 'orchid',
+               'bouquet', 'blossom']),
+    ('tree', ['banyan', 'mango tree', 'coconut tree', 'palm tree']),
+    ('house', ['villa', 'bungalow', 'mansion', 'palace', 'castle', 'temple',
+              'church', 'mosque', 'hut', 'cottage', 'house', 'building']),
+    ('food', ['food', 'pizza', 'burger', 'biryani', 'dosa', 'thali', 'cake',
+             'mango', 'apple', 'fruit', 'tea', 'coffee', 'breakfast', 'dinner']),
+    ('robot', ['robot', 'android', 'cyborg', 'drone']),
+    ('fish', ['fish', 'shark', 'whale', 'dolphin', 'aquarium', 'koi']),
+    ('butterfly', ['butterfly', 'moth', 'bee', 'dragonfly']),
+    ('logo', ['logo', 'brand', 'poster', 'banner', 'text', 'quote', 'lettering',
+             'signboard', 'emblem']),
+]
+
+def _clean_image_prompt(prompt):
+    import re as _re2
+    t = (prompt or '').strip()
+    pats = [
+        r'^\s*(?:please\s+)?(?:can|could|would|will)\s+you\s+(?:please\s+)?',
+        r'^\s*(?:please\s+)?(?:generate|create|make|render|produce|build|give\s+me|show\s+me|draw|paint|sketch|do)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?',
+        r'^\s*(?:an?\s+|the\s+)?(?:photorealistic\s+|beautiful\s+|nice\s+|good\s+|cute\s+)?(?:image|picture|photo|painting|artwork|illustration|wallpaper|poster|logo)\s+(?:of|about|showing|featuring|depicting|for|with)?\s*',
+        r'\s+for\s+me\s*$', r'\s+please\s*$', r'\s+now\s*$',
+    ]
+    changed = True
+    while changed:
+        changed = False
+        for pat in pats:
+            new = _re2.sub(pat, '', t, flags=_re2.IGNORECASE)
+            if new != t:
+                t = new.strip()
+                changed = True
+    return t if t else (prompt or '').strip()
+
+def _detect_subject(prompt):
+    raw = (prompt or '').lower()
+    # Explicit logo/poster/text asks always win (e.g. 'logo for coffee shop'
+    # contains 'coffee' which would otherwise match food first).
+    if any(w in raw for w in ['logo', 'poster', 'banner', 'signboard', 'emblem', 'lettering']):
+        return 'logo', _clean_image_prompt(prompt)[:120]
+    pl = (_clean_image_prompt(prompt) or '').lower()
+    for subj, words in _SUBJECT_KEYWORDS:
+        for w in words:
+            if w in pl:
+                return subj, _clean_image_prompt(prompt)[:120]
+    return None, _clean_image_prompt(prompt)[:120]
+
 # Explicit art-style requests ONLY — anything else renders photorealistic.
 _STYLE_KEYWORDS = [
     ('neon', ['neon', 'cyberpunk', 'synthwave', 'retrowave', 'vaporwave']),
@@ -2935,6 +2999,23 @@ def _parse_scene(prompt, style_override=None):
     if style == 'neon' and time_of_day != 'night' and 'space' not in terrain:
         time_of_day = 'night'  # neon needs darkness to glow
 
+    subj, subj_label = _detect_subject(prompt or '')
+    # Subject-aware terrain default: a subject (cat/dog/person/car) should sit
+    # in a complementary setting, not a random one. Portraits -> soft meadow
+    # bokeh feel; animals -> meadow/forest; vehicles -> road+city; food/logo ->
+    # clean warm backdrop.
+    if subj and terrain == [terrain[0]] and not any(w in (prompt or '').lower() for words in _SCENE_TERRAIN_KEYWORDS.values() for w in words):
+        if subj in ('cat', 'dog', 'horse', 'elephant', 'lion', 'bird', 'butterfly', 'fish'):
+            terrain = ['meadow']
+        elif subj in ('person', 'robot'):
+            terrain = ['city']
+        elif subj in ('car', 'bike', 'train', 'plane'):
+            terrain = ['city']
+        elif subj in ('flower', 'tree'):
+            terrain = ['meadow']
+        elif subj in ('food', 'logo'):
+            terrain = ['meadow']
+            time_of_day = 'day'
     return {
         'prompt': prompt or '',
         'time': time_of_day,
@@ -2943,6 +3024,8 @@ def _parse_scene(prompt, style_override=None):
         'elements': sorted(elements),
         'hue': hue_key,
         'style': style,
+        'subject': subj,
+        'subject_label': subj_label,
     }
 
 
@@ -3371,6 +3454,186 @@ def _elements_overlay(img, scene, rng, horizon_y, light, silhouette_color):
     return out
 
 
+def _draw_subject_layer(img, scene, rng):
+    """Foreground focal subject so the image stays on-topic without any GPU.
+    Pure Pillow silhouettes with soft shading + rim light: reads as intentional
+    stylized art, never a random landscape. CPU-cheap (<100ms)."""
+    subj = scene.get('subject') if isinstance(scene.get('subject'), str) else None
+    subj = (subj or '').lower()
+    if not subj:
+        return img
+    W, H = img.size
+    night_like = scene.get('time') in ('night', 'space')
+    try:
+        bg = img.filter(ImageFilter.GaussianBlur(min(W, H) // 120 + 1))
+        bg = ImageEnhance.Brightness(bg).enhance(0.82 if not night_like else 0.7)
+        mask = Image.new('L', (W, H), 0)
+        md = ImageDraw.Draw(mask)
+        md.ellipse([W*0.08, H*0.10, W*0.92, H*0.98], fill=200)
+        mask = mask.filter(ImageFilter.GaussianBlur(min(W, H)//18))
+        img = Image.composite(img, bg, mask.point(lambda v: 255 - v))
+    except Exception:
+        pass
+    layer = Image.new('RGBA', img.size, (0, 0, 0, 0))
+    od = ImageDraw.Draw(layer)
+    cx, base = W*0.5, H*0.94
+    s = min(W, H)
+    dark = (28, 26, 34, 255) if not night_like else (12, 12, 20, 255)
+    mid = (58, 54, 70, 255)
+    warm = (255, 196, 130, 255)
+    hue = scene.get('hue')
+    if hue in ('orange', 'gold'):
+        warm = (255, 190, 110, 255)
+    elif hue in ('pink', 'red'):
+        warm = (255, 150, 170, 255)
+    elif hue in ('purple',):
+        warm = (200, 160, 255, 255)
+    elif hue in ('blue',):
+        warm = (150, 190, 255, 255)
+    elif hue in ('green',):
+        warm = (170, 230, 170, 255)
+    def ellipse_shadow(x0, y0, x1, y1):
+        od.ellipse([x0, y0, x1, y1], fill=(0, 0, 0, 70))
+    ellipse_shadow(cx - s*0.30, base - s*0.03, cx + s*0.30, base + s*0.05)
+    if subj == 'cat':
+        bw, bh = s*0.34, s*0.42
+        od.ellipse([cx-bw, base-bh, cx+bw, base], fill=(*dark[:3], 255))
+        hr = s*0.16
+        hy = base-bh-s*0.02
+        od.ellipse([cx-hr, hy-hr, cx+hr, hy+hr], fill=(*dark[:3], 255))
+        od.polygon([(cx-hr*0.85, hy-hr*0.55), (cx-hr*0.55, hy-hr*1.5), (cx-hr*0.1, hy-hr*0.7)], fill=(*dark[:3], 255))
+        od.polygon([(cx+hr*0.85, hy-hr*0.55), (cx+hr*0.55, hy-hr*1.5), (cx+hr*0.1, hy-hr*0.7)], fill=(*dark[:3], 255))
+        od.arc([cx+bw*0.4, base-bh*0.7, cx+bw*1.5, base-bh*0.1], 250, 30, fill=(*dark[:3], 255), width=max(3, int(s*0.03)))
+        er = max(2, int(s*0.018))
+        od.ellipse([cx-hr*0.42-er, hy-er, cx-hr*0.42+er, hy+er], fill=warm)
+        od.ellipse([cx+hr*0.42-er, hy-er, cx+hr*0.42+er, hy+er], fill=warm)
+    elif subj == 'dog':
+        bw, bh = s*0.36, s*0.40
+        od.ellipse([cx-bw, base-bh, cx+bw, base], fill=(*dark[:3], 255))
+        hr = s*0.15
+        hy = base-bh-s*0.03
+        od.ellipse([cx-hr, hy-hr, cx+hr, hy+hr], fill=(*dark[:3], 255))
+        od.ellipse([cx-hr*1.25, hy-hr*0.9, cx-hr*0.45, hy+hr*0.5], fill=(*mid[:3], 255))
+        od.ellipse([cx+hr*0.45, hy-hr*0.9, cx+hr*1.25, hy+hr*0.5], fill=(*mid[:3], 255))
+        od.ellipse([cx-hr*0.45, hy+hr*0.1, cx+hr*0.45, hy+hr*0.85], fill=(*mid[:3], 255))
+        er = max(2, int(s*0.016))
+        od.ellipse([cx-hr*0.42-er, hy-er, cx-hr*0.42+er, hy+er], fill=warm)
+        od.ellipse([cx+hr*0.42-er, hy-er, cx+hr*0.42+er, hy+er], fill=warm)
+    elif subj in ('bird', 'butterfly', 'fish'):
+        bw, bh = s*0.30, s*0.20
+        od.ellipse([cx-bw, base-s*0.55-bh, cx+bw, base-s*0.55+bh], fill=(*dark[:3], 255))
+        hr = s*0.09
+        od.ellipse([cx+bw*0.75-hr, base-s*0.55-bh*0.6-hr, cx+bw*0.75+hr, base-s*0.55-bh*0.6+hr], fill=(*dark[:3], 255))
+        od.polygon([(cx-bw*0.4, base-s*0.55), (cx+bw*0.2, base-s*0.55-s*0.28), (cx+bw*0.35, base-s*0.55)], fill=(*mid[:3], 255))
+        er = max(2, int(s*0.014))
+        od.ellipse([cx+bw*0.75+hr*0.2-er, base-s*0.55-bh*0.6-er, cx+bw*0.75+hr*0.2+er, base-s*0.55-bh*0.6+er], fill=warm)
+    elif subj in ('horse', 'elephant', 'lion'):
+        bw, bh = s*0.42, s*0.34
+        od.ellipse([cx-bw, base-bh, cx+bw, base-s*0.02], fill=(*dark[:3], 255))
+        od.rectangle([cx+bw*0.35, base-bh-s*0.30, cx+bw*0.75, base-bh+s*0.05], fill=(*dark[:3], 255))
+        hr = s*0.11
+        od.ellipse([cx+bw*0.55-hr, base-bh-s*0.38-hr, cx+bw*0.55+hr, base-bh-s*0.38+hr], fill=(*dark[:3], 255))
+        for lx in (-0.6, -0.2, 0.2, 0.55):
+            od.rectangle([cx+bw*lx, base-bh*0.35, cx+bw*lx+s*0.035, base], fill=(*dark[:3], 255))
+    elif subj == 'person':
+        hh = s*0.62
+        od.polygon([(cx-s*0.13, base), (cx+s*0.13, base), (cx+s*0.08, base-hh*0.55), (cx-s*0.08, base-hh*0.55)], fill=(*dark[:3], 255))
+        hr = s*0.10
+        hy = base-hh*0.55-hr*1.4
+        od.ellipse([cx-hr, hy-hr, cx+hr, hy+hr], fill=(*dark[:3], 255))
+        od.line([cx-s*0.08, base-hh*0.5, cx-s*0.20, base-hh*0.18], fill=(*dark[:3], 255), width=max(3, int(s*0.035)))
+        od.line([cx+s*0.08, base-hh*0.5, cx+s*0.20, base-hh*0.18], fill=(*dark[:3], 255), width=max(3, int(s*0.035)))
+    elif subj in ('car', 'bike', 'train', 'plane'):
+        bw, bh = s*0.40, s*0.16
+        od.rounded_rectangle([cx-bw, base-bh-s*0.06, cx+bw, base-s*0.06], radius=int(s*0.05), fill=(*dark[:3], 255))
+        od.polygon([(cx-bw*0.45, base-bh-s*0.06), (cx+bw*0.35, base-bh-s*0.06), (cx+bw*0.15, base-bh-s*0.20), (cx-bw*0.25, base-bh-s*0.20)], fill=(*mid[:3], 255))
+        wr = s*0.055
+        for wx in (-0.6, 0.6):
+            od.ellipse([cx+bw*wx-wr, base-s*0.06-wr, cx+bw*wx+wr, base-s*0.06+wr], fill=(15, 15, 18, 255))
+            od.ellipse([cx+bw*wx-wr*0.4, base-s*0.06-wr*0.4, cx+bw*wx+wr*0.4, base-s*0.06+wr*0.4], fill=warm)
+        if night_like:
+            beam = Image.new('RGBA', img.size, (0, 0, 0, 0))
+            bd = ImageDraw.Draw(beam)
+            bd.polygon([(cx+bw, base-bh*0.5), (W, base-bh*0.2), (W, base-bh*0.2+s*0.2)], fill=(255, 240, 190, 40))
+            layer = Image.alpha_composite(layer, beam.filter(ImageFilter.GaussianBlur(8)))
+    elif subj in ('flower', 'tree'):
+        od.line([cx, base, cx, base-s*0.35], fill=(40, 90, 50, 255), width=max(3, int(s*0.02)))
+        pr = s*0.11
+        py = base-s*0.42
+        import math as _m
+        for ang in range(0, 360, 45):
+            px = cx + _m.cos(_m.radians(ang))*pr
+            pyy = py + _m.sin(_m.radians(ang))*pr
+            od.ellipse([px-pr*0.62, pyy-pr*0.62, px+pr*0.62, pyy+pr*0.62], fill=(*warm[:3], 255))
+        od.ellipse([cx-pr*0.45, py-pr*0.45, cx+pr*0.45, py+pr*0.45], fill=(255, 240, 180, 255))
+    elif subj in ('house',):
+        bw, bh = s*0.36, s*0.26
+        od.rectangle([cx-bw, base-bh, cx+bw, base], fill=(*dark[:3], 255))
+        od.polygon([(cx-bw*1.12, base-bh), (cx+bw*1.12, base-bh), (cx, base-bh-s*0.22)], fill=(*mid[:3], 255))
+        for wx in (-0.5, 0.1):
+            od.rectangle([cx+bw*wx, base-bh*0.72, cx+bw*wx+bw*0.28, base-bh*0.30], fill=warm)
+    elif subj in ('food',):
+        pr = s*0.20
+        py = base-pr*0.9
+        od.ellipse([cx-pr, py-pr*0.6, cx+pr, py+pr*0.6], fill=(235, 235, 240, 255))
+        od.ellipse([cx-pr*0.78, py-pr*0.45, cx+pr*0.78, py+pr*0.45], fill=(*warm[:3], 255))
+        for _ in range(7):
+            gx = cx + float(rng.uniform(-pr*0.6, pr*0.6))
+            gy = py + float(rng.uniform(-pr*0.3, pr*0.3))
+            gr = max(2, int(s*0.012))
+            od.ellipse([gx-gr, gy-gr, gx+gr, gy+gr], fill=(120, 180, 90, 255))
+    elif subj in ('robot',):
+        bw, bh = s*0.24, s*0.34
+        od.rounded_rectangle([cx-bw, base-bh, cx+bw, base-s*0.04], radius=int(s*0.04), fill=(*mid[:3], 255))
+        hr = s*0.13
+        hy = base-bh-hr*1.1
+        od.rounded_rectangle([cx-hr, hy-hr, cx+hr, hy+hr], radius=int(s*0.03), fill=(*dark[:3], 255))
+        er = max(2, int(s*0.02))
+        od.ellipse([cx-hr*0.4-er, hy-er, cx-hr*0.4+er, hy+er], fill=(120, 220, 255, 255))
+        od.ellipse([cx+hr*0.4-er, hy-er, cx+hr*0.4+er, hy+er], fill=(120, 220, 255, 255))
+    elif subj in ('logo',):
+        label = (scene.get('subject_label') or 'Your Logo')[:28]
+        try:
+            out = img.filter(ImageFilter.GaussianBlur(2))
+            out = ImageEnhance.Brightness(out).enhance(1.02)
+        except Exception:
+            out = img
+        ov = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        dv = ImageDraw.Draw(ov)
+        dv.rounded_rectangle([W*0.12, H*0.34, W*0.88, H*0.62], radius=24, fill=(12, 12, 20, 210))
+        dv.rounded_rectangle([W*0.12, H*0.34, W*0.88, H*0.62], radius=24, outline=(*warm[:3], 255), width=3)
+        try:
+            font = ImageFont.load_default(size=max(24, int(s*0.07)))
+        except Exception:
+            font = ImageFont.load_default()
+        try:
+            bb = dv.textbbox((0, 0), label, font=font)
+            tw, th = bb[2]-bb[0], bb[3]-bb[1]
+        except Exception:
+            tw, th = len(label)*12, 28
+        dv.text((W/2-tw/2, H*0.48-th/2), label, fill=(255, 255, 255, 255), font=font)
+        out = Image.alpha_composite(out.convert('RGBA'), ov).convert('RGB')
+        out = _glow_circle(out, W/2, H*0.30, s*0.06, warm[:3], glow_alpha=70)
+        return out
+    else:
+        img = _glow_circle(img, cx, base-s*0.35, s*0.12, warm[:3], glow_alpha=60)
+        return img
+    try:
+        edge = layer.filter(ImageFilter.FIND_EDGES).filter(ImageFilter.GaussianBlur(1.2))
+    except Exception:
+        edge = None
+    out = Image.alpha_composite(img.convert('RGBA'), layer).convert('RGB')
+    if edge is not None:
+        try:
+            tint = Image.new('RGBA', img.size, (*warm[:3], 0))
+            ea = edge.convert('L').point(lambda v: int(v*0.35))
+            tint.putalpha(ea)
+            out = Image.alpha_composite(out.convert('RGBA'), tint).convert('RGB')
+        except Exception:
+            pass
+    return out
+
+
 def _finish_image(img, rng, style='realistic'):
     W, H = img.size
     if style == 'watercolor':
@@ -3448,11 +3711,19 @@ def _describe_scene(scene):
         'moody': 'carrying a dark, moody atmosphere', 'painterly': 'rendered in a painterly digital-art style',
         'realistic': 'captured with natural lighting, atmospheric depth and true-to-life colors',
     }
+    subj = scene.get('subject')
+    subj_label = (scene.get('subject_label') or '').strip()
     parts = [terrain_names.get(scene['terrain'][0], 'a scenic landscape')]
     extra_terrain = [terrain_names[x] for x in scene['terrain'][1:] if x in terrain_names]
     if extra_terrain:
         parts.append('beside ' + ' and '.join(extra_terrain))
-    if scene['style'] == 'realistic':
+    if subj and subj_label:
+        clean = subj_label[:80]
+        if scene['style'] == 'realistic':
+            sentence = f"A stylized realistic artwork of {clean} set against {parts[0]}"
+        else:
+            sentence = f"An original artwork of {clean} set against {parts[0]}"
+    elif scene['style'] == 'realistic':
         sentence = f"A photorealistic landscape of {parts[0]}"
     else:
         sentence = f"An original artwork of {parts[0]}"
@@ -3655,6 +3926,11 @@ def _render_generated_scene(prompt, width=1024, height=1024, shot=0, style_overr
 
     img = _weather_overlay(img, scene, rng)
     img = _elements_overlay(img, scene, rng, horizon_water, light, sil)
+    # Subject foreground so prompts like 'a cat' stay on-topic (no GPU).
+    try:
+        img = _draw_subject_layer(img, scene, rng)
+    except Exception as _subj_err:
+        logging.warning(f'[subject] overlay skipped: {_subj_err}')
 
     if scene['style'] == 'realistic' and 'space' not in terrains:
         # Atmospheric perspective — haze toward the horizon color.

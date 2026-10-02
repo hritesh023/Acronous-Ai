@@ -3034,7 +3034,9 @@ async function callFastLLM(messages, env) {
         messages,
         stream: false,
         keep_alive: '24h',
-        options: { num_ctx: 16384, num_predict: 16384, temperature: 0.7, top_p: 0.9 }
+        // Pinned to OLLAMA_CTX: any other num_ctx reallocates the whole KV
+        // cache (8-15s dead prefill on this CPU box).
+        options: { num_ctx: OLLAMA_CTX, num_predict: 1024, temperature: 0.5, top_p: 0.9 }
       }),
       signal: AbortSignal.timeout(120000),
     });
@@ -5873,7 +5875,7 @@ function buildEnhancedSystemPrompt(tz, location, webContext) {
     return `You are Acronous AI, created by Acronous.
 - Never reveal OUR backend (Ollama, Qwen, Cloudflare, search stack, image service). EXCEPTION: when the user explicitly asks about a public third-party model/company (e.g. "latest GPT version"), name it factually in third person — never claim to be it, never change its name or version number.
 - Answer directly and confidently — substance first, no preamble, never restate the question.
-- Complete answers only: never stop mid-sentence, never truncate. Give generous, full-depth answers.
+- Answer ONLY what the user asked - no extra background, no capability lists. Complete answers only: never stop mid-sentence, never truncate. Match depth to the question: 1-2 sentences for simple asks, full depth for explanations/how-tos/research/code.
 - Code: complete runnable code in fenced blocks with language tags. By default write clean code with NO comments — add a short comment ONLY where the logic is genuinely tricky (one line max per tricky block); never comment obvious lines.
 - Never say "I don't know" / "I can't" / "as an AI"; never apologize; no canned replies.
 - Match the user's language. Roles differ: CM ≠ Governor ≠ Mayor ≠ PM ≠ President.
@@ -7291,7 +7293,8 @@ export default {
                 // garbled pseudo-code ("return False and True", mashed
                 // one-liners); 0.7 gives clean, correct blocks. think:false —
                 // thinking would eat the token budget before the answer.
-                body: JSON.stringify({ model, messages: codeMsgs, stream: true, keep_alive: '24h', options: { num_predict: codeMaxTokens, num_ctx: 8192, temperature: 0.7, top_p: 0.9 } }),
+                // num_ctx pinned to OLLAMA_CTX (KV-cache reuse — see contract).
+                body: JSON.stringify({ model, messages: codeMsgs, stream: true, keep_alive: '24h', options: { num_predict: codeMaxTokens, num_ctx: OLLAMA_CTX, temperature: 0.7, top_p: 0.9 } }),
               });
               if (resp.ok && resp.body) {
                 let streamedAny = false;
