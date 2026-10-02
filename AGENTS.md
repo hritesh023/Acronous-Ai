@@ -32,6 +32,15 @@
 
 - `keep_alive: '24h'` everywhere — cold model load costs ~20s, warm prefill ~0.2s.
 - Warm chat round-trip ≈ 5–7s total; cold ≈ 25–40s until model loads once.
+- Pure pleasantries ("hi", "thanks", "bye" — exact match via `instantSocialReply`)
+  skip the model entirely and answer in ms from both `/v1/chat` and
+  `/v1/chat/stream`. Anything with real content uses the normal pipeline.
+- Codegen sampling (measured on qwen3.5:4b — do not "tune" blindly):
+  temperature **0.7**, NO repeat penalty (1.2 mangles structural repetition
+  into garbled pseudo-code), think:false, short dedicated code prompt (never
+  the long general prompt — it causes rambling multi-version answers), last-4
+  history only (full history drags in stale broken code the model mimics).
+  Minimal-comments rule lives in the code prompts: no comments by default.
 
 ## Speed architecture (do not regress)
 - `buildEnhancedSystemPrompt()` is **STATIC and COMPRESSED** (~150 tokens; every token costs CPU prefill) → Ollama prefix KV-cache stays warm. Per-request context goes through `buildDynamicContextBlock(tz, location, webData, userMemory)` injected as a system message AFTER stable history: `[sys(static)] + history + [sys(dynamic)] + [user]`.

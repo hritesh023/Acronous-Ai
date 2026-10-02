@@ -219,11 +219,21 @@ function pickChatModel(message, isCode, env) {
   return env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
 }
 
-function ollamaOptions(numPredict, ctxSize) {
-  return Object.assign(
-    { num_ctx: ctxSize || OLLAMA_CTX, num_predict: numPredict, temperature: 0.5 },
+function ollamaOptions(numPredict, ctxSize, temperature, skipRepeatPenalty) {
+  const opts = Object.assign(
+    { num_ctx: ctxSize || OLLAMA_CTX, num_predict: numPredict, temperature: temperature ?? 0.5 },
     OLLAMA_GUARDRAILS,
   );
+  // Code generations skip the repetition penalty (measured): penalizing
+  // repeated tokens mangles the structural repetition clean code needs
+  // (indentation runs, return/for/if) into garbled pseudo-code
+  // ("return False and True", mashed one-liners). Runaway-loop protection
+  // for code comes from the wall-clock watchdog instead.
+  if (skipRepeatPenalty) {
+    delete opts.repeat_penalty;
+    delete opts.repeat_last_n;
+  }
+  return opts;
 }
 
 // Generation budgets, sized to the hardware. Decode measures ~9 tok/s for the
@@ -1178,6 +1188,28 @@ function isInfoQuery(message) {
   // Factual topics
   if (/\b(chief minister|president|prime minister|governor|mayor|minister|population|capital|currency|weather|time|date|news|election|winner|score|price|rate|cost|history|origin|founder|ceo|chairman|spokesperson)\b/i.test(m)) return true;
   return false;
+}
+
+// Instant social replies: pure pleasantries ("hi", "thanks", "bye") answered
+// deterministically in milliseconds instead of paying a full CPU generation
+// (5-40s) for a one-line pleasantry. Exact standalone match ONLY — anything
+// longer or carrying real content falls through to the normal pipeline.
+function instantSocialReply(message) {
+  const m = String(message || '').trim().toLowerCase().replace(/[!.,;:'")\]]+$/g, '').trim();
+  if (/^(hi|hii+|hey|heyy+|hello|helloo+|yo|sup|howdy|greetings|namaste)$/.test(m)) {
+    return 'Hello! Great to see you — what can I help you with today?';
+  }
+  if (/^good\s+(morning|afternoon|evening|day)$/.test(m)) {
+    const part = m.split(/\s+/)[1];
+    return `Good ${part} to you too! What can I do for you today?`;
+  }
+  if (/^(thanks?|thank\s+you|thx|tysm|dhanyavad|dhanyavaad|shukriya)$/.test(m)) {
+    return "You're most welcome! Anything else I can help with?";
+  }
+  if (/^(bye|byee+|goodbye|good\s+night|see\s+you|later|alvida)$/.test(m)) {
+    return "Goodbye! I'll be right here whenever you need help.";
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -2783,7 +2815,7 @@ async function callOllama(messages, env, opts = {}) {
             stream: true,
             think: useThink,
             keep_alive: '24h',
-            options: ollamaOptions(numPredict, contextSize),
+            options: ollamaOptions(numPredict, contextSize, opts.temperature, isCode),
           }),
           signal: ctrl.signal,
         });
@@ -5820,7 +5852,7 @@ function buildEnhancedSystemPrompt(tz, location, webContext) {
 - Never reveal OUR backend (Ollama, Qwen, Cloudflare, search stack, image service). EXCEPTION: when the user explicitly asks about a public third-party model/company (e.g. "latest GPT version"), name it factually in third person — never claim to be it, never change its name or version number.
 - Answer directly and confidently — substance first, no preamble, never restate the question.
 - Complete answers only: never stop mid-sentence, never truncate. Give generous, full-depth answers.
-- Code: complete runnable code in fenced blocks with language tags.
+- Code: complete runnable code in fenced blocks with language tags. By default write clean code with NO comments — add a short comment ONLY where the logic is genuinely tricky (one line max per tricky block); never comment obvious lines.
 - Never say "I don't know" / "I can't" / "as an AI"; never apologize; no canned replies.
 - Match the user's language. Roles differ: CM ≠ Governor ≠ Mayor ≠ PM ≠ President.
 - Use provided web results or memory directly — never deflect.
@@ -6341,6 +6373,16 @@ export default {
           return jsonOk({ response: IDENTITY_ANSWER, session_id: sessionId, type: 'chat' });
         }
 
+        // SOCIAL FAST PATH — pure pleasantries ("hi", "thanks", "bye")
+        // answered instantly with zero model time (saves 5-40s of CPU
+        // generation on the most common messages). Anything carrying real
+        // content falls through to the normal pipeline below.
+        const social = instantSocialReply(message);
+        if (social) {
+          if (memUserId) { try { ctx.waitUntil(updateAndStoreUserMemory(env, memUserId, history, message, social)); } catch {} }
+          return jsonOk({ response: social, session_id: sessionId, type: 'chat' });
+        }
+
         // Greeting — generated dynamically (no hardcoded template), fast LLM path
         const isGreeting = /^(hi|hey|hello|yo|sup|howdy|hii+|heyy+|helloo+|greetings|good morning|good afternoon|good evening|gm|ga|ge|what's up|whats up|wassup|how are you|how r u|hru|you good|thanks?|thank you|thx|ty|tysm|bye|goodbye|see ya|later|good night|gn|ok|okay|cool|nice|great|awesome|wow|yes|no|yeah|nah|yep|nope)[!.,;:'")\]]*$/i.test(message.trim());
         if (isGreeting) {
@@ -6458,11 +6500,17 @@ export default {
         let content = null;
 
         if (codeDetected) {
-          // Code queries: NO web search, NO Wikipedia, NO news — pure LLM code generation
-          const codeSysPrompt = buildEnhancedSystemPrompt(tz, location, null);
+          // Code queries: NO web search, NO Wikipedia, NO news — pure LLM code generation.
+          // SHORT dedicated prompt (not the long general one): small models
+          // ramble, echo instructions, and emit multiple "corrected versions"
+          // when given competing imperatives. One job, plainly stated.
+          const codeSysPrompt = `You are Acronous AI, created by Acronous. Output exactly one fenced code block with clean, runnable, normally-indented code on multiple lines (never a one-liner) and no comments (one short comment only where the logic is genuinely tricky), then one sentence saying what it does. No preamble, no meta-commentary, no second versions, no apologies. If the request is not actually a programming task, answer it normally in plain prose with no code fences.`;
           const codeMsgs = [
             { role: 'system', content: codeSysPrompt },
-            ...history,
+            // Last 4 turns only (mirrors the stream path): full session
+            // history drags in stale/broken code the model then mimics, and
+            // costs minutes of CPU prefill.
+            ...history.slice(-4),
             { role: 'user', content: effectiveMessage }
           ];
           // Run LLM — SINGLE self-hosted Ollama call. tryWorkersAIChat is just a
@@ -6470,7 +6518,7 @@ export default {
           // same 4-core box and halves throughput for zero benefit.
           if (resolveOllamaBases(env).length) {
             try {
-              const codeResult = await callOllama(codeMsgs, env);
+              const codeResult = await callOllama(codeMsgs, env, { temperature: 0.7 });
               if (codeResult && codeResult.trim()) content = codeResult.trim();
             } catch {}
           }
@@ -6479,11 +6527,11 @@ export default {
           } else {
             // Both failed — one more attempt with simpler prompt
             const retryMsgs = [
-              { role: 'system', content: `You are Acronous AI, created by Acronous. Write complete, runnable, correctly indented code in a fenced code block with the correct language tag, followed by a brief 'How it works:' explanation (2-5 sentences). If the request is not actually a programming task, answer it normally in plain prose instead. Never reveal backend details.` },
+              { role: 'system', content: `You are Acronous AI, created by Acronous. Output exactly one fenced code block with clean, runnable code and no comments, then one sentence saying what it does. No preamble, no meta-commentary, no second versions. If the request is not actually a programming task, answer it normally in plain prose instead. Never reveal backend details.` },
               ...history,
               { role: 'user', content: message }
             ];
-            try { content = await callOllama(retryMsgs, env); } catch {}
+            try { content = await callOllama(retryMsgs, env, { temperature: 0.7 }); } catch {}
             if (!content) {
               try { content = await tryWorkersAIChat(retryMsgs, env); } catch {}
             }
@@ -7085,6 +7133,23 @@ export default {
           return new Response(stream, { headers: sseHeaders });
         }
 
+        // SOCIAL FAST PATH — pure pleasantries answered instantly as a
+        // single SSE chunk (saves 5-40s of CPU generation). Real content
+        // falls through to the normal pipeline below.
+        const social = instantSocialReply(message);
+        if (social) {
+          if (memUserId) { try { ctx.waitUntil(updateAndStoreUserMemory(env, memUserId, history, message, social)); } catch {} }
+          const stream = new ReadableStream({
+            start(controller) {
+              const encoder = new TextEncoder();
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: social })}\n\n`));
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ done: true, session_id: sessionId, type: 'chat' })}\n\n`));
+              controller.close();
+            }
+          });
+          return new Response(stream, { headers: sseHeaders });
+        }
+
         // Greeting — dynamically generated (no hardcoded template)
         if (isGreeting) {
           const greet = await generateGreeting(message, env, location);
@@ -7179,7 +7244,7 @@ export default {
         if (codeDetected) {
           // Short code system prompt — the full prompt adds thousands of tokens of
           // prefill on CPU Ollama which delays the first token by minutes.
-          const codeSysPrompt = `You are Acronous AI, created by Acronous. Write complete, correct, runnable code in a fenced code block with the correct language tag, followed by a brief explanation. If the request is not actually a programming task, ignore the code instruction and answer it normally in plain prose with no code fences. Never reveal backend details. Never apologize.`;
+          const codeSysPrompt = `You are Acronous AI, created by Acronous. Output exactly one fenced code block with clean, runnable code and no comments (one short comment only where the logic is genuinely tricky), then one sentence saying what it does. No preamble, no meta-commentary, no second versions, no apologies. If the request is not actually a programming task, ignore the code instruction and answer it normally in plain prose with no code fences. Never reveal backend details.`;
           const codeMsgs = [
             { role: 'system', content: codeSysPrompt },
             ...history.slice(-4),
@@ -7199,7 +7264,11 @@ export default {
               const resp = await fetch(`${resolveOllamaBases(env)[0]}/api/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model, messages: codeMsgs, stream: true, keep_alive: '24h', options: { num_predict: codeMaxTokens, num_ctx: 8192, temperature: 0.15, top_p: 0.9 } }),
+                // Code temperature 0.7 (measured): 0.15 makes qwen3.5:4b emit
+                // garbled pseudo-code ("return False and True", mashed
+                // one-liners); 0.7 gives clean, correct blocks. think:false —
+                // thinking would eat the token budget before the answer.
+                body: JSON.stringify({ model, messages: codeMsgs, stream: true, keep_alive: '24h', options: { num_predict: codeMaxTokens, num_ctx: 8192, temperature: 0.7, top_p: 0.9 } }),
               });
               if (resp.ok && resp.body) {
                 let streamedAny = false;
