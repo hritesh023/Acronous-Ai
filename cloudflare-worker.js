@@ -5414,6 +5414,28 @@ function reformatCodeBlocks(content) {
   return content;
 }
 
+// Final safety net for code answers (non-streaming code path only): repairs
+// the two small-model failure shapes that survive prompting —
+//   1. Unbalanced fences (odd ``` count from a dropped fence): append the
+//      missing closing fence so the client renders a real code block.
+//   2. Leaked self-talk lines ("Wait, ...", "Actually I need to stop ...",
+//      "Here is the final correct version:") — thinking-aloud the model
+//      sometimes emits as prose. Stripped ONLY on lines starting with these
+//      exact openers, so genuine explanations are untouched.
+function sanitizeCodeResponse(content) {
+  if (!content) return content;
+  let out = content;
+  const lines = out.split('\n');
+  const SELF_TALK = /^\s*(wait,|actually i need to|let me provide|here is the final|above code|corrected full-depth version)\b/i;
+  const kept = lines.filter((ln) => !SELF_TALK.test(ln));
+  if (kept.length !== lines.length) {
+    out = kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+  const fences = (out.match(/```/g) || []).length;
+  if (fences % 2 === 1) out = `${out.trim()}\n\`\`\``;
+  return out;
+}
+
 // (Query classification removed — all queries go directly to LLM with web search)
 
 // Dynamic greeting response — all providers race, no hardcoded text
@@ -6548,6 +6570,7 @@ export default {
           // Still do post-processing for code
           if (content && hasCodeOutsideFences(content)) content = fixCodeBlockPlacement(content);
           if (content) content = reformatCodeBlocks(content);
+          if (content) content = sanitizeCodeResponse(content);
           // NEVER return an empty/null code response
           if (!content || !content.trim()) {
             content = "I couldn't generate that code right now. Please try again in a moment.";
