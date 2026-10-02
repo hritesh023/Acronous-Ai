@@ -302,30 +302,40 @@ class _ChatPageState extends State<ChatPage> {
 
     Widget _buildMessagesList(
        BuildContext context, List<ChatMessage> messages, ChatProvider chat) {
-     return ListView.builder(
-       key: const ValueKey('messages_list'),
-       controller: _scrollController,
-       padding: const EdgeInsets.fromLTRB(16, 24, 16, 200),
-       itemCount: messages.length + (chat.isLoading ? 1 : 0),
-      itemBuilder: (context, index) {
-        if (index == messages.length) {
-          return Padding(
-            padding: const EdgeInsets.all(12),
-            child: Row(
-              children: [
-                 _TypingIndicator(
-                   isTakingLong: chat.isTakingLong,
-                 ),
-              ],
-            ),
+      // Single loading state: the provider already inserts a live placeholder
+      // message (AiLoadingBubble for chat, GenerationSkeleton for media)
+      // while work is in flight. The trailing fallback slot below renders
+      // ONLY when no such bubble exists yet (e.g. the beat before the
+      // placeholder lands) — never stacked on top of one.
+      final hasLiveBubble = messages.any((m) =>
+          m.role == 'assistant' && m.isStreaming && m.content.isEmpty);
+      final showFallbackSlot = chat.isLoading && !hasLiveBubble;
+      return ListView.builder(
+        key: const ValueKey('messages_list'),
+        controller: _scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 24, 16, 200),
+        itemCount: messages.length + (showFallbackSlot ? 1 : 0),
+        itemBuilder: (context, index) {
+          if (showFallbackSlot && index == messages.length) {
+            return Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Flexible(
+                    child: _TypingIndicator(
+                      isTakingLong: chat.isTakingLong,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+          return ChatMessageWidget(
+            message: messages[index],
           );
-        }
-        return ChatMessageWidget(
-          message: messages[index],
-        );
-      },
-    );
-  }
+        },
+      );
+    }
 
   Widget _buildInputArea(BuildContext context) {
     return Align(
@@ -432,6 +442,10 @@ class _ChatPageState extends State<ChatPage> {
   }
 }
 
+/// Fallback loading bubble, rendered only when no live placeholder message
+/// exists yet (the provider's streaming/progress message is the primary
+/// loading state). One widget, one loading state — layout-flexible via the
+/// Flexible wrapper at the call site so it never overflows narrow screens.
 class _TypingIndicator extends StatefulWidget {
   final bool isTakingLong;
 
