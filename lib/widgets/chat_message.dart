@@ -15,6 +15,7 @@ import '../models/message.dart';
 import '../providers/chat_provider.dart';
 import '../utils/file_save.dart';
 import '../widgets/generation_skeleton.dart';
+import '../widgets/ai_loading_bubble.dart';
 import '../widgets/image_viewer.dart';
 import '../widgets/logo_watermark.dart';
 import '../widgets/app_logo.dart';
@@ -260,16 +261,20 @@ class ChatMessageWidget extends StatelessWidget {
                         if (message.isStreaming &&
                             message.progressLabel.isNotEmpty &&
                             message.content.isEmpty) ...[
-                          SizedBox(
-                            width: math.min(
-                              340.0,
-                              MediaQuery.sizeOf(context).width - 120,
-                            ).clamp(120.0, 340.0),
-                            child: GenerationSkeleton(
-                              label: message.progressLabel,
-                              kind: _generationKind(message.progressKind),
+                          if (message.progressKind == 'chat' ||
+                              message.progressKind.isEmpty)
+                            AiLoadingBubble(label: message.progressLabel)
+                          else
+                            SizedBox(
+                              width: math.min(
+                                340.0,
+                                MediaQuery.sizeOf(context).width - 120,
+                              ).clamp(120.0, 340.0),
+                              child: GenerationSkeleton(
+                                label: message.progressLabel,
+                                kind: _generationKind(message.progressKind),
+                              ),
                             ),
-                          ),
                         ] else ...[
                           if (message.imageData.isNotEmpty)
                             _buildGeneratedImage(context, message.imageData, cs),

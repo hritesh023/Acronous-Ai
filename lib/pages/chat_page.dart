@@ -9,6 +9,7 @@ import '../widgets/chat_input.dart';
 import '../widgets/chat_message.dart';
 import '../widgets/sidebar.dart';
 import '../widgets/app_logo.dart';
+import '../widgets/ai_loading_bubble.dart';
 import 'auth_page.dart';
 
 class ChatPage extends StatefulWidget {
@@ -440,87 +441,11 @@ class _TypingIndicator extends StatefulWidget {
   State<_TypingIndicator> createState() => _TypingIndicatorState();
 }
 
-class _TypingIndicatorState extends State<_TypingIndicator>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late List<Animation<double>> _animations;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
-    )..repeat();
-    _animations = List.generate(3, (i) {
-      return Tween<double>(begin: 0.3, end: 1.0).animate(
-        CurvedAnimation(
-          parent: _controller,
-          curve: Interval(i * 0.2, 0.6 + i * 0.2, curve: Curves.easeInOut),
-        ),
-      );
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
+class _TypingIndicatorState extends State<_TypingIndicator> {
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: cs.brightness == Brightness.dark
-                ? const Color(0xFF1A1A30)
-                : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0x14FFFFFF)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(3, (index) {
-              return Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: AnimatedBuilder(
-                  animation: _animations[index],
-                  builder: (context, child) {
-                    return Opacity(
-                      opacity: _animations[index].value,
-                      child: Container(
-                        width: 7,
-                        height: 7,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF707090),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              );
-            }),
-          ),
-        ),
-        if (widget.isTakingLong)
-          Padding(
-            padding: const EdgeInsets.only(top: 8, left: 4),
-            child: Text(
-              'Still working on it…',
-              style: TextStyle(
-                fontSize: 12,
-                color: cs.onSurfaceVariant.withValues(alpha: 0.7),
-              ),
-            ),
-          ),
-      ],
+    return AiLoadingBubble(
+      label: widget.isTakingLong ? 'Still working on it' : 'Thinking',
     );
   }
 }

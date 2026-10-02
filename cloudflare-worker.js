@@ -221,7 +221,7 @@ function pickChatModel(message, isCode, env) {
 
 function ollamaOptions(numPredict, ctxSize) {
   return Object.assign(
-    { num_ctx: ctxSize || OLLAMA_CTX, num_predict: numPredict, temperature: 0.6 },
+    { num_ctx: ctxSize || OLLAMA_CTX, num_predict: numPredict, temperature: 0.5 },
     OLLAMA_GUARDRAILS,
   );
 }
@@ -234,13 +234,13 @@ function ollamaOptions(numPredict, ctxSize) {
 //     "explain..." question produced 1810 characters and ran for 127s. Length
 //     has to be driven by the prompt, not only by the cap.
 function generationBudget(message, isCode) {
-  if (isCode) return 700;
+  if (isCode) return 8192;
   const t = String(message || '');
-  if (!t.trim()) return 150;
-  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 200;
-  if (t.length <= 260 && isSimpleFactual(t)) return 220;
-  if (t.length > 400) return 600;
-  return 400;
+  if (!t.trim()) return 280;
+  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 380;
+  if (t.length <= 260 && isSimpleFactual(t)) return 512;
+  if (t.length > 400) return 2048;
+  return 1024;
 }
 
 const DEFAULT_CHAT_MODEL = 'qwen3.5:4b';
@@ -5791,6 +5791,8 @@ function buildEnhancedSystemPrompt(tz, location, webContext) {
 - Never say "I don't know" / "I can't" / "as an AI"; never apologize; no canned replies.
 - Match the user's language. Roles differ: CM ≠ Governor ≠ Mayor ≠ PM ≠ President.
 - Use provided web results or memory directly — never deflect.
+- NEVER invent facts: no made-up versions, dates, names or numbers. If the provided web results and memory do not contain the answer, say you could not verify current info instead of guessing.
+- If the user's wording is ambiguous about a role/person, ask one clarifying line rather than answering the wrong entity.
 - TIME-AWARENESS IS CRITICAL: The dynamic context block contains the EXACT current date and time. For ANY question about who holds a position (CM, PM, president, CEO, governor, etc.), what happened recently, current events, prices, weather, scores, or anything time-sensitive — ALWAYS use the CURRENT information from web search results. Never give outdated answers when current data is available. If web search results are provided, they are LIVE and CURRENT — use them as the PRIMARY source.
 - Reference previous conversation topics naturally for continuity.
 - For follow-up messages like "try again", "what about the other one", "tell me more" — use conversation history to understand context and respond accordingly.`;
@@ -5915,6 +5917,19 @@ export default {
     } catch {}
     try { env._isPro = await isProUser(env, env._quotaId); }
     catch { env._isPro = false; }
+    // Per-key rate limit: 60 requests/minute — bursts beyond that get 429
+    // instead of silently queuing on the small CPU brain.
+    if (env._apiKeyId && (path.startsWith('/v1/') || path.startsWith('/api/'))) {
+      try {
+        const minute = Math.floor(Date.now() / 60000);
+        const rk = `rate:${env._apiKeyId}:${minute}`;
+        const n = parseInt(await env.USER_MEMORY.get(rk) || '0', 10) || 0;
+        if (n >= 60) {
+          return jsonOk({ response: 'Rate limit reached for this API key (60 requests/minute). Slow down and retry.', error: 'rate_limited', type: 'error' }, 429);
+        }
+        ctx.waitUntil(env.USER_MEMORY.put(rk, String(n + 1), { expirationTtl: 180 }));
+      } catch {}
+    }
     // Any active AI tier (or the One bundle) counts as Pro for routing.
     if (!env._isPro && env._quotaId && env._quotaId.startsWith('u:')) {
       try { if (await activeAiPlan(env, env._quotaId)) env._isPro = true; } catch {}
@@ -6187,6 +6202,12 @@ export default {
         const hash = await hmacSha256Hex('acronous-api-key', apiKey);
         await env.USER_MEMORY.put(`api_key:${keyId}`,
           JSON.stringify({ quotaId, hash, name, created: Date.now() }), { expirationTtl: 365 * 86400 });
+        // Starter credits so a brand-new key actually works out of the box
+        // (previously it sat at 0 and every call returned out_of_credits).
+        const existing = await env.USER_MEMORY.get(`credits:${quotaId}`).catch(() => null);
+        if (existing === null) {
+          await env.USER_MEMORY.put(`credits:${quotaId}`, '25', { expirationTtl: 365 * 86400 });
+        }
         const idxRaw = await env.USER_MEMORY.get(`api_keys:${quotaId}`).catch(() => null);
         const idx = idxRaw ? (JSON.parse(idxRaw) || []) : [];
         idx.push({ key_id: keyId, prefix: apiKey.slice(0, 10) + '…', name, created: Date.now() });

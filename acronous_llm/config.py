@@ -101,7 +101,7 @@ class AcronousConfig:
         self.EMBED_DIM = 384
         self.LEARNING_RATE = 0.001
         self.MEMORY_MODE = os.getenv("ACRONOUS_MEMORY", "sqlite")
-        self.TEMPERATURE = 0.7
+        self.TEMPERATURE = float(os.getenv("ACRONOUS_TEMPERATURE", "0.5"))
         self.MAX_TOKENS = int(os.getenv("ACRONOUS_MAX_TOKENS", "4096"))
         self.ENABLE_WEB = os.getenv("ACRONOUS_ENABLE_WEB", "true").lower() == "true"
         self.ENABLE_VISION = os.getenv("ACRONOUS_ENABLE_VISION", "false").lower() == "true"

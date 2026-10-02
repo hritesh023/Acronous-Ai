@@ -251,7 +251,7 @@ async def generate(req: GenerateRequest, background: BackgroundTasks):
         prompt = (req.prompt or "").strip()
         system = (req.system or "").strip()
         system_prompt = system if system else _DEFAULT_GENERATE_SYSTEM
-        response = llm.generate(prompt, system_prompt=system_prompt + context_block, max_tokens=min(req.max_tokens or 300, 600))
+        response = llm.generate(prompt, system_prompt=system_prompt + context_block, max_tokens=min(req.max_tokens or 2048, 4096))
         if not response:
             response = _generate_fallback(req.prompt, req.route_type or "general_chat")
         # Learn in background — never block the response on disk writes.
