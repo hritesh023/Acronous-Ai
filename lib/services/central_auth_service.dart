@@ -26,6 +26,8 @@ class CentralAuthService {
   bool get tokenFromUrl => _tokenFromUrl;
 
   String get _authUrl {
+    // Native/desktop builds have no browser URL — always use central auth.
+    if (!kIsWeb) return 'https://acronous.com';
     try {
       final uri = Uri.parse(web.window.location.href);
       final host = uri.host;
@@ -84,6 +86,9 @@ class CentralAuthService {
   }
 
   void _extractTokenFromUrl() {
+    // Web-only (?token= SSO handoff). No-op on native/desktop where window
+    // access would throw.
+    if (!kIsWeb) return;
     try {
       final uri = Uri.parse(web.window.location.href);
       final token = uri.queryParameters['token'];
@@ -226,6 +231,7 @@ class CentralAuthService {
   }
 
   void redirectToLogin() {
+    if (!kIsWeb) return;
     final currentUrl = web.window.location.href;
     web.window.location.href = '$_authUrl/login?_=${DateTime.now().millisecondsSinceEpoch}&redirect=${Uri.encodeComponent(currentUrl)}';
   }

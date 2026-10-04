@@ -1,6 +1,27 @@
 const PAGES_ORIGIN = 'https://acronous-ai.pages.dev';
 const LANDING_WORKER = 'https://acronous-landing.workers.dev';
 
+// First-party origins allowed to call this worker with credentials.
+// Must stay in sync with Acronous-landing-page/_worker.js ALLOWED_ORIGINS.
+// Never reflect arbitrary Origin values with Allow-Credentials (browsers
+// reject `*` + credentials, and reflecting attackers enables CSRF with cookies).
+const ALLOWED_ORIGINS = new Set([
+  'https://acronous.com',
+  'https://www.acronous.com',
+  'https://ai.acronous.com',
+  'https://equyvo.acronous.com',
+  'https://navigwiz.acronous.com',
+  'https://dashboard.acronous.com',
+]);
+
+function allowedCorsOrigin(request) {
+  try {
+    const o = request.headers.get('Origin') || '';
+    if (o && ALLOWED_ORIGINS.has(o)) return o;
+  } catch {}
+  return 'https://acronous.com';
+}
+
 const LANDING_AUTH_PATHS = ['/api/auth/', '/login', '/login.html', '/signup', '/signup.html', '/dashboard', '/dashboard.html', '/logout'];
 
 const SEARXNG_URLS = [
@@ -5774,6 +5795,16 @@ function isReversedRoleQuery(message) {
 // into every chat request, so the bot recalls earlier conversations.
 const MEMORY_MAX_ENTRIES = 50;
 
+// Central auth issues {id, email, name} (see acronous.com _worker.js
+// createJWT). Cognito-flavoured callers send {sub} and legacy callers send
+// {user_id}. Accept all three plus email fallback so one account maps to one
+// stable quota id everywhere. Prefer the stable user id over email (email can
+// change case/format and would orphan subscriptions).
+function centralUserIdFromPayload(data) {
+  if (!data || typeof data !== 'object') return null;
+  return data.sub || data.id || data.user_id || data.email || null;
+}
+
 function getUserIdFromRequest(request) {
   try {
     // 1) Authorization: Bearer header (native apps, API clients)
@@ -5785,7 +5816,7 @@ function getUserIdFromRequest(request) {
         let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
         while (payload.length % 4) payload += '=';
         const data = JSON.parse(atob(payload));
-        const sub = data.sub || data.user_id || data.email || null;
+        const sub = centralUserIdFromPayload(data);
         if (sub) return sub;
       }
     }
@@ -5799,7 +5830,7 @@ function getUserIdFromRequest(request) {
         let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
         while (payload.length % 4) payload += '=';
         const data = JSON.parse(atob(payload));
-        const sub = data.sub || data.user_id || data.email || null;
+        const sub = centralUserIdFromPayload(data);
         if (sub) return sub;
       }
     }
@@ -5978,7 +6009,7 @@ export default {
     const path = url.pathname;
 
     if (request.method === 'OPTIONS') {
-      const origin = request.headers.get('Origin') || '*';
+      const origin = allowedCorsOrigin(request);
       return new Response(null, { headers: { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS, DELETE', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Api-Key', 'Access-Control-Allow-Credentials': 'true', 'Access-Control-Max-Age': '86400' }});
     }
 
