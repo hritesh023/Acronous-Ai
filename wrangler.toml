@@ -76,7 +76,7 @@ PRO_PRICE_INR = "299"
 # Razorpay Key ID (public; secret goes via `npx wrangler secret put RAZORPAY_KEY_SECRET`).
 # Leave empty until you have keys — billing endpoints return 503 and all usage stays free-tier.
 # LIVE key (production): set the matching live secret on the worker before deploying.
-RAZORPAY_KEY_ID = "rzp_live_TdBXy92OTOoIeh"
+RAZORPAY_KEY_ID = "rzp_live_ToEDnSbCE8SJLJ"
 #   npx wrangler secret put RAZORPAY_KEY_SECRET
 
 [[kv_namespaces]]
