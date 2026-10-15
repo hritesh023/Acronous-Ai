@@ -272,9 +272,15 @@ class ApiClient {
       json = jsonDecode(body) as Map<String, dynamic>;
     } catch (e) {
       final status = response.statusCode;
+      // HTML fallback (SPA index.html) for a billing/API miss used to open
+      // Razorpay with empty order_id. Surface a clear checkout error instead.
+      final isHtml = body.trimLeft().startsWith('<') ||
+          (response.headers['content-type'] ?? '').contains('text/html');
       throw ApiException(
-        status,
-        _friendlyStatusMessage(status),
+        status == 200 ? 502 : status,
+        isHtml
+            ? 'Payment service returned a page instead of an order. Please retry — if it persists use acronous.com/pricing.html.'
+            : _friendlyStatusMessage(status),
         <String, dynamic>{'response': body},
       );
     }

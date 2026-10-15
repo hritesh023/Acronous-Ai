@@ -88,12 +88,17 @@ class BillingService extends ChangeNotifier {
           themeColor: '#6366f1',
         );
       } on UnsupportedError {
-        // Desktop: complete payment on the hosted auto-checkout page.
+        // Desktop: complete payment on the hosted auto-checkout page, which
+        // verifies server-side. Refresh on return so paid users don't loop.
         await launchUrl(
           Uri.parse(checkoutFallbackUrl(
               token: CentralAuthService.instance.token, plan: plan.id)),
           mode: LaunchMode.externalApplication,
         );
+        try {
+          await Future.delayed(const Duration(seconds: 2));
+          await refresh();
+        } catch (_) {}
         return true;
       }
       await api.verifyBillingPayment(

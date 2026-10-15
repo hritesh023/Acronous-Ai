@@ -1,7 +1,7 @@
 // Acronous AI — Cloudflare Pages Worker
 // Serves Flutter SPA + proxies API calls to the AI Worker
 
-const API_WORKER = 'https://ai.acronous.com';
+const API_WORKER = 'https://api.acronous.com';
 
 const API_PREFIXES = ['/v1/', '/api/', '/health'];
 
@@ -10,7 +10,10 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // Proxy API calls to the AI Worker
+    // Proxy API calls to the AI Worker. NOTE: this Pages _worker only runs
+    // when Pages serves ai.acronous.com; the Worker route (wrangler.toml
+    // routes ai.acronous.com/*) normally serves it directly, so this proxy
+    // must never self-loop or eat the body stream.
     if (API_PREFIXES.some(p => path === p || path.startsWith(p))) {
       const targetUrl = API_WORKER + path + url.search;
       const headers = new Headers(request.headers);
@@ -18,7 +21,8 @@ export default {
       const proxyReq = new Request(targetUrl, {
         method: request.method,
         headers,
-        body: request.body,
+        // @ts-ignore Cloudflare Workers need duplex:'half' for streamed bodies
+        body: request.body, duplex: 'half',
       });
       try {
         return await fetch(proxyReq);
