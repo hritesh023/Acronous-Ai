@@ -4684,6 +4684,75 @@ async function hmacSha256Hex(secret, text) {
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ── Guest checkout (pay without sign-in) ────────────────────────────────
+// Paying never requires an account: guests pay with an email, the Razorpay
+// HMAC still proves the payment, and the grant links by email. If the email
+// already owns an account the plan activates instantly; otherwise a pending
+// grant waits in KV and is claimed on first sign-in with the same email
+// (POST /v1/billing/claim). Only the normalized email key is stored.
+function validEmail(s) {
+  return typeof s === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s.trim().slice(0, 254));
+}
+function normEmail(s) { return String(s || '').trim().toLowerCase().slice(0, 254); }
+function pendingKey(email) { return `pending:${normEmail(email)}`; }
+
+function getEmailFromRequest(request) {
+  try {
+    const toks = [];
+    const auth = request.headers.get('Authorization') || '';
+    const m = auth.match(/^Bearer\s+(.+)$/i);
+    if (m) toks.push(m[1]);
+    const cookie = request.headers.get('Cookie') || '';
+    const cm = cookie.match(/(?:^|;\s*)acronous_token=([^;]+)/);
+    if (cm) toks.push(decodeURIComponent(cm[1]));
+    for (const t of toks) {
+      const parts = String(t).split('.');
+      if (parts.length < 2) continue;
+      let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (payload.length % 4) payload += '=';
+      const data = JSON.parse(atob(payload));
+      if (data && validEmail(data.email)) return normEmail(data.email);
+    }
+  } catch {}
+  return null;
+}
+
+// Account id for an email via AUTH_USERS (user:<email> -> {id,...}).
+async function accountIdForEmail(env, email) {
+  if (!env.AUTH_USERS || !validEmail(email)) return null;
+  try {
+    const raw = await env.AUTH_USERS.get(`user:${normEmail(email)}`);
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    if (u && (u.id || u.email)) return String(u.id || u.email);
+  } catch {}
+  return null;
+}
+
+// Grant a verified guest payment: instant when the email owns an account,
+// else stashed as a pending grant claimed at first sign-in with that email.
+async function grantGuestPayment(env, email, planId, paymentId) {
+  if (!env.USER_MEMORY) return { ok: false };
+  const accountId = await accountIdForEmail(env, email);
+  if (accountId) {
+    const quotaId = `u:${accountId}`;
+    if (planId === 'pro_monthly') {
+      const until = Date.now() + 30 * 86400000;
+      await env.USER_MEMORY.put(`pro:${quotaId}`,
+        JSON.stringify({ until, plan: 'pro_monthly', payment_id: paymentId || '', ts: Date.now() }),
+        { expirationTtl: 45 * 86400 });
+      return { ok: true, claimed: true };
+    }
+    const granted = await grantPlanToUser(env, quotaId, planId, paymentId);
+    if (!granted) return { ok: false };
+    return { ok: true, claimed: true };
+  }
+  await env.USER_MEMORY.put(pendingKey(email),
+    JSON.stringify({ plan: planId, payment_id: paymentId || '', ts: Date.now() }),
+    { expirationTtl: 45 * 86400 });
+  return { ok: true, claimed: false };
+}
+
 // ── File generation (dependency-free) ──
 // Converts LLM markdown-ish content into real downloadable files:
 // PDF (hand-rolled writer), Excel (.xls via SpreadsheetML), Word (.doc via
@@ -6122,6 +6191,37 @@ export default {
       }
     }
 
+    // Claim a guest purchase: paid without sign-in, now signing in with the
+    // same email. Links the pending grant to this account. Idempotent.
+    if (path === '/v1/billing/claim' && request.method === 'POST') {
+      try {
+        const quotaId = env._quotaId || 'anon';
+        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to claim your plan.', 401);
+        const email = getEmailFromRequest(request);
+        if (!email) return jsonError('No email on your session. Sign in with your payment email.', 400);
+        let pend = null;
+        try { pend = JSON.parse(await env.USER_MEMORY.get(pendingKey(email)) || 'null'); } catch {}
+        if (!pend || !(BILLING_CATALOG[pend.plan] || pend.plan === 'pro_monthly')) {
+          return jsonOk({ ok: true, granted: [] });
+        }
+        if (pend.plan === 'pro_monthly') {
+          const until = Date.now() + 30 * 86400000;
+          await env.USER_MEMORY.put(`pro:${quotaId}`,
+            JSON.stringify({ until, plan: 'pro_monthly', payment_id: pend.payment_id || '', via: 'claim', ts: Date.now() }),
+            { expirationTtl: 45 * 86400 });
+        } else {
+          const granted = await grantPlanToUser(env, quotaId, pend.plan, pend.payment_id || 'claim');
+          if (!granted) return jsonError('Could not claim your plan. Please try again.');
+        }
+        try { await env.USER_MEMORY.delete(pendingKey(email)); } catch {}
+        try { env._isPro = await isProUser(env, quotaId); } catch {}
+        return jsonOk({ ok: true, granted: [pend.plan], plan: pend.plan, upgrade_urls: UPGRADE_URLS });
+      } catch (e) {
+        console.error('[/v1/billing/claim] error:', e && e.message);
+        return jsonError('Could not claim your plan. Please try again.');
+      }
+    }
+
     // Standard-checkout alias: POST /api/create-order behaves exactly like
     // POST /v1/billing/order (same auth, same HMAC model, same KV grants).
     // STRICT: body must be {plan} from BILLING_CATALOG. Raw client-supplied
@@ -6133,9 +6233,13 @@ export default {
         : jsonError(msg, status);
       try {
         const quotaId = env._quotaId || 'anon';
-        if (!quotaId.startsWith('u:')) return orderErr('Please sign in to upgrade.', 401);
+        const authed = quotaId.startsWith('u:');
         let rawBody = {};
         try { rawBody = (await request.json()) || {}; } catch {}
+        // Guest checkout: no sign-in needed — an email links the payment to
+        // the account (instant if it exists, claimed on first sign-in if not).
+        const guestEmail = !authed && validEmail(rawBody.email) ? normEmail(rawBody.email) : null;
+        if (!authed && !guestEmail) return orderErr('Add your email to continue — no account needed to pay.', 401);
         const auth = razorpayAuth(env);
         if (!auth) return orderErr('Billing is not configured yet. Please try again later.', 503);
         const plan = String(rawBody.plan || '');
@@ -6149,10 +6253,11 @@ export default {
         let receipt = String(rawBody.receipt || '').slice(0, 40);
         if (!receipt) receipt = `acro_${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36)}`.slice(0, 40);
         const currency = 'INR';
+        const notes = authed ? { user: quotaId, plan } : { plan, guest_email: guestEmail };
         const resp = await fetch('https://api.razorpay.com/v1/orders', {
           method: 'POST',
           headers: auth.headers,
-          body: JSON.stringify({ amount, currency, receipt, notes: { user: quotaId, plan } }),
+          body: JSON.stringify({ amount, currency, receipt, notes }),
           signal: AbortSignal.timeout(20000),
         });
         const data = await resp.json().catch(() => ({}));
@@ -6164,7 +6269,7 @@ export default {
           console.error('[/v1/billing/order] razorpay error:', JSON.stringify(data).slice(0, 300));
           return orderErr('Could not create a payment order. Please try again.', 500);
         }
-        return jsonOk({ order_id: data.id, amount: data.amount, currency: data.currency, key_id: auth.id, plan });
+        return jsonOk({ order_id: data.id, amount: data.amount, currency: data.currency, key_id: auth.id, plan, guest: !authed });
       } catch (e) {
         console.error('[/v1/billing/order] error:', e && e.message);
         return orderErr('Could not create a payment order. Please try again.', 500);
@@ -6180,7 +6285,6 @@ export default {
     if ((path === '/v1/billing/verify' || path === '/api/verify-payment') && request.method === 'POST') {
       try {
         const quotaId = env._quotaId || 'anon';
-        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to upgrade.', 401);
         const body = await request.json().catch(() => ({}));
         const orderId = String(body.razorpay_order_id || body.order_id || '');
         const paymentId = String(body.razorpay_payment_id || body.payment_id || '');
@@ -6215,9 +6319,22 @@ export default {
         if (rzOrder && typeof rzOrder.amount === 'number') {
           const want = Math.round(entry.amount_inr * 100);
           if (rzOrder.amount !== want) return jsonOk({ ok: false, error: 'amount_mismatch' }, 400);
-          if (rzOrder.notes?.user && rzOrder.notes.user !== quotaId) {
-            return jsonOk({ ok: false, error: 'order_owner_mismatch' }, 403);
-          }
+        }
+        const noteUser = rzOrder?.notes?.user;
+        const noteGuest = rzOrder?.notes?.guest_email;
+        // Guest order (paid without sign-in): link by the order's email —
+        // instant when the email owns an account, else claimed on sign-in.
+        // The email comes from server-set order notes, never the client body.
+        if (!noteUser) {
+          if (!validEmail(noteGuest)) return jsonOk({ ok: false, error: 'guest_email_missing' }, 400);
+          const g = await grantGuestPayment(env, noteGuest, planId, paymentId);
+          if (!g.ok) return jsonError('Could not verify payment. Please try again.');
+          return jsonOk({ ok: true, guest: true, claimed: g.claimed, email: normEmail(noteGuest), plan: planId, upgrade_urls: UPGRADE_URLS });
+        }
+        // Authed order: only its owner can complete it.
+        if (!quotaId.startsWith('u:')) return jsonError('Please sign in to complete this payment.', 401);
+        if (noteUser !== quotaId) {
+          return jsonOk({ ok: false, error: 'order_owner_mismatch' }, 403);
         }
         if (planId === 'pro_monthly') {
           const days = BILLING_PLANS.pro_monthly.days;
@@ -6268,6 +6385,11 @@ export default {
           const planId = String(notes.plan || '');
           const paymentId = String(entity?.id || '').startsWith('pay_')
             ? String(entity.id) : String(evt?.payload?.payment?.entity?.id || '');
+          // Guest payment safety net: same grant-or-pending logic as verify.
+          const guestEmail = String(notes.guest_email || '');
+          if (!quotaId.startsWith('u:') && validEmail(guestEmail) && (BILLING_CATALOG[planId] || planId === 'pro_monthly')) {
+            try { await grantGuestPayment(env, guestEmail, planId, paymentId || 'webhook'); } catch {}
+          }
           if (quotaId.startsWith('u:') && (BILLING_CATALOG[planId] || planId === 'pro_monthly')) {
             if (planId === 'pro_monthly') {
               const until = Date.now() + BILLING_PLANS.pro_monthly.days * 86400000;

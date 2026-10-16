@@ -40,6 +40,11 @@ class BillingService extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      // Link any guest-paid plan (paid without sign-in, same email) first —
+      // paying never requires an account.
+      try {
+        if (CentralAuthService.instance.token != null) await api.claimBilling();
+      } catch (_) {}
       final s = await api.getBillingStatus();
       isPro = s['pro'] == true;
       apiCredits = (s['api_credits'] as num?)?.toInt() ?? 0;
@@ -66,8 +71,17 @@ class BillingService extends ChangeNotifier {
   /// Returns true when the plan is now active. Cancellation returns false
   /// quietly; failures set [error]. API-order 404/502 falls through to the
   /// hosted Razorpay checkout so payment buttons never dead-end.
+  /// No sign-in wall: signed-out buyers go straight to the hosted Razorpay
+  /// checkout (email links the plan on next sign-in).
   Future<bool> buy(AiPlan plan) async {
     if (busyPlanId != null) return false;
+    if (CentralAuthService.instance.token == null) {
+      await launchUrl(
+        Uri.parse(checkoutFallbackUrl(plan: plan.id)),
+        mode: LaunchMode.externalApplication,
+      );
+      return true;
+    }
     busyPlanId = plan.id;
     error = null;
     notifyListeners();

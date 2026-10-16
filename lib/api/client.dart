@@ -844,6 +844,10 @@ class ApiClient {
   Future<Map<String, dynamic>> createBillingOrder({String plan = 'pro_monthly'}) =>
       _post('/v1/billing/order', {'plan': plan});
 
+  /// Links a guest-paid plan (same email) to the signed-in account. No-op
+  /// when nothing is waiting. Best-effort — never throws.
+  Future<Map<String, dynamic>> claimBilling() => _post('/v1/billing/claim', {});
+
   Future<Map<String, dynamic>> verifyBillingPayment({
     required String orderId,
     required String paymentId,
