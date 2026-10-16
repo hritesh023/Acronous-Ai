@@ -64,14 +64,37 @@ class BillingService extends ChangeNotifier {
 
   /// Opens the real Razorpay gateway for [plan] and verifies the payment.
   /// Returns true when the plan is now active. Cancellation returns false
-  /// quietly; failures set [error].
+  /// quietly; failures set [error]. API-order 404/502 falls through to the
+  /// hosted Razorpay checkout so payment buttons never dead-end.
   Future<bool> buy(AiPlan plan) async {
     if (busyPlanId != null) return false;
     busyPlanId = plan.id;
     error = null;
     notifyListeners();
     try {
-      final order = await api.createBillingOrder(plan: plan.id);
+      Map<String, dynamic> order;
+      try {
+        order = await api.createBillingOrder(plan: plan.id);
+      } catch (e) {
+        final code = e is ApiException ? e.statusCode : 0;
+        final m = e.toString();
+        final unreachable = code == 404 || code == 502 || code == 503 ||
+            m.contains('returned a page') || m.contains('temporarily unavailable') ||
+            m.contains('Service not found') || m.contains('Bad gateway');
+        if (unreachable) {
+          await launchUrl(
+            Uri.parse(checkoutFallbackUrl(
+                token: CentralAuthService.instance.token, plan: plan.id)),
+            mode: LaunchMode.externalApplication,
+          );
+          try {
+            await Future.delayed(const Duration(seconds: 2));
+            await refresh();
+          } catch (_) {}
+          return true;
+        }
+        rethrow;
+      }
       final orderId = order['order_id'] as String? ?? '';
       final amount = (order['amount'] as num?)?.toInt() ?? 0;
       final keyId = order['key_id'] as String? ?? '';
