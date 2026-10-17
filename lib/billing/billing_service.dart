@@ -75,79 +75,20 @@ class BillingService extends ChangeNotifier {
   /// checkout (email links the plan on next sign-in).
   Future<bool> buy(AiPlan plan) async {
     if (busyPlanId != null) return false;
-    if (CentralAuthService.instance.token == null) {
-      await launchUrl(
-        Uri.parse(checkoutFallbackUrl(plan: plan.id)),
-        mode: LaunchMode.externalApplication,
-      );
-      return true;
-    }
     busyPlanId = plan.id;
     error = null;
     notifyListeners();
     try {
-      Map<String, dynamic> order;
-      try {
-        order = await api.createBillingOrder(plan: plan.id);
-      } catch (e) {
-        final code = e is ApiException ? e.statusCode : 0;
-        final m = e.toString();
-        final unreachable = code == 404 || code == 502 || code == 503 ||
-            m.contains('returned a page') || m.contains('temporarily unavailable') ||
-            m.contains('Service not found') || m.contains('Bad gateway');
-        if (unreachable) {
-          await launchUrl(
-            Uri.parse(checkoutFallbackUrl(
-                token: CentralAuthService.instance.token, plan: plan.id)),
-            mode: LaunchMode.externalApplication,
-          );
-          try {
-            await Future.delayed(const Duration(seconds: 2));
-            await refresh();
-          } catch (_) {}
-          return true;
-        }
-        rethrow;
-      }
-      final orderId = order['order_id'] as String? ?? '';
-      final amount = (order['amount'] as num?)?.toInt() ?? 0;
-      final keyId = order['key_id'] as String? ?? '';
-      if (orderId.isEmpty || keyId.isEmpty || amount <= 0) {
-        throw StateError('Could not start checkout. Please try again.');
-      }
-      late final GatewayResult g;
-      try {
-        g = await openRazorpayCheckout(
-          keyId: keyId,
-          amountPaise: amount,
-          orderId: orderId,
-          planLabel: '${plan.label.replaceAll(' ⭐', '')} (${formatPlanPrice(plan.priceInr)}/mo)',
-          themeColor: '#6366f1',
-        );
-      } on UnsupportedError {
-        // Desktop: complete payment on the hosted auto-checkout page, which
-        // verifies server-side. Refresh on return so paid users don't loop.
-        await launchUrl(
-          Uri.parse(checkoutFallbackUrl(
-              token: CentralAuthService.instance.token, plan: plan.id)),
-          mode: LaunchMode.externalApplication,
-        );
-        try {
-          await Future.delayed(const Duration(seconds: 2));
-          await refresh();
-        } catch (_) {}
-        return true;
-      }
-      await api.verifyBillingPayment(
-        orderId: g.orderId,
-        paymentId: g.paymentId,
-        signature: g.signature,
-        plan: plan.id,
+      await launchUrl(
+        Uri.parse(checkoutFallbackUrl(
+            token: CentralAuthService.instance.token, plan: plan.id)),
+        mode: LaunchMode.externalApplication,
       );
-      await refresh();
+      try {
+        await Future.delayed(const Duration(seconds: 2));
+        await refresh();
+      } catch (_) {}
       return true;
-    } on PaymentCancelled {
-      return false;
     } catch (e) {
       error = _friendly(e);
       notifyListeners();
