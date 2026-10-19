@@ -4376,7 +4376,7 @@ function jsonError(msg, status = 200) {
 // FULL CATALOG (mirrors Acronous-landing-page/billing/plans.json):
 //   Acronous AI: ai_free(0) starter(149) plus(449)* pro(999) ultra(2499) enterprise(custom)
 //   Navigwiz:    browser(0) ai_starter(99) ai_plus(299)* ai_pro(699) ai_ultra(1499) business(custom)
-//   Equyvo:      free(0) plus(49) premium(149)* creator(399)* creator_pro(799) business(custom)
+//   Equyvo:      free(0) plus(49) premium(149)* creator(1999)* creator_pro(5999) business(custom)
 //   Bundle:      acronous_one(699) = AI Plus + Nav Plus + Eq Premium
 //   API packs (one-time credits): 99->1k, 499->6k, 999->14k, 2499->40k
 // Legacy alias: pro_monthly (₹PRO_PRICE_INR) == ai_plus-era Pro, kept working.
@@ -4394,8 +4394,8 @@ const BILLING_CATALOG = {
   eq_free:        { product: 'equyvo', days: 0,  amount_inr: 0,   label: 'Equyvo — Free', kind: 'subscription' },
   eq_plus:        { product: 'equyvo', days: 30, amount_inr: 49,  label: 'Equyvo — Plus', kind: 'subscription' },
   eq_premium:     { product: 'equyvo', days: 30, amount_inr: 149, label: 'Equyvo — Premium', kind: 'subscription' },
-  eq_creator:     { product: 'equyvo', days: 30, amount_inr: 399, label: 'Equyvo — Creator', kind: 'subscription' },
-  eq_creator_pro: { product: 'equyvo', days: 30, amount_inr: 799, label: 'Equyvo — Creator Pro', kind: 'subscription' },
+  eq_creator:     { product: 'equyvo', days: 30, amount_inr: 1999, label: 'Equyvo — Creator', kind: 'subscription' },
+  eq_creator_pro: { product: 'equyvo', days: 30, amount_inr: 5999, label: 'Equyvo — Creator Pro', kind: 'subscription' },
   acronous_one: { product: 'bundle', days: 30, amount_inr: 699, label: 'Acronous One', kind: 'subscription', api_credits: 2000,
     grants: ['ai_plus_monthly', 'nav_ai_plus', 'eq_premium'] },
   api_pack_99:   { product: 'api', days: 0, amount_inr: 99,   label: 'API Starter',  kind: 'credits', credits: 1000 },
