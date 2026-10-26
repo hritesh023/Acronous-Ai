@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:js_interop';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
-// ignore: avoid_web_libraries_in_flutter
-import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
+import '../utils/web_geolocation.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:geolocator/geolocator.dart' as geo;
@@ -670,23 +668,8 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<List<double>?> _getBrowserGps() async {
-    final completer = Completer<List<double>?>();
     try {
-      final geoObj = web.window.navigator.geolocation;
-      geoObj.getCurrentPosition(
-        ((web.GeolocationPosition pos) {
-          if (!completer.isCompleted) {
-            completer.complete([
-              pos.coords.latitude,
-              pos.coords.longitude,
-            ]);
-          }
-        }).toJS,
-        ((web.GeolocationPositionError err) {
-          if (!completer.isCompleted) completer.complete(null);
-        }).toJS,
-      );
-      return completer.future.timeout(Duration(seconds: 15));
+      return await getBrowserGps();
     } catch (_) {
       return null;
     }

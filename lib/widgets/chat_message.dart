@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io' show File;
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:web/web.dart' as web;
 import 'package:flutter/material.dart';
+import '../utils/web_download.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -617,7 +617,7 @@ class ChatMessageWidget extends StatelessWidget {
     try {
       final bytes = base64Decode(msg.fileData);
       if (kIsWeb) {
-        _downloadOnWeb(bytes, msg.fileName);
+        downloadOnWeb(bytes, msg.fileName);
       } else {
         _saveToDisk(context, bytes, msg.fileName);
       }
@@ -656,7 +656,7 @@ class ChatMessageWidget extends StatelessWidget {
       final bytes = base64Decode(b64);
       final name = 'acronous_image_${DateTime.now().millisecondsSinceEpoch}.png';
       if (kIsWeb) {
-        _downloadOnWeb(bytes, name);
+        downloadOnWeb(bytes, name);
       } else {
         _saveToDisk(context, bytes, name);
       }
@@ -677,7 +677,7 @@ class ChatMessageWidget extends StatelessWidget {
           ? msg.fileName
           : 'acronous_video_${DateTime.now().millisecondsSinceEpoch}.mp4';
       if (kIsWeb) {
-        _downloadOnWeb(bytes, name);
+        downloadOnWeb(bytes, name);
       } else {
         _saveToDisk(context, bytes, name);
       }
@@ -691,44 +691,7 @@ class ChatMessageWidget extends StatelessWidget {
     }
   }
 
-  void _downloadOnWeb(Uint8List bytes, String name) {
-    final ext = name.split('.').last.toLowerCase();
-    final mimeTypes = <String, String>{
-      'pdf': 'application/pdf',
-      'docx':
-          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'doc': 'application/msword',
-      'xlsx':
-          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'csv': 'text/csv',
-      'png': 'image/png',
-      'jpg': 'image/jpeg',
-      'jpeg': 'image/jpeg',
-      'gif': 'image/gif',
-      'svg': 'image/svg+xml',
-      'html': 'text/html',
-      'htm': 'text/html',
-      'json': 'application/json',
-      'xml': 'application/xml',
-      'md': 'text/markdown',
-      'txt': 'text/plain',
-      'mp4': 'video/mp4',
-      'webm': 'video/webm',
-      'mov': 'video/quicktime',
-      'm4v': 'video/mp4',
-      'mp3': 'audio/mpeg',
-      'wav': 'audio/wav',
-      'm4a': 'audio/mp4',
-    };
-    final mime = mimeTypes[ext] ?? 'application/octet-stream';
-    final blob = base64Encode(bytes);
-    final dataUri = 'data:$mime;base64,$blob';
-    final anchor = web.HTMLAnchorElement();
-    anchor.href = dataUri;
-    anchor.target = '_blank';
-    anchor.download = name;
-    anchor.click();
-  }
+
 
   Widget _imagePlaceholder(ColorScheme cs) {
     return Container(

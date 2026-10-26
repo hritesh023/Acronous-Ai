@@ -1,9 +1,8 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:web/web.dart' as web;
 import 'logo_watermark.dart';
+import '../utils/web_download.dart';
 
 class ImageViewer extends StatefulWidget {
   final Uint8List imageBytes;
@@ -49,13 +48,7 @@ class _ImageViewerState extends State<ImageViewer>
   void _downloadImage() {
     final name = 'acronous_image_${DateTime.now().millisecondsSinceEpoch}.png';
     if (kIsWeb) {
-      final blob = base64Encode(widget.imageBytes);
-      final dataUri = 'data:image/png;base64,$blob';
-      final anchor = web.HTMLAnchorElement();
-      anchor.href = dataUri;
-      anchor.target = '_blank';
-      anchor.download = name;
-      anchor.click();
+      downloadOnWeb(widget.imageBytes, name);
     }
   }
 

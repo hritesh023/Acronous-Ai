@@ -3105,7 +3105,8 @@ async function fastVisionFromMessages(visionMessages, env) {
       }
     }
     if (!b64) return null;
-    return await analyzeImageFast(b64, mime, text || 'Describe this image in detail.', env);
+    const robustPrompt = text && text.trim() ? text : `Analyze this image thoroughly and completely. Identify and describe: (1) All visible text, signs, labels, captions, and any QR codes or barcodes (decode and report their content if possible); (2) Any documents, forms, receipts, or printed material - extract and transcribe the text; (3) People, faces, expressions, clothing, and posture; (4) Objects, animals, plants, vehicles, buildings, and their condition; (5) If this is a medical/clinical image (skin, eye, X-ray, scan, rash, lesion, wound), describe the visual findings and possible condition categories without giving a definitive diagnosis, and recommend consulting a professional; (6) Colors, lighting, composition, setting/background, and any notable details; (7) Overall context and what the scene depicts. Be accurate, structured, and complete. Do not refuse or say you cannot analyze.`;
+    return await analyzeImageFast(b64, mime, robustPrompt, env);
   } catch {
     return null;
   }

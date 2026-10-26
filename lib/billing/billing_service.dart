@@ -10,8 +10,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api/client.dart';
 import '../services/central_auth_service.dart';
-import 'pay_gateway.dart';
-import 'pay_result.dart';
 import 'plans.dart';
 
 class BillingService extends ChangeNotifier {
