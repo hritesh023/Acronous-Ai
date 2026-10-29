@@ -795,6 +795,71 @@ async def brain_evaluate(sample_n: int = 20):
     return {"ok": True, **report}
 
 
+@app.post("/v1/dev/code")
+async def dev_code(req: GenerateRequest, background: BackgroundTasks):
+    """Developer code editor endpoint: unlimited tokens for Acronous devs.
+
+    Uses the code model + a developer system prompt, RAG grounding, fuzzy
+    gating and perceptron confidence. Returns full file edits when possible.
+    """
+    agent = get_brain()
+    llm = agent.core.llm
+    try:
+        enrichment = []
+        try:
+            rag_ctx, _ = agent.router._rag_context(req.prompt or "", k=4)
+            if rag_ctx:
+                enrichment.append(rag_ctx[:1500])
+        except Exception:
+            pass
+        context_block = ("\nRelevant learned context:\n" + "\n".join(enrichment)) if enrichment else ""
+        system = (req.system or "").strip() or (
+            "You are Acronous Dev Copilot, an expert code editor for Acronous developers. "
+            "Produce complete, correct, production-ready code. Put code in fenced blocks "
+            "preceded by `### path/to/file`. Explain briefly. Never truncate."
+        )
+        model = llm.model_for_task("code")
+        response = llm.generate(req.prompt or "", system_prompt=system + context_block,
+                                max_tokens=min(req.max_tokens or 8192, 8192), model=model)
+        if not response:
+            response = _generate_fallback(req.prompt, "code_generation")
+        # Learn in background
+        def _learn():
+            try:
+                agent.neural.learn_from_interaction((req.prompt or "")[:500], (response or "")[:800],
+                                                    "code_generation", session_id=req.session_id or "dev",
+                                                    feedback_score=0.9)
+            except Exception:
+                pass
+            try:
+                agent.core.rag.add_and_index(f"Q: {(req.prompt or '')[:400]}\nA: {(response or '')[:800]}",
+                                            {"type": "code_generation", "source": "acronous-dev"})
+            except Exception:
+                pass
+        background.add_task(_learn)
+        return {"response": response, "model": model}
+    except Exception as exc:
+        logger.exception("dev_code failed")
+        return JSONResponse(status_code=500, content={"response": ""})
+
+
+@app.post("/v1/dev/chat")
+async def dev_chat(req: ChatRequest):
+    """Unlimited-token chat for Acronous developers (no quota, no rate limit)."""
+    agent = get_brain()
+    try:
+        result = agent.process(req.message, session_id=req.session_id or "dev",
+                               source="acronous-dev", messages=req.messages,
+                               timezone=req.timezone or "", location=req.location or "")
+        content = result.get("content", "") if isinstance(result, dict) else str(result)
+        if not (content or "").strip():
+            content = _generate_fallback(req.message, "general_chat")
+        return {"response": content, "type": result.get("type", "chat") if isinstance(result, dict) else "chat"}
+    except Exception as exc:
+        logger.exception("dev_chat failed")
+        return JSONResponse(status_code=500, content={"response": "I hit a snag. Try again?", "type": "error"})
+
+
 @app.get("/health")
 async def health():
     """Lightweight liveness probe for load-balancers/cron — never loads the brain."""
@@ -829,7 +894,7 @@ async def brain_info():
             "vps": {"display": "acronous", "host_system": "20010", "region": "EU",
                     "ip": "167.86.104.155", "user": "root", "disk_gb": 300,
                     "plan": "Cloud VPS 8 (2026)"},
-            "models": {"chat": "qwen2.5:3b", "code": "qwen2.5-coder:7b",
+            "models": {"chat": "qwen3.5:2b", "code": "qwen2.5-coder:7b",
                        "fast": "qwen2.5:3b", "vision": "qwen2.5vl:7b"},
             "loop": {"internet_quick_scan_s": 300, "self_train_s": 21600}}
 

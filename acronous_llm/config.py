@@ -44,7 +44,7 @@ class AcronousConfig:
         # quality per token is worth the wait. Both are natively multimodal,
         # and both must be called with think=false.
         self.LLM_CHAT_MODEL = os.getenv("ACRONOUS_LLM_CHAT_MODEL", "qwen3.5:2b")
-        self.LLM_CODE_MODEL = os.getenv("ACRONOUS_LLM_CODE_MODEL", "qwen3.5:4b")
+        self.LLM_CODE_MODEL = os.getenv("ACRONOUS_LLM_CODE_MODEL", "qwen2.5-coder:7b")
         self.LLM_FAST_MODEL = os.getenv("ACRONOUS_LLM_FAST_MODEL", "qwen3.5:2b")
         # ── Self-training (auto-learn from internet + self fine-tune loop) ──
         # Resource-safe by design: 24GB RAM / 300GB disk caps are ENFORCED.

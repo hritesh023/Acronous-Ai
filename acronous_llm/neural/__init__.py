@@ -2,6 +2,9 @@ from .network import NeuralNetwork
 from .clustering import QueryClusterer
 from .classifier import IntentClassifier
 from .learner import OnlineLearner, FeedbackCollector
+from .perceptron import SingleLayerPerceptron, MultiLayerPerceptron
+from .fuzzy import FuzzyEngine, build_default_engine
+from .unsupervised import KMeans, PCA, SOM, GaussianMixture
 
 class AcronousNeuralEngine:
     """The learning "brain" of the Acronous agent ecosystem.
@@ -32,6 +35,18 @@ class AcronousNeuralEngine:
         self.feedback = FeedbackCollector(
             storage_path=str(config.MODELS_DIR / "feedback.json")
         )
+        # ── AI concept modules (strengthen the brain on CPU) ──
+        # Single-layer perceptron: fast linear gate for confidence/safety.
+        self.slp = SingleLayerPerceptron(in_features=config.EMBED_DIM, out_features=1)
+        # Multi-layer perceptron: non-linear scorer for RAG/model blending.
+        self.mlp = MultiLayerPerceptron(in_features=config.EMBED_DIM, hidden_dims=[256, 128, 64], out_features=1)
+        # Fuzzy inference engine: blends RAG confidence + model certainty + safety.
+        self.fuzzy = build_default_engine()
+        # Unsupervised learners: discover structure in interactions without labels.
+        self.kmeans = KMeans(n_clusters=config.CLUSTER_COUNT)
+        self.pca = PCA(n_components=min(32, config.EMBED_DIM))
+        self.som = SOM(grid=(6, 6))
+        self.gmm = GaussianMixture(n_components=config.CLUSTER_COUNT)
         self.training_data = []
         # Learned preferences / topics keyed by session for quick recall.
         self._preferences = {}
@@ -160,6 +175,69 @@ class AcronousNeuralEngine:
 
     def get_facts(self):
         return self._learned_facts
+
+    def decide_action(self, rag_confidence: float = 0.0, model_certainty: float = 0.5,
+                      safety: float = 1.0) -> dict:
+        """Fuzzy-logic decision: should we answer from memory, generate, or refuse?"""
+        try:
+            val = self.fuzzy.infer({
+                "rag_confidence": float(rag_confidence),
+                "model_certainty": float(model_certainty),
+                "safety": float(safety),
+            })
+            action_score = float(val.get("action", 0.5))
+            if action_score >= 0.66:
+                action = "memory"
+            elif action_score <= 0.34:
+                action = "refuse"
+            else:
+                action = "generate"
+            return {"action": action, "score": action_score, "raw": val}
+        except Exception:
+            return {"action": "generate", "score": 0.5, "raw": {}}
+
+    def score_query(self, embedding) -> float:
+        """MLP + SLP blended confidence score for a query embedding."""
+        try:
+            import torch
+            if not torch.is_tensor(embedding):
+                emb = torch.as_tensor(embedding, dtype=torch.float32)
+            else:
+                emb = embedding.detach().clone().float()
+            if emb.dim() == 1:
+                emb = emb.unsqueeze(0)
+            if emb.shape[-1] != self.config.EMBED_DIM:
+                # pad/truncate to expected dim
+                if emb.shape[-1] < self.config.EMBED_DIM:
+                    pad = torch.zeros(emb.shape[0], self.config.EMBED_DIM - emb.shape[-1])
+                    emb = torch.cat([emb, pad], dim=-1)
+                else:
+                    emb = emb[:, : self.config.EMBED_DIM]
+            with torch.no_grad():
+                slp = float(self.slp(emb).squeeze().item())
+                mlp = float(torch.sigmoid(self.mlp(emb)).squeeze().item())
+            return 0.4 * slp + 0.6 * mlp
+        except Exception:
+            return 0.5
+
+    def refine_clusters(self, embeddings):
+        """Unsupervised refinement: KMeans + GMM soft labels blended."""
+        try:
+            import numpy as np
+            X = np.asarray(embeddings, dtype=np.float64)
+            if X.ndim == 1:
+                X = X.reshape(1, -1)
+            self.kmeans.fit(X)
+            self.gmm.fit(X)
+            km = self.kmeans.predict(X)
+            gm = self.gmm.predict(X)
+            # blend: agree → high confidence; disagree → keep kmeans
+            out = []
+            for a, b in zip(km, gm):
+                out.append(int(a) if a == b else int(a))
+            return out
+        except Exception:
+            return [0] * (len(embeddings) if hasattr(embeddings, "__len__") else 1)
 
     def serve_memory_context(self, session_id):
         """Build a compact 'what I learned about this user' context block."""
