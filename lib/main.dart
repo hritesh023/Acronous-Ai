@@ -4,6 +4,7 @@ import 'billing/paywall.dart';
 import 'config/app_config.dart';
 import 'providers/auth_provider.dart';
 import 'providers/chat_provider.dart';
+import 'pages/auth_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/settings_page.dart';
 import 'services/overlay_service.dart';
@@ -78,21 +79,19 @@ class _SplashScreenState extends State<SplashScreen> {
     context.read<AuthProvider>().removeListener(_onAuthChanged);
     if (!mounted) return;
 
+    final chatP = context.read<ChatProvider>();
+    final authP = context.read<AuthProvider>();
+
     if (status == AuthStatus.unauthenticated) {
-      // Allow anonymous usage — show chat directly
-      // Auth is optional; logged-in users get extra features
-      final chatP = context.read<ChatProvider>();
-      final authP = context.read<AuthProvider>();
+      // Always show the auth page first; never auto-enter the app.
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (_) => ChatPage(chatProvider: chatP, authProvider: authP),
+          builder: (_) => AuthPage(),
         ),
       );
       return;
     }
 
-    final chatP = context.read<ChatProvider>();
-    final authP = context.read<AuthProvider>();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) => ChatPage(chatProvider: chatP, authProvider: authP),

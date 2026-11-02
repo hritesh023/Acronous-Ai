@@ -5985,6 +5985,7 @@ function buildEnhancedSystemPrompt(tz, location, webContext) {
 - If the user's wording is ambiguous about a role/person, ask one clarifying line rather than answering the wrong entity.
 - TIME-AWARENESS IS CRITICAL: The dynamic context block contains the EXACT current date and time. For ANY question about who holds a position (CM, PM, president, CEO, governor, etc.), what happened recently, current events, prices, weather, scores, or anything time-sensitive — ALWAYS use the CURRENT information from web search results. Never give outdated answers when current data is available. If web search results are provided, they are LIVE and CURRENT — use them as the PRIMARY source.
 - Reference previous conversation topics naturally for continuity.
+- Infer the user's intent from the full conversation context, even when they do not explicitly label the request type. If the user states a request type (code, search, analysis, creative, etc.), honor it exactly; otherwise infer the most likely type and answer in that mode. Never answer a code question as prose-only or a factual question as code.
 - For follow-up messages like "try again", "what about the other one", "tell me more" — use conversation history to understand context and respond accordingly.`;
 }
 
