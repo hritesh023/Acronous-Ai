@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../constants/app_constants.dart';
 import '../providers/chat_provider.dart';
 import '../services/overlay_service.dart';
@@ -30,6 +31,15 @@ class _SettingsPageState extends State<SettingsPage> {
         },
       ),
     );
+  }
+
+  Future<void> _openLegal(String url) async {
+    final uri = Uri.parse(url);
+    try {
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {}
   }
 
   @override
@@ -248,6 +258,40 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                   ),
                 ],
+              ],
+            ),
+            _SectionHeader(title: 'Legal', cs: cs),
+            _SettingsCard(
+              children: [
+                ListTile(
+                  leading: Icon(Icons.description_rounded,
+                      color: cs.primary, size: AppDimens.inputIconInnerSize),
+                  title: const Text('Terms & Conditions',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          fontSize: AppDimens.fontSizeBase)),
+                  subtitle: Text('acronous.com/docs#terms',
+                      style: TextStyle(
+                          fontSize: AppDimens.fontSizeMD,
+                          color: cs.onSurfaceVariant)),
+                  trailing: const Icon(Icons.open_in_new_rounded, size: 16),
+                  onTap: () => _openLegal('https://acronous.com/docs.html#terms'),
+                ),
+                _divider(cs),
+                ListTile(
+                  leading: Icon(Icons.privacy_tip_rounded,
+                      color: cs.primary, size: AppDimens.inputIconInnerSize),
+                  title: const Text('Privacy Policy',
+                      style: TextStyle(
+                          fontWeight: FontWeight.w500,
+                          fontSize: AppDimens.fontSizeBase)),
+                  subtitle: Text('acronous.com/docs#privacy',
+                      style: TextStyle(
+                          fontSize: AppDimens.fontSizeMD,
+                          color: cs.onSurfaceVariant)),
+                  trailing: const Icon(Icons.open_in_new_rounded, size: 16),
+                  onTap: () => _openLegal('https://acronous.com/docs.html#privacy'),
+                ),
               ],
             ),
             const SizedBox(height: AppDimens.paddingXL * 2),
