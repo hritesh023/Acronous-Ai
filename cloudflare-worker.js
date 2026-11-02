@@ -8218,8 +8218,13 @@ export default {
         // image of X") route to generation regardless of what the LLM
         // classifier guesses.
         let intent;
+        const _hasEditVerb = /\b(edit|change|replace|swap|recolor|remove|delete|add|turn|convert|transform|redesign|restyle)\b/i.test(message);
+        const _hasAnalyzeVerb = /\b(analyze|analyse|describe|explain|identify|read|extract|ocr|examine|inspect|look at|tell me about|what (?:is|are|does|do)|what's|what do you see)\b/i.test(message);
         if (isExplicitGenerateRequest(message)) {
           intent = 'generate';
+        } else if (_hasAnalyzeVerb && !_hasEditVerb) {
+          // Analyze requests must NEVER be routed to generation/editing.
+          intent = 'analyze';
         } else {
           // Classify with the LLM, then cross-check with the keyword classifier.
           // If the LLM guesses "chat"/"analyze" (or fails) but keywords clearly

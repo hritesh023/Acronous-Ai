@@ -102,12 +102,15 @@ class _ChatPageState extends State<ChatPage> {
     return Theme(
       data: isDark ? _buildDarkTheme() : _buildLightTheme(),
       child: Scaffold(
-        body: Stack(
-          clipBehavior: Clip.hardEdge,
-          children: [
-            Column(
-              children: [
-                _buildTopBar(context),
+        body: SafeArea(
+          top: true,
+          bottom: false,
+          child: Stack(
+            clipBehavior: Clip.hardEdge,
+            children: [
+              Column(
+                children: [
+                  _buildTopBar(context),
                 Expanded(
                   child: Consumer<ChatProvider>(
                     builder: (context, chat, _) {
@@ -150,13 +153,14 @@ class _ChatPageState extends State<ChatPage> {
           ],
         ),
       ),
+      ),
     );
   }
 
   Widget _buildTopBar(BuildContext context) {
     return Container(
-      padding: EdgeInsets.only(
-        top: MediaQuery.of(context).padding.top + 8,
+      padding: const EdgeInsets.only(
+        top: 8,
         left: 12,
         right: 12,
         bottom: 8,
