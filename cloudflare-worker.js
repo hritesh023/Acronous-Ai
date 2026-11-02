@@ -189,7 +189,7 @@ const OLLAMA_GUARDRAILS = {
 //
 // Budgets are sized to fit the pinned 2048-token window with room to answer.
 const PROMPT_BUDGET = {
-  simple: 900,    // ~225 tokens — casual/factual questions
+  simple: 1200,   // ~300 tokens — casual/factual questions (more room for web context)
   normal: 1800,   // ~450 tokens — everything else
   perTurn: 500,
   maxTurns: 5,
@@ -236,7 +236,10 @@ function pickChatModel(message, isCode, env) {
     /^(?:hi|hey|hello|thanks|thank you|ok|okay|cool|nice|yes|no)\b/i.test(t) ||
     /\b(?:thanks|thank you|who are you|what can you do|help)\b/i.test(t)
   );
-  if (simple) return env.OLLAMA_FAST_MODEL || env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
+  // Always use the main (robust) model for factual questions — the "fast" 1.5B
+  // model is too weak and produces cut-off/incorrect answers. Speed comes from
+  // the generous but bounded generation budget, not from a weaker model.
+  if (simple) return env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
   return env.OLLAMA_MODEL || DEFAULT_CHAT_MODEL;
 }
 
@@ -272,10 +275,10 @@ function generationBudget(message, isCode) {
   if (isCode) return 8192;
   const t = String(message || '');
   if (!t.trim()) return 512;
-  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 768;
-  if (t.length <= 260 && isSimpleFactual(t)) return 1536;
+  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 1024;
+  if (t.length <= 260 && isSimpleFactual(t)) return 2048;
   if (t.length > 400) return 4096;
-  return 2048;
+  return 2560;
 }
 
 const DEFAULT_CHAT_MODEL = 'qwen3.5:4b';
@@ -3105,7 +3108,10 @@ async function fastVisionFromMessages(visionMessages, env) {
       }
     }
     if (!b64) return null;
-    const robustPrompt = text && text.trim() ? text : `Analyze this image thoroughly and completely. Identify and describe: (1) All visible text, signs, labels, captions, and any QR codes or barcodes (decode and report their content if possible); (2) Any documents, forms, receipts, or printed material - extract and transcribe the text; (3) People, faces, expressions, clothing, and posture; (4) Objects, animals, plants, vehicles, buildings, and their condition; (5) If this is a medical/clinical image (skin, eye, X-ray, scan, rash, lesion, wound), describe the visual findings and possible condition categories without giving a definitive diagnosis, and recommend consulting a professional; (6) Colors, lighting, composition, setting/background, and any notable details; (7) Overall context and what the scene depicts. Be accurate, structured, and complete. Do not refuse or say you cannot analyze.`;
+    const baseAsk = text && text.trim() ? text.trim() : 'Analyze this image and answer any question about it.';
+    const robustPrompt = `${baseAsk}
+
+Analyze the image completely and accurately: transcribe any visible text/documents/labels (OCR), identify objects, people, faces/expressions, clothing, animals, plants, vehicles, buildings and their condition, describe colors/lighting/setting, and if it is a medical/clinical image describe visual findings and possible condition categories (not a definitive diagnosis) and recommend consulting a professional. Note anything unusual or that a human might miss. Do not refuse or say you cannot analyze. Answer the user's request directly.`;
     return await analyzeImageFast(b64, mime, robustPrompt, env);
   } catch {
     return null;

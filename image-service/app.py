@@ -1252,7 +1252,11 @@ def interpret_prompt(prompt: str) -> dict:
         if any(k in p for k in keywords):
             target = t
             break
-
+    # Expression / emotion changes are face edits.
+    if any(w in p for w in ["expression", "smile", "smiling", "frown", "frowning",
+                             "happy", "sad", "angry", "surprised", "laugh", "laughing",
+                             "cry", "crying", "emotion", "neutral face"]):
+        target = "face"
     # Detect lighting/brightness adjustments
     lighting_kw = ["brightness", "brighten", "brighter", "darken", "darker", "lighten", "lighter",
                    "contrast", "exposure", "illuminate", "dim", "shine", "glow", "shadow"]
@@ -1737,6 +1741,35 @@ def edit_image(image_bytes: bytes, prompt: str, precomputed_mask=None, edit_scop
                 "changed": True,
             }
 
+        # ── Expression / emotion change — region-limited SD on the face only.
+        # Never whole-image (that cartoonifies the photo). The face region is
+        # regenerated at moderate strength while the body/background stay exact.
+        _expr_kw = re.search(r"\b(expression|smile|smiling|frown|frowning|happy|sad|angry|surpris|laugh|laughing|cry|crying|emotion)\b", p_lower)
+        if (tgt == "face" or _detect_region_keyword(prompt) == "face") and _expr_kw is not None:
+            if mask is None:
+                mask = _head_region_mask(image)
+            if mask is not None and HAS_DIFFUSERS:
+                try:
+                    sd = _apply_masked_sd_edit(image, mask, prompt, style, strength=0.55, match_original=False, seam=8)
+                    if sd is not None:
+                        guard_edited(image, sd, prompt, mask)
+                        result = sd
+                        strategy = "expression_sd"
+                        edited_bytes = img_to_bytes(result)
+                        mask_bytes = img_to_bytes(mask, "PNG")
+                        return {
+                            "edited": base64.b64encode(edited_bytes).decode(),
+                            "mask": base64.b64encode(mask_bytes).decode(),
+                            "strategy": strategy,
+                            "interpretation": info,
+                            "width": result.width,
+                            "height": result.height,
+                            "changed": True,
+                        }
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    logging.warning(f"expression sd edit failed: {e}")
         # ── Clothing colour change (explicit colour, NOT a different garment) ──
         # A different garment type (suit/blazer/formal/...) always falls through to
         # the real SD garment-swap branch below, even when a colour word is present.
@@ -2465,10 +2498,12 @@ def _composite_subject_realistic(subject, bg):
     edge_shadow = np.clip(a2_hard - alpha_edge, 0, 1)[:, :, None] * 0.18
     bg_comp = bg_arr * (1 - edge_shadow * 0.6)
 
-    # ── 3. Depth-of-field: subtle background blur outside the subject.
-    bg_blur = np.array(bg.filter(_IF.GaussianBlur(1.5)), dtype=np.float32)
-    dof_t = np.clip((0.50 - alpha_edge) / 0.35, 0, 1)[:, :, None]
-    bg_comp = bg_comp * (1 - dof_t) + bg_blur * dof_t
+    # ── 3. Depth-of-field: DISABLED — keep the new background fully sharp.
+    # (Previously a 1.5px Gaussian blur was applied outside the subject, which
+    # users perceived as a blurred background on bg-replace edits.)
+    # bg_blur = np.array(bg.filter(_IF.GaussianBlur(1.5)), dtype=np.float32)
+    # dof_t = np.clip((0.50 - alpha_edge) / 0.35, 0, 1)[:, :, None]
+    # bg_comp = bg_comp * (1 - dof_t) + bg_blur * dof_t
 
     # ── 4. Composite with hard interior + feathered edge.
     out = subj_n * alpha + bg_comp * (1 - alpha)
