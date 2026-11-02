@@ -271,11 +271,11 @@ function ollamaOptions(numPredict, ctxSize, temperature, skipRepeatPenalty) {
 function generationBudget(message, isCode) {
   if (isCode) return 8192;
   const t = String(message || '');
-  if (!t.trim()) return 384;
-  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 512;
-  if (t.length <= 260 && isSimpleFactual(t)) return 768;
-  if (t.length > 400) return 3072;
-  return 1536;
+  if (!t.trim()) return 512;
+  if (/\b(?:list|name \d|three|five|yes or no|true or false)\b/i.test(t)) return 768;
+  if (t.length <= 260 && isSimpleFactual(t)) return 1536;
+  if (t.length > 400) return 4096;
+  return 2048;
 }
 
 const DEFAULT_CHAT_MODEL = 'qwen3.5:4b';
@@ -3945,23 +3945,16 @@ function detectImageGenerationIntent(message) {
 }
 
 function detectVideoGenerationIntent(message) {
-  const t = (message || '').toLowerCase();
-  if (!/\b(video|animation|animated\s+video|clip|mp4)\b/.test(t)) return false;
-  if (/\b(phone|video\s*call|call\s+video|zoom|meeting)\b/.test(t)) return false;
-  return /\b(generate|create|make|render|produce|build|give\s+me|show)\b[^.?!]{0,60}\b(video|animation|animated\s+video|clip|mp4)\b/.test(t)
-    || /\b(video|animation|clip)\s+(of|about|on|showing|featuring)\b/.test(t)
-    || /\bmake\s+(me\s+)?(a|an)\s+(short\s+)?(video|animation|clip)\b/.test(t);
+  // Video creation feature removed from Acronous AI.
+  return false;
 }
 
 // Detect requests to turn an ATTACHED IMAGE into a video — broader than
 // detectVideoGenerationIntent so it also catches "edit video", "modify video",
 // "animate this", "turn this into a video", "make a video of this", etc.
 function detectVideoIntent(message) {
-  const t = (message || '').toLowerCase();
-  if (!/\b(video|videos|animation|animate|animat\w*|clip|mp4|footage|motion\s*(?:video|picture|clip)|cinematic\s*(?:clip|video))\b/.test(t)) return false;
-  if (/\b(phone|video\s*call|call\s+video|zoom|meeting|conference)\b/.test(t)) return false;
-  return /\b(make|create|generate|render|produce|build|turn|convert|transform|edit|modify|change|animate|add\s+motion|give\s+(?:it|this|the)\s+motion|put\s+(?:it|this)\s+in\s+motion|into\s+a\s+video|to\s+a\s+video|as\s+a\s+video|a\s+video\s+of\s+this|a\s+video\s+from|video\s+of\s+this|video\s+from\s+(?:this|it)|animate\s+this|make\s+(?:this|it)\s+(?:move|moving|animated))\b/.test(t)
-    || /\b(video|animation|clip)\s+(of|about|on|showing|featuring|from|with)\b/.test(t);
+  // Video creation feature removed from Acronous AI.
+  return false;
 }
 
 // Render a video FROM an uploaded image via the self-hosted renderer
@@ -5978,6 +5971,7 @@ function buildEnhancedSystemPrompt(tz, location, webContext) {
 - Answer directly and confidently — substance first, no preamble, never restate the question.
 - Answer ONLY what the user asked - no extra background, no capability lists. Complete answers only: never stop mid-sentence, never truncate. Match depth to the question: 1-2 sentences for simple asks, full depth for explanations/how-tos/research/code.
 - Code: complete runnable code in fenced blocks with language tags. By default write clean code with NO comments — add a short comment ONLY where the logic is genuinely tricky (one line max per tricky block); never comment obvious lines.
+- Non-code answers: reply in plain text/markdown only — NEVER wrap ordinary answers, explanations, facts, or lists in fenced code blocks. Reserve fenced code blocks strictly for actual runnable code.
 - Never say "I don't know" / "I can't" / "as an AI"; never apologize; no canned replies.
 - Match the user's language. Roles differ: CM ≠ Governor ≠ Mayor ≠ PM ≠ President.
 - Use provided web results or memory directly — never deflect.
@@ -8299,40 +8293,9 @@ export default {
       }
     }
 
-    // ── Video Generation Endpoint ──
+    // ── Video Generation Endpoint (removed) ──
     if (path === '/v1/video/generate' && request.method === 'POST') {
-      try {
-        const body = await request.json();
-        const prompt = (body.prompt || body.message || '').trim();
-        if (!prompt) {
-          return jsonError('Please provide a description for the video.');
-        }
-        // Free-tier metering (video is the heaviest unit).
-        try {
-          const _q = await checkQuota(env, ctx, 'video');
-          if (!_q.allowed) return paywallResponse(env, 'video', _q.used, _q.limit);
-          if (_q.pro) env._isPro = true;
-        } catch {}
-        // Fully self-hosted: the Python service synthesizes context-aware
-        // scenes from the topic and muxes in narration.
-        const videoResult = await tryEditorServiceVideo(prompt, env);
-        if (videoResult && videoResult.video_data) {
-          return jsonOk({
-            response: '',
-            video_data: videoResult.video_data,
-            poster: videoResult.poster || '',
-            type: 'video_gen',
-            fps: videoResult.fps,
-            duration: videoResult.duration,
-            width: videoResult.width,
-            height: videoResult.height,
-          });
-        }
-        return jsonOk({ response: `I couldn't create that video right now — please try again in a moment.`, video_data: null, type: 'chat' });
-      } catch (error) {
-        console.error('[/v1/video/generate] error:', error);
-        return jsonOk({ response: "I ran into a problem rendering that video. Could you try again in a moment?", video_data: null, type: 'chat' });
-      }
+      return jsonOk({ response: "Video creation has been removed from Acronous AI for now. It will return in a future update.", video_data: null, type: 'chat' });
     }
 
     if (path === '/api/image/analyze' && request.method === 'POST') {
@@ -8516,7 +8479,7 @@ export default {
       return jsonOk({
         app: 'Acronous AI',
         provider: 'acronous',
-        features: { chat: true, streaming: true, image_gen: true, image_edit: true, video: true, voice: true, files: true, search: true },
+        features: { chat: true, streaming: true, image_gen: true, image_edit: true, video: false, voice: true, files: true, search: true },
         default_model: 'acronous-1',
         models: [{ id: 'acronous-1', name: 'Acronous AI', description: 'Fast, capable, always-on' }],
       });
