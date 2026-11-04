@@ -232,6 +232,13 @@ async def generate(req: GenerateRequest, background: BackgroundTasks):
     agent = get_brain()
     llm = agent.core.llm
     try:
+        # RAG fast path: instant answer from learned memory when confident.
+        try:
+            _rag_out = agent.core.rag.answer(req.prompt or "", k=3, min_confidence=0.9)
+            if _rag_out.get("answerable") and (_rag_out.get("answer") or "").strip():
+                return {"response": _rag_out["answer"]}
+        except Exception:
+            pass
         # Enrich with learned memory: proper hybrid RAG retrieve (top-k by
         # relevance) instead of the old last-5-docs hack.
         enrichment = []
@@ -805,6 +812,14 @@ async def dev_code(req: GenerateRequest, background: BackgroundTasks):
     agent = get_brain()
     llm = agent.core.llm
     try:
+        # RAG fast path: instant answer from learned memory when confident.
+        try:
+            _rag_out = agent.core.rag.answer(req.prompt or "", k=4, min_confidence=0.88)
+            if _rag_out.get("answerable") and (_rag_out.get("answer") or "").strip():
+                return {"response": _rag_out["answer"], "model": "rag-cache",
+                        "cached": True, "ms": _rag_out.get("ms", 0.0)}
+        except Exception:
+            pass
         enrichment = []
         try:
             rag_ctx, _ = agent.router._rag_context(req.prompt or "", k=4)
@@ -1049,3 +1064,152 @@ if os.getenv("ACRONOUS_AUTOSTART", "1") == "1":
         get_brain()
     except Exception as exc:
         logger.warning("brain not warmed at startup: %s", exc)
+
+
+# --- Content safety endpoints (Equyvo upload gate) ---
+class ModerateRequest(BaseModel):
+    text: str = ""
+    source: str = "equyvo-safety"
+
+class VisionRequest(BaseModel):
+    images: List[str] = []
+    task: str = "moderate"
+    prompt: str = ""
+    source: str = "equyvo-upload-gate"
+
+_MOD_PROMPT = (
+    "You are a content-safety classifier for a public social media app. "
+    "Classify the given text/image for safety. "
+    "BLOCK (safe:false, block:true) only if it clearly contains: child exploitation/CSAM, "
+    "non-consensual sexual content, explicit nudity or sexual acts, graphic gore/blood used to harm, "
+    "real-world violence or weapons used to harm, terrorism/extremism, self-harm or suicide, "
+    "hate speech, or illegal activity. "
+    "DO NOT block: ordinary cooking/food preparation (knives, meat, fire are fine), "
+    "religious or cultural events and clothing, educational or medical content, sports, news, art, "
+    "comedy/entertainment/humor, music, dance, travel, nature, family/vlog, or everyday scenes. "
+    "When in doubt between any benign context (cooking/religious/educational/comedy/entertainment) "
+    "and unsafe, mark safe:true. "
+    "Return ONLY valid JSON: {\"safe\":true|false,\"review\":true|false,\"block\":true|false,\"categories\":[...]}. "
+    "safe:true for clearly safe or benign content."
+)
+
+@app.post("/v1/moderate")
+async def moderate(req: ModerateRequest):
+    agent = get_brain()
+    llm = agent.core.llm
+    text = (req.text or "").strip()[:2000]
+    if not text:
+        return {"safe": True, "review": False, "block": False, "categories": [], "verdict": "allow"}
+    try:
+        import json as _json
+        resp = llm.generate(
+            "Text to classify:\n" + text,
+            system_prompt=_MOD_PROMPT,
+            max_tokens=200,
+            model=llm.model_for_task("fast"),
+        )
+        s = (resp or "").strip()
+        start = s.find("{")
+        end = s.rfind("}")
+        if start >= 0 and end > start:
+            obj = _json.loads(s[start:end+1])
+            safe = bool(obj.get("safe", True))
+            block = bool(obj.get("block", False))
+            review = bool(obj.get("review", False))
+            cats = obj.get("categories", [])
+            if not isinstance(cats, list):
+                cats = []
+            sev = any("child" in str(c).lower() or "csam" in str(c).lower() or "terror" in str(c).lower() or "self-harm" in str(c).lower() or "suicide" in str(c).lower() for c in cats)
+            if sev:
+                block = True
+                safe = False
+            adult = any("adult" in str(c).lower() or "nudity" in str(c).lower() or "porn" in str(c).lower() or "gore" in str(c).lower() or "explicit" in str(c).lower() or "sexual" in str(c).lower() for c in cats)
+            benign = any("cooking" in str(c).lower() or "food" in str(c).lower() or "religious" in str(c).lower() or "education" in str(c).lower() or "comedy" in str(c).lower() or "entertainment" in str(c).lower() or "sport" in str(c).lower() or "news" in str(c).lower() or "science" in str(c).lower() or "music" in str(c).lower() or "dance" in str(c).lower() or "travel" in str(c).lower() or "nature" in str(c).lower() or "family" in str(c).lower() for c in cats)
+            if block:
+                pass
+            elif safe is False or block is True:
+                block = True
+                safe = False
+            elif adult and not benign:
+                block = True
+                safe = False
+            elif review and (benign or not adult):
+                review = False
+                safe = True
+            if safe is False and not block and not review:
+                review = True
+            verdict = "block" if block else ("review" if review else "allow")
+            return {"safe": safe, "review": review, "block": block, "categories": cats, "verdict": verdict}
+    except Exception as e:
+        logger.warning("moderate failed: %s", e)
+    return {"safe": True, "review": False, "block": False, "categories": [], "verdict": "allow"}
+
+@app.post("/v1/vision")
+async def vision(req: VisionRequest):
+    agent = get_brain()
+    llm = agent.core.llm
+    images = req.images or []
+    if not images:
+        return {"safe": True, "review": False, "block": False, "categories": [], "verdict": "allow"}
+    try:
+        import json as _json
+        content = [{"type": "text", "text": req.prompt or _MOD_PROMPT}]
+        for img in images[:8]:
+            content.append({"type": "image_url", "image_url": {"url": img}})
+        client = getattr(llm, "_openai_client", None)
+        model = llm.model_for_task("vision")
+        if client is None:
+            return {"safe": True, "review": False, "block": False, "categories": [], "verdict": "allow"}
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=300,
+            temperature=0.1,
+        )
+        raw = ""
+        try:
+            raw = resp.choices[0].message.content or ""
+        except Exception:
+            raw = ""
+        s = raw.strip()
+        start = s.find("{")
+        end = s.rfind("}")
+        if start >= 0 and end > start:
+            obj = _json.loads(s[start:end+1])
+            safe = bool(obj.get("safe", True))
+            block = bool(obj.get("block", False))
+            review = bool(obj.get("review", False))
+            cats = obj.get("categories", [])
+            if not isinstance(cats, list):
+                cats = []
+            sev = any("child" in str(c).lower() or "csam" in str(c).lower() or "terror" in str(c).lower() or "self-harm" in str(c).lower() or "suicide" in str(c).lower() or "weapon" in str(c).lower() or "bomb" in str(c).lower() or "explosion" in str(c).lower() for c in cats)
+            if sev:
+                block = True
+                safe = False
+            adult = any("adult" in str(c).lower() or "nudity" in str(c).lower() or "porn" in str(c).lower() or "gore" in str(c).lower() or "explicit" in str(c).lower() or "sexual" in str(c).lower() for c in cats)
+            benign = any("cooking" in str(c).lower() or "food" in str(c).lower() or "religious" in str(c).lower() or "culture" in str(c).lower() or "education" in str(c).lower() or "comedy" in str(c).lower() or "entertainment" in str(c).lower() or "sport" in str(c).lower() or "news" in str(c).lower() or "science" in str(c).lower() or "music" in str(c).lower() or "dance" in str(c).lower() or "travel" in str(c).lower() or "nature" in str(c).lower() or "family" in str(c).lower() or "vlog" in str(c).lower() or "everyday" in str(c).lower() for c in cats)
+            if block:
+                pass
+            elif (obj.get("safe") is False) or (obj.get("block") is True):
+                block = True
+                safe = False
+            elif adult and not benign:
+                block = True
+                safe = False
+            elif review and (benign or not adult):
+                review = False
+                safe = True
+            elif not (obj.get("safe") is True):
+                if benign or not adult:
+                    safe = True
+                    review = False
+                else:
+                    review = True
+                    safe = False
+            if safe is False and not block and not review:
+                review = True
+            verdict = "block" if block else ("review" if review else "allow")
+            return {"safe": safe, "review": review, "block": block, "categories": cats, "verdict": verdict}
+    except Exception as e:
+        logger.warning("vision failed: %s", e)
+    return {"safe": True, "review": False, "block": False, "categories": [], "verdict": "allow"}
